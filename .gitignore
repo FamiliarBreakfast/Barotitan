@@ -36,6 +36,7 @@ Libraries/webm_mem_playback/opus_x64_linux/
 #performance reports & sessions
 *.vsp
 *.psess
+.vscode/
 .vs/
 
 # Mac

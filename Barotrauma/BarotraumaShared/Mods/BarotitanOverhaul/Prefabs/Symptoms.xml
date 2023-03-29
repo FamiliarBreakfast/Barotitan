@@ -1,0 +1,508 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Afflictions>
+	<!--Pain symptoms-->
+	<Affliction name="Pain" identifier="painsharp" description="A sharp pain, like being stabbed." type="pain"
+	limbspecific="true"
+	showiconthreshold="0"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+		<Effect minstrength="0" maxstrength="100"
+			minchromaticaberration="0.0"
+			maxchromaticaberration="15.0"/>
+	</Affliction>
+	<Affliction name="Pain" identifier="painsharpdeep" description="A deep sharp pain, like an organ has just exploded." type="pain"
+	limbspecific="true"
+	showiconthreshold="0"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+		<Effect minstrength="0" maxstrength="100"
+			minchromaticaberration="0.0"
+			maxchromaticaberration="15.0"/>
+	</Affliction>
+	<Affliction name="Pain" identifier="paindull" description="A dull pain, like a spoon being pressed against the skin." type="pain"
+	limbspecific="true"
+	showiconthreshold="0"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+		<Effect minstrength="0" maxstrength="100"
+			minchromaticaberration="0.0"
+			maxchromaticaberration="15.0"/>
+	</Affliction>
+	<Affliction name="Pain" identifier="paindulldeep" description="A deep dull pain, like a clot in the bloodstream." type="pain"
+	limbspecific="true"
+	showiconthreshold="0"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+		<Effect minstrength="0" maxstrength="100"
+			minchromaticaberration="0.0"
+			maxchromaticaberration="15.0"/>
+	</Affliction>
+	<Affliction name="Pain" identifier="painskin" description="The skin is incredibly sensitive to the touch." type="pain"
+	limbspecific="true"
+	showiconthreshold="0"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+		<Effect minstrength="0" maxstrength="100"
+			minchromaticaberration="0.0"
+			maxchromaticaberration="15.0"/>
+	</Affliction>
+	<Affliction name="Pain" identifier="painhead" description="A powerful pulsing migraine." type="pain"
+	limbspecific="false"
+	indicatorlimb="Head"
+	showiconthreshold="0"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+		<Effect minstrength="0" maxstrength="100"
+			minchromaticaberration="0.0"
+			maxchromaticaberration="15.0"/>
+	</Affliction>
+	<Affliction name="Earache" identifier="painear" description="A sharp ache deep within the ear." type="pain"
+	limbspecific="false"
+	indicatorlimb="Head"
+	showiconthreshold="0"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+		<Effect minstrength="0" maxstrength="100"
+			minchromaticaberration="0.0"
+			maxchromaticaberration="15.0"/>
+	</Affliction>
+	<Affliction name="Eyeache" identifier="paineye" description="A dull ache deep within the eye." type="pain"
+	limbspecific="false"
+	indicatorlimb="Head"
+	showiconthreshold="0"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+		<Effect minstrength="0" maxstrength="100"
+			minchromaticaberration="0.0"
+			maxchromaticaberration="15.0"/>
+	</Affliction>
+	<Affliction name="Burning" identifier="burning" description="Constant burning sensation, like the skin is on fire." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Torso"
+	showiconthreshold="0"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Affliction name="Malaise" identifier="discomfort" description="A general sense of discomfort." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Abdomen"
+	showiconthreshold="0"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<!--General symptoms-->
+	<Affliction name="Weakness" identifier="weakness" description="" type="symptom" limbspecific="false"/>
+	<Affliction name="Tender" identifier="tender" description="" type="symptom" limbspecific="true"/>
+	<Affliction name="Cramps" identifier="cramps" description="" type="symptom" limbspecific="true"/>
+	<Affliction name="Cramps" identifier="crampswhole" description="" type="symptom" limbspecific="false"/>
+	<Affliction name="Stiffness" identifier="stiff" description="The patient has difficulty moving their limbs." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Torso"
+	showiconthreshold="10"
+	showicontoothersthreshold="50"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<!--Skin symptoms-->
+	<Affliction name="Sores" identifier="sores" description="Red sores cover the patients skin. They ooze from time to time." type="symptom"
+	limbspecific="true"
+	showiconthreshold="0"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Affliction name="Cracking" identifier="cracking" description="The skin is cracking and falling apart." type="symptom"
+	limbspecific="true"
+	showiconthreshold="0"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Affliction name="Hives" identifier="hives" description="Itchy red patches cover the body." type="symptom" limbspecific="false"
+	indicatorlimb="Torso"
+	showiconthreshold="0"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction> <!--should always exist with itchywhole-->
+	<Affliction name="Rash" identifier="rash" description="Large swaths of the skin have turned painful and red." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Torso"
+	showiconthreshold="0"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction> <!--should always exist with painskin-->
+	<Affliction name="Blisters" identifier="blisters" description="The skin is covered in pus filled bumps." type="symptom"
+	limbspecific="true"
+	showiconthreshold="0"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Affliction name="Jaundice" identifier="jaundice" description="The patient's skin has turned yellow." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Head"
+	showiconthreshold="0"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Affliction name="Sweating" identifier="sweating" description="Excessive persperation. Try deodorant." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Torso"
+	showiconthreshold="20"
+	showicontoothersthreshold="50"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Affliction name="Numb" identifier="numb" description="The patient cannot feel anything." type="symptom"
+	limbspecific="true"
+	showiconthreshold="0"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Affliction name="Bleeding" identifier="bleedingminor" description="Blood is dripping from a small nick." type="symptom"
+	limbspecific="true"
+	showiconthreshold="0"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="100"
+    causeofdeathdescription="Bled to death"
+    selfcauseofdeathdescription="You have bled to death.">
+	</Affliction>
+	<Affliction name="Bleeding" identifier="bleedingslash" description="Blood is pouring from a large slash." type="symptom"
+	limbspecific="true"
+	showiconthreshold="0"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="100"
+    causeofdeathdescription="Bled to death"
+    selfcauseofdeathdescription="You have bled to death.">
+	</Affliction>
+	<Affliction name="Bleeding" identifier="bleedingslashmany" description="Blood is pouring from many large slashes." type="symptom"
+	limbspecific="true"
+	showiconthreshold="0"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="100"
+    causeofdeathdescription="Bled to death"
+    selfcauseofdeathdescription="You have bled to death."> <!--priority over bleedingslash-->
+	</Affliction>
+	<Affliction name="Bleeding" identifier="bleedinghole" description="Blood is pouring from a deep hole." type="symptom"
+	limbspecific="true"
+	showiconthreshold="0"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="100"
+    causeofdeathdescription="Bled to death"
+    selfcauseofdeathdescription="You have bled to death.">
+	</Affliction>
+	<Affliction name="Bleeding" identifier="bleedingholemany" description="Blood is pouring from deep holes." type="symptom"
+	limbspecific="true"
+	showiconthreshold="0"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="100"
+    causeofdeathdescription="Bled to death"
+    selfcauseofdeathdescription="You have bled to death."> <!--priority over bleedinghole-->
+	</Affliction>
+	<Affliction name="Bleeding" identifier="bleedingwound" description="Blood is pouring from a massive open wound." type="symptom"
+	limbspecific="true"
+	showiconthreshold="0"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="100"
+    causeofdeathdescription="Bled to death"
+    selfcauseofdeathdescription="You have bled to death.">
+	</Affliction>
+	<Affliction name="Bruising" identifier="bruise" description="Blood vessels below the skin have burst, turning the area purple." type="symptom"
+	limbspecific="true"
+	showiconthreshold="0"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Affliction name="Itchy" identifier="itching" description="The area is intensely itchy. Keep scratching it, maybe it will go away." type="symptom"
+	limbspecific="true"
+	showiconthreshold="0"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Affliction name="Itchy" identifier="itchingwhole" description="Itchy. Itchy everywhere." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Torso"
+	showiconthreshold="0"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Affliction name="Pus" identifier="pus" description="There is pus leaking from a wound." type="symptom"
+	limbspecific="true"
+	showiconthreshold="0"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Affliction name="Frostbite" identifier="frostbite" description="The skin has turned blue and necrotic." type="symptom"
+	limbspecific="true"
+	showiconthreshold="0"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="100"
+	causeofdeathdescription="Froze to death"
+	selfcauseofdeathdescription="You have frozen to death."> <!--priority over necrosis?--> <!--should this be a symptom or an affliction?-->
+	</Affliction>
+	<Affliction name="Necrosis" identifier="necrosis" description="The skin is decaying while the patient is still alive. Thankfully, there are no maggots on Titan." type="symptom"
+	limbspecific="true"
+	showiconthreshold="0"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="100"
+	causeofdeathdescription="Decayed"
+	selfcauseofdeathdescription="You rotted alive.">
+	</Affliction>
+	<Burn name="Burn" identifier="_burn" description="The skin is blistered and peeling." type="burn"
+	limbspecific="true"
+	showiconthreshold="0"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="200"
+	causeofdeathdescription="Burned to death"
+	selfcauseofdeathdescription="You have burned to death."
+	burnoverlayalpha="1">
+	<Effect minstrength="0" maxstrength="25" multiplybymaxvitality="true" minvitalitydecrease="0" maxvitalitydecrease="2"/>
+	<icon texture="Content/UI/MainIconsAtlas.png" sourcerect="768,640,128,128" color="195,104,60,255" origin="0,0"/>
+	</Burn>
+	<!--Abdomen-->
+	<Affliction name="Diarrhea" identifier="shit" description="The patient is constantly excreting." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Abdomen"
+	showiconthreshold="20"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100"> <!--todo: add abdomen to health overlay-->
+	</Affliction>
+	<Affliction name="Explosive Diarrhea" identifier="explosiveshit" description="The patient is constantly excreting in projectile pulses." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Abdomen"
+	showiconthreshold="20"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Affliction name="Constipation" identifier="constipated" description="The patient cannot excrete." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Abdomen"
+	showiconthreshold="20"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Affliction name="Vomiting" identifier="vomit" description="Rapid evacuation of stomach contents." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Torso"
+	showiconthreshold="20"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100"> <!--priority over nausea-->
+	</Affliction>
+	<Affliction name="Coughing" identifier="cough" description="Sudden expulsion of the airways." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Torso"
+	showiconthreshold="0"
+	showicontoothersthreshold="50"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Affliction name="Dyspnea" identifier="choking" description="The patient is struggling to breath." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Torso"
+	showiconthreshold="20"
+	showicontoothersthreshold="20"
+	showinhealthscannerthreshold="100"
+	maxstrength="100"
+    causeofdeathdescription="Asphyxiated"
+    selfcauseofdeathdescription="You have choked to death.">
+	</Affliction>
+	<Affliction name="Pulmonary Edema" identifier="lungfluid" description="Fluid of some kind has entered the lungs." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Torso"
+	showiconthreshold="20"
+	showicontoothersthreshold="20"
+	showinhealthscannerthreshold="100"
+	maxstrength="100"
+    causeofdeathdescription="Drowned"
+    selfcauseofdeathdescription="You have drowned."> <!--priority over lungfluidnonlethal-->
+	</Affliction>
+	<Affliction name="Pulmonary Edema" identifier="lungfluidnonlethal" description="Fluid of some kind has entered the lungs." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Torso"
+	showiconthreshold="20"
+	showicontoothersthreshold="20"
+	showinhealthscannerthreshold="100"
+	maxstrength="100"> <!--for liquid breathing-->
+	</Affliction>
+	<!--Extremities/limbs-->
+
+	<!--Head (physical)-->
+	<Affliction name="Paralysis" identifier="_paralysis" description="The patient is incapable of moving." type="paralysis"
+	limbspecific="false"
+	indicatorlimb="Head"
+	showiconthreshold="70"
+	showicontoothersthreshold="70"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	<Effect minstrength="0" maxstrength="99" strengthchange="1"
+		minscreendistort="0.0"
+		maxscreendistort="0.5"
+		minscreenblur="0.0"
+		maxscreenblur="0.5"
+		minspeedmultiplier="1.0"
+		maxspeedmultiplier="0.25">
+    </Effect>
+	<Effect minstrength="99" maxstrength="100" strengthchange="1"
+		minscreendistort="0.5"
+		maxscreendistort="0.75"
+		minscreenblur="0.5"
+		maxscreenblur="0.75"
+		minspeedmultiplier="0"
+		maxspeedmultiplier="0">
+    </Effect>
+	</Affliction>
+	<Affliction name="Fever" identifier="fever" description="The body's natural immune response by increasing temperature within the body." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Head"
+	showiconthreshold="100"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Affliction name="Tremors" identifier="jittery" description="The patient is shaking." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Head"
+	showiconthreshold="0"
+	showicontoothersthreshold="10"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Stun name="Syncope" identifier="faint" description="The patient has collapsed." type="stun"
+	limbspecific="false"
+	indicatorlimb="Head"
+	showiconthreshold="0"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	<Effect minstrength="0" maxstrength="100" strengthchange="-1"/>
+	</Stun>
+	<!--Head (pyschological)-->
+	<Affliction name="Chills" identifier="chills" description="Waves of cold rush through the body despite there being no external temperature change." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Head"
+	showiconthreshold="0"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Affliction name="Hot Flashes" identifier="hotflashes" description="Waves of heat rush through the body despite there being no external temperature change." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Head"
+	showiconthreshold="0"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Affliction name="Dizziness" identifier="dizzy" description="The world is spinning around you." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Head"
+	showiconthreshold="20"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Affliction name="Confusion" identifier="confusion" description="The patient is lost and dazed. Who is the patient?" type="symptom"
+	limbspecific="false"
+	indicatorlimb="Head"
+	showiconthreshold="0"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Affliction name="Psychosis" identifier="_psychosis" description="The patient is experiencing things which do not exist." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Head"
+	showiconthreshold="100"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Affliction name="Nausea" identifier="_nausea" description="A sick sense of discomfort." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Head"
+	showiconthreshold="0"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100"> <!--priority over malaise-->
+	</Affliction>
+	<Affliction name="Fatigue" identifier="fatigue" description="Try getting some sleep." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Head"
+	showiconthreshold="0"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+	<Affliction name="Seizure" identifier="seizuregrandmal" description="The patient is convulsing violently." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Head"
+	showiconthreshold="100"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="100"
+    causeofdeathdescription="Died of a seizure"
+    selfcauseofdeathdescription="You died of a seizure."> <!--should be followed by confusion and/or fatigue-->
+	</Affliction>
+	<Affliction name="Seizure" identifier="seizurepetitmal" description="The patient has become blank and unresponsive." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Head"
+	showiconthreshold="100"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	<Effect minstrength="0" maxstrength="30"
+		minspeedmultiplier="0"
+		maxspeedmultiplier="0"
+		strengthchange="-1"/> <!--todo: mute character during seizure-->
+	</Affliction>
+	<Affliction name="Anxiety" identifier="anxiety" description="An extreme sense of unease and discomfort." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Head"
+	showiconthreshold="0"
+	showicontoothersthreshold="100"
+	showinhealthscannerthreshold="100"
+	maxstrength="100"> <!--incompatible with malaise--> <!--anxiety accelerates nausea to vomiting-->
+	<Effect minstrength="0" maxstrength="100">
+		<StatusEffect target="Character">
+			<Conditional malaise="gt 0"/>
+			<ReduceAffliction identifier="malaise" strength="100"/>
+		</StatusEffect>
+		<StatusEffect target="Character" comparison="and">
+			<Conditional nausea="gt 10"/>
+			<ReduceAffliction identifier="nausea" strength="100"/>
+			<Affliction identifier="vomit" strength="20"/>
+		</StatusEffect>
+	</Effect>
+	</Affliction>
+</Afflictions>

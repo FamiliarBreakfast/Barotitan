@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Afflictions>
+	<Affliction name="Sores" identifier="parasitesores" description="Dark sores cover the neck and spine. These delicate blobs occasionaly burst; extremely painful." type="symptom"
+	limbspecific="false"
+	indicatorlimb="Torso"
+	showiconthreshold="0"
+	showicontoothersthreshold="0"
+	showinhealthscannerthreshold="100"
+	maxstrength="100">
+	</Affliction>
+</Afflictions>

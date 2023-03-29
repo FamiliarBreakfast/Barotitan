@@ -1,0 +1,18 @@
+<Items>
+  <!--electromagnetic weapons-->
+  <Item name="Gauss gun" identifier="gausspistol" description="Armed with sixteen electromagnets capable of accelerating small ferrous objects up to 400 m/s." tooltip="Fires anything small and ferrous"/>
+  <Item name="Gauss rifle" identifier="gaussrifle" description="A higher caliber alternative to the electromagnetic sidearm." tooltip="Fires anything small and ferrous"/>
+  <Item name="Magnetic shotgun" identifier="gaussshotgun" description="Effectively launches trash, both loose and canned form." tooltip="Fires anything metal\nIncluding itself"/>
+  <Item name="Railgun" identifier="smallrailgun" description="Two electrified rails are shorted by a metal slug, launching it forward at high speeds." tooltip="Fires slugs"/>
+
+  <!--combustion weapons-->
+  <Item name="Gas-blowback pistol" identifer="pistol" secondarydescription="S gas-blowback pistol; on a moon made of gas?" tooltip="Fires bullet cartridges"/>
+  <Item name="Revolver" identifer="revolver" secondarydescription="The classic. Doesn't make it good." tooltip="Fires bullet cartridges"/>
+  <Item name="Antique sidearm" identifer="oldgun" tooltip="Fires bullet cartridges"/>
+  <Item name="Conventional rifle" identifier="rifle" secondarydescription="Not the smartest gun to bring to a knife fight." tooltip="Fires bullet cartridges"/>
+  <Item name="Boomstick" identifier="boomstick" secondarydescription="Back from hell" tooltip="Fires slugs"/>
+
+  <!--special-->
+  <Item name="Atomic delivery system" identifer="davycrockett" description="Handheld recoilless rifle capable of firing, among others, miniature nuclear warheads." secondarydescription="Is whatever you're doing really worth it?" tooltip="Fires watermelon rounds"/>
+
+</Items>

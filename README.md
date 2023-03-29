@@ -1,11 +1,10 @@
-# LuaCsForBarotrauma 
-This is a Barotrauma modification that adds Lua and Cs modding support.
+# Barotitan Overhaul
 
-### Online Documentation: https://evilfactory.github.io/LuaCsForBarotrauma
-### VS Code Documentation: https://gitee.com/zhurengong/btlua-docs
-### Discord: https://discord.gg/f9zvNNuxu9
+A total overhaul for Barotrauma set on Saturn's moon Titan.
 
 ### This project uses a fork of Moonsharp: https://github.com/evilfactory/moonsharp
+
+For LuaCs documentation, see [evilfactory/LuaCsForBarotrauma](https://github.com/evilfactory/LuaCsForBarotrauma)
 
 # Barotrauma
 
@@ -27,10 +26,17 @@ If you're interested in working on the code, either to develop mods or to contri
 
 **Wiki:** https://barotraumagame.com/wiki/Main_Page
 
-## Prerequisities:
+## Compiling
+
 ### Windows
-- [Visual Studio](https://www.visualstudio.com/vs/community/) with C# 10 support (VS 2022 or later recommended)
-### Linux
-- [.NET 6 SDK](https://docs.microsoft.com/en-us/dotnet/core/install/linux)
+
+Install [Visual Studio](https://www.visualstudio.com/vs/community/) with C# 10 support (VS 2022 or later recommended)
+Run `DeployAll.bat` located `/Deploy`
 ### macOS
-- [Visual Studio 2022 for Mac](https://visualstudio.microsoft.com/vs/mac/)
+
+Install [Visual Studio 2022 for Mac](https://visualstudio.microsoft.com/vs/mac/)
+Run `DeployAll.sh` located `/Deploy`
+### Linux
+
+Install and configure [.NET 6 SDK](https://docs.microsoft.com/en-us/dotnet/core/install/linux)
+Run `DeployAll.sh` located `/Deploy`
