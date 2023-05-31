@@ -17,22 +17,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout branch
-        uses: actions/checkout@v3
+        uses: actions/checkout@8e5e7e5ab8b370d6c329ec480221332ada57f0ab # v3.5.2
         with:
           submodules: recursive
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v2
+        uses: actions/setup-dotnet@aa983c550dfda0d1722b6ac6aed55724ffacc6d3 # v3.1.0
         with:
           dotnet-version: |
-            3.1.x
             6.0.x
 
-      - uses: leafo/gh-actions-lua@v8
+      - uses: leafo/gh-actions-lua@35bcb06abec04ec87df82e08caa84d545348536e # v10.0.0
         with:
           luaVersion: "5.2"
 
-      - uses: leafo/gh-actions-luarocks@v4
+      - uses: leafo/gh-actions-luarocks@e65774a6386cb4f24e293dca7fc4ff89165b64c5 # v4.3.0
 
       - name: Run install script
         working-directory: ${{ env.DOCS_LUA_ROOT }}
@@ -52,7 +51,7 @@ jobs:
           tar -czf "$CI_ARTIFACTS_DIR"/lua.tar.gz -C "$DOCS_LUA_ROOT"/build .
 
       - name: Upload tarball
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v3.1.2
         with:
           name: docs-lua
           path: ${{ env.CI_ARTIFACTS_DIR }}/lua.tar.gz
@@ -61,7 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout branch
-        uses: actions/checkout@v3
+        uses: actions/checkout@8e5e7e5ab8b370d6c329ec480221332ada57f0ab # v3.5.2
 
       - name: Install doxygen
         run: sudo apt-get update && sudo apt-get install -y doxygen
@@ -76,7 +75,7 @@ jobs:
           tar -czf "$CI_ARTIFACTS_DIR"/cs.tar.gz -C "$DOCS_CS_ROOT"/build .
 
       - name: Upload tarball
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v3.1.2
         with:
           name: docs-cs
           path: ${{ env.CI_ARTIFACTS_DIR }}/cs.tar.gz
@@ -86,18 +85,18 @@ jobs:
     needs: [update-docs-lua, update-docs-cs]
     steps:
       - name: Checkout branch
-        uses: actions/checkout@v3
+        uses: actions/checkout@8e5e7e5ab8b370d6c329ec480221332ada57f0ab # v3.5.2
 
       - run: mkdir -p "$CI_ARTIFACTS_DIR" "$CI_DEPLOY_DIR"
 
       - name: "Download build artifacts: lua docs"
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a # v3.0.2
         with:
           name: docs-lua
           path: ${{ env.CI_ARTIFACTS_DIR }}
 
       - name: "Download build artifacts: cs docs"
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a # v3.0.2
         with:
           name: docs-cs
           path: ${{ env.CI_ARTIFACTS_DIR }}
@@ -112,7 +111,7 @@ jobs:
         run: cp -r "$DOCS_LANDINGPAGE_ROOT"/. "$CI_DEPLOY_DIR"
 
       - name: Deploy
-        uses: peaceiris/actions-gh-pages@v3
+        uses: peaceiris/actions-gh-pages@373f7f263a76c20808c831209c920827a82a2847 #v3.9.3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ${{ env.CI_DEPLOY_DIR }}

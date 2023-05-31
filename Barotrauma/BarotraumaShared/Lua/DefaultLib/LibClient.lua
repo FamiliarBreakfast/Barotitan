@@ -22,6 +22,8 @@ sounds.HighShelfFilter = CreateStatic("Barotrauma.Sounds.HighShelfFilter")
 sounds.PeakFilter = CreateStatic("Barotrauma.Sounds.PeakFilter")
 defaultLib["Sounds"] = sounds
 
+defaultLib["SpriteEffects"] = CreateStatic("Microsoft.Xna.Framework.Graphics.SpriteEffects")
+
 defaultLib["SoundPlayer"] = CreateStatic("Barotrauma.SoundPlayer")
 defaultLib["SoundPrefab"] = CreateStatic("Barotrauma.SoundPrefab", true)
 defaultLib["BackgroundMusic"] = CreateStatic("Barotrauma.BackgroundMusic", true)
@@ -38,6 +40,7 @@ defaultLib["Keys"] = CreateStatic("Microsoft.Xna.Framework.Input.Keys", true)
 defaultLib["GUI"] = {
     GUI = CreateStatic("Barotrauma.GUI", true),
     GUIStyle = CreateStatic("Barotrauma.GUIStyle", true),
+    Component = CreateStatic("Barotrauma.GUIComponent"),
     RectTransform = CreateStatic("Barotrauma.RectTransform", true),
     LayoutGroup = CreateStatic("Barotrauma.GUILayoutGroup", true),
     Button = CreateStatic("Barotrauma.GUIButton", true),
@@ -58,13 +61,25 @@ defaultLib["GUI"] = {
     ScissorComponent = CreateStatic("Barotrauma.GUIScissorComponent", true),
     VideoPlayer = CreateStatic("Barotrauma.VideoPlayer", true),
     Graph = CreateStatic("Barotrauma.Graph", true),
+    SerializableEntityEditor = CreateStatic("Barotrauma.SerializableEntityEditor", true),
+    SlideshowPlayer = CreateStatic("Barotrauma.SlideshowPlayer", true),
+    CreditsPlayer = CreateStatic("Barotrauma.CreditsPlayer", true),
+    DragHandle = CreateStatic("Barotrauma.GUIDragHandle", true),
 
     Screen = CreateStatic("Barotrauma.Screen"),
 
     Anchor = CreateStatic("Barotrauma.Anchor"),
     Alignment = CreateStatic("Barotrauma.Alignment"),
     Pivot = CreateStatic("Barotrauma.Pivot"),
+    SoundType = CreateEnum("Barotrauma.GUISoundType"),
+    CursorState = CreateEnum("Barotrauma.CursorState"),
 }
+
+setmetatable(defaultLib["GUI"], {
+    __index = function (table, key)
+        return defaultLib["GUI"].GUI[key]
+    end
+})
 
 AddCallMetaTable(defaultLib["GUI"].VideoPlayer.VideoSettings)
 AddCallMetaTable(defaultLib["GUI"].VideoPlayer.TextSettings)

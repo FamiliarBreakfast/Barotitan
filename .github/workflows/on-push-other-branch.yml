@@ -5,9 +5,12 @@ name: On push to a secondary branch
 on:
   push:
     branches-ignore: [master]
+    paths-ignore:
+      - ".github/**"
+      - "*.md"
 
 jobs:
   run-tests:
     uses: ./.github/workflows/run-tests.yml
     with:
-      ref: ${{ github.event.ref }}
+      target: ${{ github.event.ref }}

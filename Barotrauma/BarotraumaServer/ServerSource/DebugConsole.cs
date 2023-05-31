@@ -14,6 +14,15 @@ namespace Barotrauma
 {
     static partial class DebugConsole
     {
+        private static readonly RateLimiter rateLimiter = new(
+            maxRequests: 50,
+            expiryInSeconds: 5,
+            punishmentRules: new[]
+            {
+                (RateLimitAction.OnLimitReached, RateLimitPunishment.Announce),
+                (RateLimitAction.OnLimitDoubled, RateLimitPunishment.Kick)
+            });
+
         public partial class Command
         {
             /// <summary>
@@ -609,12 +618,12 @@ namespace Barotrauma
                 NewMessage("Valid ranks are:", Color.White);
                 foreach (PermissionPreset permissionPreset in PermissionPreset.List)
                 {
-                    NewMessage(" - " + permissionPreset.Name, Color.White);
+                    NewMessage(" - " + permissionPreset.DisplayName, Color.White);
                 }
 
                 ShowQuestionPrompt("Rank to grant to \"" + client.Name + "\"?", (rank) =>
                 {
-                    PermissionPreset preset = PermissionPreset.List.Find(p => p.Name.Equals(rank, StringComparison.OrdinalIgnoreCase));
+                    PermissionPreset preset = PermissionPreset.List.Find(p => p.DisplayName.Equals(rank, StringComparison.OrdinalIgnoreCase));
                     if (preset == null)
                     {
                         ThrowError("Rank \"" + rank + "\" not found.");
@@ -623,7 +632,7 @@ namespace Barotrauma
 
                     client.SetPermissions(preset.Permissions, preset.PermittedCommands);
                     GameMain.Server.UpdateClientPermissions(client);
-                    NewMessage("Assigned the rank \"" + preset.Name + "\" to " + client.Name + ".", Color.White);
+                    NewMessage("Assigned the rank \"" + preset.DisplayName + "\" to " + client.Name + ".", Color.White);
                 }, args, 1);
             });
 
@@ -1260,13 +1269,22 @@ namespace Barotrauma
                 GameMain.LuaCs.Initialize();
             }));
 
-#if WINDOWS
+            commands.Add(new Command("toggleluadebug", "Toggles the MoonSharp Debug Server.", (string[] args) =>
+            {
+                int port = 41912;
+
+                if (args.Length > 0)
+                {
+                    int.TryParse(args[0], out port);
+                }
+
+                GameMain.LuaCs.ToggleDebugger(port);
+            }));
+
             commands.Add(new Command("install_cl_lua|install_cl|install_cl_cs|install_cl_luacs", "Installs Client-Side LuaCs into your client.", (string[] args) =>
             {
                 LuaCsInstaller.Install();
             }));
-
-#endif
 
             commands.Add(new Command("randomizeseed", "randomizeseed: Toggles level seed randomization on/off.", (string[] args) =>
             {
@@ -2019,6 +2037,7 @@ namespace Barotrauma
                 "freecam",
                 (Client client, Vector2 cursorWorldPos, string[] args) =>
                 {
+                    client.UsingFreeCam = true;
                     GameMain.Server.SetClientCharacter(client, null);
                     client.SpectateOnly = true;
                 }
@@ -2132,7 +2151,7 @@ namespace Barotrauma
                     }
 
                     string rank = string.Join("", args.Skip(1));
-                    PermissionPreset preset = PermissionPreset.List.Find(p => p.Name.Equals(rank, StringComparison.OrdinalIgnoreCase));
+                    PermissionPreset preset = PermissionPreset.List.Find(p => p.DisplayName.Equals(rank, StringComparison.OrdinalIgnoreCase));
                     if (preset == null)
                     {
                         GameMain.Server.SendConsoleMessage("Rank \"" + rank + "\" not found.", senderClient, Color.Red);
@@ -2141,8 +2160,8 @@ namespace Barotrauma
 
                     client.SetPermissions(preset.Permissions, preset.PermittedCommands);
                     GameMain.Server.UpdateClientPermissions(client);
-                    GameMain.Server.SendConsoleMessage($"Assigned the rank \"{preset.Name}\" to {client.Name}.", senderClient);
-                    NewMessage(senderClient.Name + " granted  the rank \"" + preset.Name + "\" to " + client.Name + ".", Color.White);
+                    GameMain.Server.SendConsoleMessage($"Assigned the rank \"{preset.DisplayName}\" to {client.Name}.", senderClient);
+                    NewMessage(senderClient.Name + " granted  the rank \"" + preset.DisplayName + "\" to " + client.Name + ".", Color.White);
                 }
             );
 
@@ -2536,24 +2555,35 @@ namespace Barotrauma
                 foreach (Item item in Item.ItemList)
                 {
                     item.TryCreateServerEventSpam();
-                    item.CreateStatusEvent();
+                    item.CreateStatusEvent(loadingRound: false);
                 }
                 foreach (Structure wall in Structure.WallList)
                 {
                     GameMain.Server.CreateEntityEvent(wall);
                 }
             }));
-            commands.Add(new Command("stallfiletransfers", "stallfiletransfers [seconds]: A debug command that stalls each file transfer packet by the specified duration.", (string[] args) =>
+            commands.Add(new Command("stallfiletransfers", "stallfiletransfers [seconds]: A debug command that makes all file transfers take at least the specified duration.", (string[] args) =>
             {
                 float seconds = 0.0f;
                 if (args.Length > 0)
                 {
                     float.TryParse(args[0], out seconds);
                 }
-                GameMain.Server.FileSender.StallPacketsTime = seconds;
+                GameMain.Server.FileSender.ForceMinimumFileTransferDuration = seconds;
                 NewMessage("Set file transfer stall time to " + seconds);
             }));
 #endif
+        }
+
+        public static void ServerRead(IReadMessage inc, Client sender)
+        {
+            string consoleCommand = inc.ReadString();
+            float cursorX = inc.ReadSingle();
+            float cursorY = inc.ReadSingle();
+
+            if (rateLimiter.IsLimitReached(sender)) { return; }
+
+            ExecuteClientCommand(sender, new Vector2(cursorX, cursorY), consoleCommand);
         }
 
         public static void ExecuteClientCommand(Client client, Vector2 cursorWorldPos, string command)

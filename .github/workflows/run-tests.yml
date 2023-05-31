@@ -5,7 +5,7 @@ name: Run tests
 on:
   workflow_call:
     inputs:
-      ref:
+      target:
         required: true
         type: string
 
@@ -14,17 +14,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout branch
-        uses: actions/checkout@v3
+        uses: actions/checkout@8e5e7e5ab8b370d6c329ec480221332ada57f0ab # v3.5.2
         with:
           repository: ${{ inputs.repository }}
-          ref: ${{ inputs.ref }}
+          target: ${{ inputs.target }}
           submodules: recursive
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v2
+        uses: actions/setup-dotnet@aa983c550dfda0d1722b6ac6aed55724ffacc6d3 # v3.1.0
         with:
           dotnet-version: |
-            3.1.x
             6.0.x
 
       - name: Initialize environment
@@ -39,7 +38,7 @@ jobs:
           echo "EXITCODE=$?" >> "$GITHUB_ENV"
 
       - name: Upload test results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v3.1.2
         with:
           name: test-results
           path: test-results.trx

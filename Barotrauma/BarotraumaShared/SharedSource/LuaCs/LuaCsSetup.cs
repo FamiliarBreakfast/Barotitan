@@ -7,6 +7,8 @@ using System.Linq;
 using System.Threading;
 using LuaCsCompatPatchFunc = Barotrauma.LuaCsPatch;
 using System.Diagnostics;
+using MoonSharp.VsCodeDebugger;
+using System.Reflection;
 
 [assembly: InternalsVisibleTo(Barotrauma.CsScriptBase.CsScriptAssembly, AllInternalsVisible = true)]
 namespace Barotrauma
@@ -30,7 +32,14 @@ namespace Barotrauma
     {
         public const string LuaSetupFile = "Lua/LuaSetup.lua";
         public const string VersionFile = "luacsversion.txt";
+#if WINDOWS
         public static ContentPackageId LuaForBarotraumaId = new SteamWorkshopId(2559634234);
+#elif LINUX
+        public static ContentPackageId LuaForBarotraumaId = new SteamWorkshopId(2970628943);
+#elif OSX
+        public static ContentPackageId LuaForBarotraumaId = new SteamWorkshopId(2970890020);
+#endif
+
         public static ContentPackageId CsForBarotraumaId = new SteamWorkshopId(2795927223);
 
 
@@ -62,6 +71,7 @@ namespace Barotrauma
 
         public CsScriptLoader CsScriptLoader { get; private set; }
         public LuaCsSetupConfig Config { get; private set; }
+        public MoonSharpVsCodeDebugServer DebugServer { get; private set; }
 
         private bool ShouldRunCs
         {
@@ -73,11 +83,15 @@ namespace Barotrauma
 
         public LuaCsSetup()
         {
+            Script.GlobalOptions.Platform = new LuaPlatformAccessor();
+
             Hook = new LuaCsHook(this);
             ModStore = new LuaCsModStore();
 
             Game = new LuaGame();
             Networking = new LuaCsNetworking();
+
+            DebugServer = new MoonSharpVsCodeDebugServer();
 
             if (File.Exists(configFileName))
             {
@@ -91,6 +105,68 @@ namespace Barotrauma
                 Config = new LuaCsSetupConfig();
             }
         }
+
+        public static Type GetType(string typeName, bool throwOnError = false, bool ignoreCase = false)
+        {
+            if (typeName == null || typeName.Length == 0) { return null; }
+
+            var byRef = false;
+            if (typeName.StartsWith("out ") || typeName.StartsWith("ref "))
+            {
+                typeName = typeName.Remove(0, 4);
+                byRef = true;
+            }
+
+            var type = Type.GetType(typeName, throwOnError, ignoreCase);
+            if (type != null) { return byRef ? type.MakeByRefType() : type; }
+            foreach (var a in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (CsScriptBase.LoadedAssemblyName.Contains(a.GetName().Name))
+                {
+                    var attrs = a.GetCustomAttributes<AssemblyMetadataAttribute>();
+                    var revision = attrs.FirstOrDefault(attr => attr.Key == "Revision")?.Value;
+                    if (revision != null && int.Parse(revision) != (int)CsScriptBase.Revision[a.GetName().Name]) { continue; }
+                }
+                type = a.GetType(typeName, throwOnError, ignoreCase);
+                if (type != null)
+                {
+                    return byRef ? type.MakeByRefType() : type;
+                }
+            }
+            return null;
+        }
+
+        public void ToggleDebugger(int port = 41912)
+        {
+            if (!GameMain.LuaCs.DebugServer.IsStarted)
+            {
+                DebugServer.Start();
+                AttachDebugger();
+
+                LuaCsLogger.Log($"Lua Debug Server started on port {port}.");
+            }
+            else
+            {
+                DetachDebugger();
+                DebugServer.Stop();
+
+                LuaCsLogger.Log($"Lua Debug Server stopped.");
+            }
+        }
+
+        public void AttachDebugger()
+        {
+            DebugServer.AttachToScript(Lua, "Script", s =>
+            {
+                if (s.Name.StartsWith("LocalMods") || s.Name.StartsWith("Lua"))
+                {
+                    return Environment.CurrentDirectory + "/" + s.Name;
+                }
+                return s.Name;
+            });
+        }
+
+        public void DetachDebugger() => DebugServer.Detach(Lua);
 
         public void UpdateConfig()
         {
@@ -178,7 +254,7 @@ namespace Barotrauma
         {
             // XXX: `lua` might be null if `LuaCsSetup.Stop()` is called while
             // a patched function is still running.
-            if (Lua == null) return null;
+            if (Lua == null) { return null; }
 
             lock (Lua)
             {
@@ -234,6 +310,11 @@ namespace Barotrauma
                 Hook?.Call("stop");
             }
 
+            if (Lua != null && DebugServer.IsStarted)
+            {
+                DebugServer.Detach(Lua);
+            }
+
             Game?.Stop();
 
             Hook.Clear();
@@ -267,7 +348,7 @@ namespace Barotrauma
 
             RegisterLuaConverters();
 
-            Lua = new Script(CoreModules.Preset_SoftSandbox | CoreModules.Debug);
+            Lua = new Script(CoreModules.Preset_SoftSandbox | CoreModules.Debug | CoreModules.IO | CoreModules.OS_System);
             Lua.Options.DebugPrint = (o) => { LuaCsLogger.LogMessage(o); };
             Lua.Options.ScriptLoader = LuaScriptLoader;
             Lua.Options.CheckThreadAccess = false;
@@ -300,6 +381,9 @@ namespace Barotrauma
             UserData.RegisterType<LuaCsPerformanceCounter>();
             UserData.RegisterType<IUserDataDescriptor>();
 
+            UserData.RegisterExtensionType(typeof(MathUtils));
+            UserData.RegisterExtensionType(typeof(XMLExtensions));
+
             Lua.Globals["printerror"] = (DynValue o) => { LuaCsLogger.LogError(o.ToString(), LuaCsMessageOrigin.LuaMod); };
 
             Lua.Globals["setmodulepaths"] = (Action<string[]>)SetModulePaths;
@@ -328,6 +412,11 @@ namespace Barotrauma
 
             Lua.Globals["SERVER"] = IsServer;
             Lua.Globals["CLIENT"] = IsClient;
+
+            if (DebugServer.IsStarted)
+            {
+                AttachDebugger();
+            }
 
             if (csActive)
             {

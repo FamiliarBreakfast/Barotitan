@@ -904,7 +904,8 @@ namespace Barotrauma
             if (HasTargetType(TargetType.NearbyItems))
             {
                 //optimization for powered components that can be easily fetched from Powered.PoweredList
-                if (TargetIdentifiers.Count == 1 &&
+                if (TargetIdentifiers != null && 
+                    TargetIdentifiers.Count == 1 &&
                     (TargetIdentifiers.Contains("powered") || TargetIdentifiers.Contains("junctionbox") || TargetIdentifiers.Contains("relaycomponent")))
                 {
                     foreach (Powered powered in Powered.PoweredList)
@@ -2222,7 +2223,7 @@ namespace Barotrauma
             {
                 if (affliction.Prefab.IsBuff)
                 {
-                    afflictionMultiplier *= 1 + user.GetStatValue(StatTypes.MedicalItemDurationMultiplier);
+                    afflictionMultiplier *= 1 + user.GetStatValue(StatTypes.BuffItemApplyingMultiplier);
                 }
                 else if (affliction.Prefab.Identifier == "organdamage" && targetCharacter.CharacterHealth.GetActiveAfflictionTags().Any(t => t == "poisoned"))
                 {

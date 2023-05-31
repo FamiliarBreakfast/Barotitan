@@ -189,7 +189,7 @@ namespace Barotrauma
             }
         }
 
-        public Color DefaultFaceTint = Color.TransparentBlack;
+        public static readonly Color DefaultFaceTint = Color.TransparentBlack;
 
         public Color FaceTint
         {
@@ -455,7 +455,11 @@ namespace Barotrauma
                 var affliction = kvp.Key;
                 resistance += affliction.GetResistance(afflictionPrefab.Identifier);
             }
-            return 1 - ((1 - resistance) * Character.GetAbilityResistance(afflictionPrefab));
+
+            resistance = 1 - ((1 - resistance) * Character.GetAbilityResistance(afflictionPrefab));
+            if (resistance > 1f) { resistance = 1f; }
+
+            return resistance;
         }
 
         public float GetStatValue(StatTypes statType)
@@ -1167,16 +1171,14 @@ namespace Barotrauma
             }
         }
 
-        public IEnumerable<Identifier> GetActiveAfflictionTags() => GetActiveAfflictionTags(afflictions.Keys);
-
         private readonly HashSet<Identifier> afflictionTags = new HashSet<Identifier>();
-        public IEnumerable<Identifier> GetActiveAfflictionTags(IEnumerable<Affliction> afflictions)
+        public IEnumerable<Identifier> GetActiveAfflictionTags()
         {
             afflictionTags.Clear();
-            foreach (Affliction affliction in afflictions)
+            foreach (Affliction affliction in afflictions.Keys)
             {
                 var currentEffect = affliction.GetActiveEffect();
-                if (currentEffect != null && !currentEffect.Tag.IsEmpty)
+                if (currentEffect is { Tag.IsEmpty: false })
                 {
                     afflictionTags.Add(currentEffect.Tag);
                 }

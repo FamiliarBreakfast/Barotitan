@@ -8,7 +8,6 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Linq;
 
@@ -16,6 +15,10 @@ namespace Barotrauma.Networking
 {
     sealed class GameClient : NetworkMember
     {
+        public static readonly TimeSpan CampaignSaveTransferTimeOut = new TimeSpan(0, 0, seconds: 100);
+        //this should be longer than CampaignSaveTransferTimeOut - we shouldn't give up starting the round if we're still waiting for the save file
+        public static readonly TimeSpan LevelTransitionTimeOut = new TimeSpan(0, 0, seconds: 150);
+
         public override bool IsClient => true;
         public override bool IsServer => false;
 
@@ -75,6 +78,8 @@ namespace Barotrauma.Networking
             Error,
             Interrupted
         }
+
+        private UInt16? debugStartGameCampaignSaveID;
 
         private RoundInitStatus roundInitStatus = RoundInitStatus.NotStarted;
 
@@ -512,6 +517,7 @@ namespace Barotrauma.Networking
                     DisplayInLoadingScreens = true
                 };
                 Quit();
+                GUI.DisableHUD = false;
                 GameMain.ServerListScreen.Select();
                 return;
             }
@@ -861,17 +867,24 @@ namespace Barotrauma.Networking
                 ContentFile file = ContentPackageManager.EnabledPackages.All
                     .Select(p =>
                         p.Files.FirstOrDefault(f => f.Path == filePath))
-                    .FirstOrDefault(f => !(f is null));
+                    .FirstOrDefault(f => f is not null);
                 contentToPreload.AddIfNotNull(file);
             }
+
+            string campaignErrorInfo = string.Empty;
+            if (GameMain.GameSession?.Campaign is MultiPlayerCampaign campaign)
+            {
+                campaignErrorInfo = $" Round start save ID: {debugStartGameCampaignSaveID}, last save id: {campaign.LastSaveID}, pending save id: {campaign.PendingSaveID}.";
+            }            
 
             GameMain.GameSession.EventManager.PreloadContent(contentToPreload);
 
             int subEqualityCheckValue = inc.ReadInt32();
             if (subEqualityCheckValue != (Submarine.MainSub?.Info?.EqualityCheckVal ?? 0))
             {
-                string errorMsg = "Submarine equality check failed. The submarine loaded at your end doesn't match the one loaded by the server." +
-                    " There may have been an error in receiving the up-to-date submarine file from the server.";
+                string errorMsg =
+                    "Submarine equality check failed. The submarine loaded at your end doesn't match the one loaded by the server. " +
+                    $"There may have been an error in receiving the up-to-date submarine file from the server. Round init status: {roundInitStatus}." + campaignErrorInfo;
                 GameAnalyticsManager.AddErrorEventOnce("GameClient.StartGame:SubsDontMatch" + Level.Loaded.Seed, GameAnalyticsManager.ErrorSeverity.Error, errorMsg);
                 throw new Exception(errorMsg);
             }
@@ -888,7 +901,7 @@ namespace Barotrauma.Networking
                     $"Mission equality check failed. Mission count doesn't match the server. " +
                     $"Server: {string.Join(", ", serverMissionIdentifiers)}, " +
                     $"client: {string.Join(", ", GameMain.GameSession.GameMode.Missions.Select(m => m.Prefab.Identifier))}, " +
-                    $"game session: {string.Join(", ", GameMain.GameSession.Missions.Select(m => m.Prefab.Identifier))})";
+                    $"game session: {string.Join(", ", GameMain.GameSession.Missions.Select(m => m.Prefab.Identifier))}). Round init status: {roundInitStatus}." + campaignErrorInfo;
                 GameAnalyticsManager.AddErrorEventOnce("GameClient.StartGame:MissionsCountMismatch" + Level.Loaded.Seed, GameAnalyticsManager.ErrorSeverity.Error, errorMsg);
                 throw new Exception(errorMsg);
             }
@@ -901,7 +914,7 @@ namespace Barotrauma.Networking
                         $"Mission equality check failed. The mission selected at your end doesn't match the one loaded by the server " +
                         $"Server: {string.Join(", ", serverMissionIdentifiers)}, " +
                         $"client: {string.Join(", ", GameMain.GameSession.GameMode.Missions.Select(m => m.Prefab.Identifier))}, " +
-                        $"game session: {string.Join(", ", GameMain.GameSession.Missions.Select(m => m.Prefab.Identifier))})";
+                        $"game session: {string.Join(", ", GameMain.GameSession.Missions.Select(m => m.Prefab.Identifier))}). Round init status: {roundInitStatus}." + campaignErrorInfo;
                     GameAnalyticsManager.AddErrorEventOnce("GameClient.StartGame:MissionsDontMatch" + Level.Loaded.Seed, GameAnalyticsManager.ErrorSeverity.Error, errorMsg);
                     throw new Exception(errorMsg);
                 }
@@ -924,7 +937,7 @@ namespace Barotrauma.Networking
                         ", level value count: " + levelEqualityCheckValues.Count +
                         ", seed: " + Level.Loaded.Seed +
                         ", sub: " + Submarine.MainSub.Info.Name + " (" + Submarine.MainSub.Info.MD5Hash.ShortRepresentation + ")" +
-                        ", mirrored: " + Level.Loaded.Mirrored + ").";
+                        ", mirrored: " + Level.Loaded.Mirrored + "). Round init status: " + roundInitStatus + "." + campaignErrorInfo;
                     GameAnalyticsManager.AddErrorEventOnce("GameClient.StartGame:LevelsDontMatch" + Level.Loaded.Seed, GameAnalyticsManager.ErrorSeverity.Error, errorMsg);
                     throw new Exception(errorMsg);
                 }
@@ -1324,6 +1337,8 @@ namespace Barotrauma.Networking
             eventErrorWritten = false;
             GameMain.NetLobbyScreen.StopWaitingForStartRound();
 
+            debugStartGameCampaignSaveID = null;
+
             while (CoroutineManager.IsCoroutineRunning("EndGame"))
             {
                 EndCinematic?.Stop();
@@ -1473,7 +1488,28 @@ namespace Barotrauma.Networking
                     roundInitStatus = RoundInitStatus.Interrupted;
                     yield return CoroutineStatus.Failure;
                 }
-                else if (campaign.Map == null)
+
+                if (NetIdUtils.IdMoreRecent(campaign.PendingSaveID, campaign.LastSaveID) ||
+                    NetIdUtils.IdMoreRecent(campaignSaveID, campaign.PendingSaveID))
+                {
+                    campaign.PendingSaveID = campaignSaveID;
+                    DateTime saveFileTimeOut = DateTime.Now + CampaignSaveTransferTimeOut;
+                    while (NetIdUtils.IdMoreRecent(campaignSaveID, campaign.LastSaveID))
+                    {
+                        if (DateTime.Now > saveFileTimeOut)
+                        {
+                            GameStarted = true;
+                            new GUIMessageBox(TextManager.Get("error"), TextManager.Get("campaignsavetransfer.timeout"));
+                            GameMain.NetLobbyScreen.Select();
+                            roundInitStatus = RoundInitStatus.Interrupted;
+                            //use success status, even though this is a failure (no need to show a console error because we show it in the message box)
+                            yield return CoroutineStatus.Success;
+                        }
+                        yield return new WaitForSeconds(0.1f);
+                    }
+                }
+
+                if (campaign.Map == null)
                 {
                     GameStarted = true;
                     DebugConsole.ThrowError("Failed to start campaign round (campaign map not loaded yet).");
@@ -1482,29 +1518,13 @@ namespace Barotrauma.Networking
                     yield return CoroutineStatus.Failure;
                 }
 
-                if (NetIdUtils.IdMoreRecent(campaignSaveID, campaign.PendingSaveID))
-                {
-                    campaign.PendingSaveID = campaignSaveID;
-                    DateTime saveFileTimeOut = DateTime.Now + new TimeSpan(0,0,60);
-                    while (NetIdUtils.IdMoreRecent(campaignSaveID, campaign.LastSaveID))
-                    {
-                        if (DateTime.Now > saveFileTimeOut)
-                        {
-                            GameStarted = true;
-                            DebugConsole.ThrowError("Failed to start campaign round (timed out while waiting for the up-to-date save file).");
-                            GameMain.NetLobbyScreen.Select();
-                            roundInitStatus = RoundInitStatus.Interrupted;
-                            yield return CoroutineStatus.Failure;
-                        }
-                        yield return new WaitForSeconds(0.1f); 
-                    }
-                }
-
                 campaign.Map.SelectLocation(selectedLocationIndex);
 
                 LevelData levelData = nextLocationIndex > -1 ?
                     campaign.Map.Locations[nextLocationIndex].LevelData :
                     campaign.Map.Connections[nextConnectionIndex].LevelData;
+
+                debugStartGameCampaignSaveID = campaign.LastSaveID;
 
                 if (roundSummary != null)
                 {
@@ -1699,7 +1719,7 @@ namespace Barotrauma.Networking
                 yield return CoroutineStatus.Success;
             }
 
-            if (GameMain.GameSession != null) { GameMain.GameSession.EndRound(endMessage, traitorResults, transitionType); }
+            GameMain.GameSession?.EndRound(endMessage, traitorResults, transitionType);
             
             ServerSettings.ServerDetailsChanged = true;
 
@@ -2591,31 +2611,24 @@ namespace Barotrauma.Networking
         public void WriteCharacterInfo(IWriteMessage msg, string newName = null)
         {
             msg.WriteBoolean(characterInfo == null);
+            msg.WritePadBits();
             if (characterInfo == null) { return; }
 
-            msg.WriteString(newName ?? string.Empty);
+            var head = characterInfo.Head;
 
-            msg.WriteByte((byte)characterInfo.Head.Preset.TagSet.Count);
-            foreach (Identifier tag in characterInfo.Head.Preset.TagSet)
-            {
-                msg.WriteIdentifier(tag);
-            }
-            msg.WriteByte((byte)characterInfo.Head.HairIndex);
-            msg.WriteByte((byte)characterInfo.Head.BeardIndex);
-            msg.WriteByte((byte)characterInfo.Head.MoustacheIndex);
-            msg.WriteByte((byte)characterInfo.Head.FaceAttachmentIndex);
-            msg.WriteColorR8G8B8(characterInfo.Head.SkinColor);
-            msg.WriteColorR8G8B8(characterInfo.Head.HairColor);
-            msg.WriteColorR8G8B8(characterInfo.Head.FacialHairColor);
+           var netInfo = new NetCharacterInfo(
+               NewName: newName ?? string.Empty,
+               Tags: head.Preset.TagSet.ToImmutableArray(),
+               HairIndex: (byte)head.HairIndex,
+               BeardIndex: (byte)head.BeardIndex,
+               MoustacheIndex: (byte)head.MoustacheIndex,
+               FaceAttachmentIndex: (byte)head.FaceAttachmentIndex,
+               SkinColor: head.SkinColor,
+               HairColor: head.HairColor,
+               FacialHairColor: head.FacialHairColor,
+               JobVariants: GameMain.NetLobbyScreen.JobPreferences.Select(NetJobVariant.FromJobVariant).ToImmutableArray());
 
-            var jobPreferences = GameMain.NetLobbyScreen.JobPreferences;
-            int count = Math.Min(jobPreferences.Count, 3);
-            msg.WriteByte((byte)count);
-            for (int i = 0; i < count; i++)
-            {
-                msg.WriteIdentifier(jobPreferences[i].Prefab.Identifier);
-                msg.WriteByte((byte)jobPreferences[i].Variant);
-            }
+            msg.WriteNetSerializableStruct(netInfo);
         }
 
         public void Vote(VoteType voteType, object data)
@@ -2871,12 +2884,14 @@ namespace Barotrauma.Networking
             ClientPeer.Send(msg, DeliveryMethod.Reliable);
         }
 
-        public bool SpectateClicked(GUIButton button, object userData)
+        public bool SpectateClicked(GUIButton button, object _)
         {
-            MultiPlayerCampaign campaign = 
+            MultiPlayerCampaign campaign =
                 GameMain.NetLobbyScreen.SelectedMode == GameMain.GameSession?.GameMode.Preset ?
                 GameMain.GameSession?.GameMode as MultiPlayerCampaign : null;
-            if (campaign != null && campaign.LastSaveID < campaign.PendingSaveID)
+
+            if (FileReceiver.ActiveTransfers.Any(t => t.FileType == FileTransferType.CampaignSave) ||
+                (campaign != null && NetIdUtils.IdMoreRecent(campaign.PendingSaveID, campaign.LastSaveID)))
             {
                 new GUIMessageBox("", TextManager.Get("campaignfiletransferinprogress"));
                 return false;
