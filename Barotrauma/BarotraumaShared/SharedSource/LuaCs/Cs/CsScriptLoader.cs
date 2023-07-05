@@ -193,7 +193,11 @@ namespace Barotrauma
             var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
                 .WithMetadataImportOptions(MetadataImportOptions.All)
                 .WithOptimizationLevel(OptimizationLevel.Release)
-                .WithAllowUnsafe(true); 
+                .WithAllowUnsafe(true);
+
+            var topLevelBinderFlagsProperty = typeof(CSharpCompilationOptions).GetProperty("TopLevelBinderFlags", BindingFlags.Instance | BindingFlags.NonPublic);
+            topLevelBinderFlagsProperty.SetValue(options, (uint)1 << 22);
+
             var compilation = CSharpCompilation.Create(CsScriptAssembly, syntaxTrees, defaultReferences, options);
 
             using (var mem = new MemoryStream())

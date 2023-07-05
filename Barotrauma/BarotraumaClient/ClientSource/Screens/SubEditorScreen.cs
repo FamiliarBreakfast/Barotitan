@@ -1,16 +1,16 @@
 using Barotrauma.Extensions;
+using Barotrauma.IO;
 using Barotrauma.Items.Components;
+using Barotrauma.Steam;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using Microsoft.Xna.Framework.Input;
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Threading;
 using System.Xml.Linq;
-using Microsoft.Xna.Framework.Input;
-using Barotrauma.IO;
-using Barotrauma.Steam;
 
 namespace Barotrauma
 {
@@ -525,6 +525,11 @@ namespace Barotrauma
                                 GUI.AddMessage(TextManager.Get("waypointsgeneratedsuccesfully"), GUIStyle.Green);
                             }
                             WayPoint.ShowWayPoints = true;
+                            var matchingTickBox = showEntitiesTickBoxes?.Find(tb => tb.UserData as string == "waypoint");
+                            if (matchingTickBox != null)
+                            {
+                                matchingTickBox.Selected = true;
+                            }
                             generateWaypointsVerification.Close();
                             return true;
                         };
@@ -2850,7 +2855,7 @@ namespace Barotrauma
             {
                 OnClicked = (button, o) =>
                 {
-                    var requiredPackages = MapEntity.mapEntityList.Select(e => e.Prefab.ContentPackage)
+                    var requiredPackages = MapEntity.mapEntityList.Select(e => e?.Prefab?.ContentPackage)
                         .Where(cp => cp != null)
                         .Distinct().OfType<ContentPackage>().Select(p => p.Name).ToHashSet();
                     var tickboxes = requiredContentPackList.Content.Children.OfType<GUITickBox>().ToArray();
@@ -3549,10 +3554,46 @@ namespace Barotrauma
                 TextManager.Get("LoadingVanillaSubmarineHeader"),
                 TextManager.Get("LoadingVanillaSubmarineDesc"));
 
-        public void LoadSub(SubmarineInfo info)
+        public void LoadSub(SubmarineInfo info, bool checkIdConflicts = true)
         {
             Submarine.Unload();
             Submarine selectedSub = null;
+
+            if (checkIdConflicts)
+            {
+                Dictionary<int, Identifier> entities = new Dictionary<int, Identifier>();
+                foreach (var subElement in info.SubmarineElement.Elements())
+                {
+                    int id = subElement.GetAttributeInt("ID", -1);
+                    if (id == -1) { continue; }
+                    Identifier identifier = subElement.GetAttributeIdentifier("identifier", string.Empty);
+                    if (entities.TryGetValue(id, out Identifier duplicateEntity))
+                    {
+                        var errorMsg = new GUIMessageBox(
+                            TextManager.Get("error"), 
+                                TextManager.GetWithVariables("subeditor.duplicateiderror", 
+                                    ("[entity1]", $"{duplicateEntity} ({id})"), 
+                                    ("[entity2]", $"{identifier} ({id})")),
+                                new LocalizedString[] { TextManager.Get("Yes"), TextManager.Get("No") });
+                        errorMsg.Buttons[0].OnClicked = (bnt, userdata) =>
+                        {
+                            subElement.Remove();
+                            LoadSub(info, checkIdConflicts: false);
+                            errorMsg.Close();
+                            return true;
+                        };
+                        errorMsg.Buttons[1].OnClicked = (bnt, userdata) =>
+                        {
+                            LoadSub(info, checkIdConflicts: false);
+                            errorMsg.Close();
+                            return true;
+                        };
+                        return;
+                    }
+                    entities.Add(id, identifier);
+                }
+            }
+
             try
             {
                 selectedSub = new Submarine(info);
@@ -5266,7 +5307,7 @@ namespace Barotrauma
                     }
                 }
 
-                if (PlayerInput.KeyHit(Keys.E) && mode == Mode.Default)
+                if (PlayerInput.KeyHit(InputType.Use) && mode == Mode.Default)
                 {
                     if (dummyCharacter != null)
                     {
@@ -5357,6 +5398,16 @@ namespace Barotrauma
                         else
                         {
                             var selectables = MapEntity.mapEntityList.Where(entity => entity.SelectableInEditor).ToList();
+                            foreach (var item in Item.ItemList)
+                            {
+                                //attached wires are not normally selectable (by clicking),
+                                //but let's select them manually when selecting all
+                                var wire = item.GetComponent<Wire>();
+                                if (wire != null && wire.Connections.None(c => c == null) && !selectables.Contains(item))
+                                {
+                                    selectables.Add(item);
+                                }
+                            }
                             lock (selectables)
                             {
                                 selectables.ForEach(MapEntity.AddSelection);
@@ -5748,7 +5799,10 @@ namespace Barotrauma
                 {
                     item.SetTransform(dummyCharacter.SimPosition, 0.0f);
                     item.UpdateTransform();
-                    item.SetTransform(item.body.SimPosition, 0.0f);
+                    if (item.body != null)
+                    {
+                        item.SetTransform(item.body.SimPosition, 0.0f);
+                    }
 
                     //wires need to be updated for the last node to follow the player during rewiring
                     Wire wire = item.GetComponent<Wire>();
@@ -5859,6 +5913,11 @@ namespace Barotrauma
                 spriteBatch.Begin(SpriteSortMode.Deferred, Lights.CustomBlendStates.Multiplicative, null, DepthStencilState.None);
                 spriteBatch.Draw(GameMain.LightManager.LightMap, new Rectangle(0, 0, GameMain.GraphicsWidth, GameMain.GraphicsHeight), Color.White);
                 spriteBatch.End();
+            }
+
+            if (GameMain.LightManager.DebugLos)
+            {
+                GameMain.LightManager.DebugDrawLos(spriteBatch, cam);
             }
 
             //-------------------- HUD -----------------------------

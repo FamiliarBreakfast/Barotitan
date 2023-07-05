@@ -30,13 +30,13 @@ If you're interested in working on the code, either to develop mods or to contri
 
 ### Windows
 
-Install [Visual Studio](https://www.visualstudio.com/vs/community/) with C# 10 support (VS 2022 or later recommended)
+Install [Visual Studio](https://www.visualstudio.com/vs/community/) with C# 10 support (VS 2022 or later recommended)  
 Run `DeployAll.bat` located `/Deploy`
 ### macOS
 
-Install [Visual Studio 2022 for Mac](https://visualstudio.microsoft.com/vs/mac/)
+Install [Visual Studio 2022 for Mac](https://visualstudio.microsoft.com/vs/mac/)  
 Run `DeployAll.sh` located `/Deploy`
 ### Linux
 
-Install and configure [.NET 6 SDK](https://docs.microsoft.com/en-us/dotnet/core/install/linux)
+Install and configure [.NET 6 SDK](https://docs.microsoft.com/en-us/dotnet/core/install/linux)  
 Run `DeployAll.sh` located `/Deploy`

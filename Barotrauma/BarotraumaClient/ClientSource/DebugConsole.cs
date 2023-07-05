@@ -9,6 +9,7 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Text;
@@ -427,6 +428,10 @@ namespace Barotrauma
             {
                 CheatsEnabled = true;
                 SteamAchievementManager.CheatsEnabled = true;
+                if (GameMain.GameSession?.Campaign is CampaignMode campaign)
+                {
+                    campaign.CheatsEnabled = true;
+                }
                 NewMessage("Enabled cheat commands.", Color.Red);
 #if USE_STEAM
                 NewMessage("Steam achievements have been disabled during this play session.", Color.Red);
@@ -642,15 +647,29 @@ namespace Barotrauma
             commands.Add(new Command("wikiimage_character", "Save an image of the currently controlled character with a transparent background.", (string[] args) =>
             {
                 if (Character.Controlled == null) { return; }
-                WikiImage.Create(Character.Controlled);
+                try
+                {
+                    WikiImage.Create(Character.Controlled);
+                }
+                catch (Exception e)
+                {
+                    DebugConsole.ThrowError("The command 'wikiimage_character' failed.", e);
+                }
             }));
 
             commands.Add(new Command("wikiimage_sub", "Save an image of the main submarine with a transparent background.", (string[] args) =>
             {
                 if (Submarine.MainSub == null) { return; }
-                MapEntity.SelectedList.Clear();
-                MapEntity.ClearHighlightedEntities();
-                WikiImage.Create(Submarine.MainSub);
+                try
+                {
+                    MapEntity.SelectedList.Clear();
+                    MapEntity.ClearHighlightedEntities();
+                    WikiImage.Create(Submarine.MainSub);
+                }
+                catch (Exception e)
+                {
+                    DebugConsole.ThrowError("The command 'wikiimage_sub' failed.", e);
+                }
             }));
 
             AssignRelayToServer("kick", false);
@@ -1138,6 +1157,26 @@ namespace Barotrauma
             });
             AssignRelayToServer("debugdraw", false);
 
+            AssignOnExecute("debugdrawlos", (string[] args) =>
+            {
+                if (args.None() || !bool.TryParse(args[0], out bool state))
+                {
+                    state = !GameMain.LightManager.DebugLos;
+                }
+                GameMain.LightManager.DebugLos = state;
+                NewMessage("Los debug draw mode " + (GameMain.LightManager.DebugLos ? "enabled" : "disabled"), Color.Yellow);
+            });
+            AssignOnExecute("debugwiring", (string[] args) =>
+            {
+                if (args.None() || !bool.TryParse(args[0], out bool state))
+                {
+                    state = !ConnectionPanel.DebugWiringMode;
+                }
+                ConnectionPanel.DebugWiringMode = state;
+                NewMessage("Wiring debug mode " + (ConnectionPanel.DebugWiringMode ? "enabled" : "disabled"), Color.Yellow);
+            });
+            AssignRelayToServer("debugdraw", false);
+
             AssignOnExecute("devmode", (string[] args) =>
             {
                 if (args.None() || !bool.TryParse(args[0], out bool state))
@@ -1156,7 +1195,7 @@ namespace Barotrauma
                     GameMain.LightManager.LosEnabled = true;
                     GameMain.LightManager.LosAlpha = 1f;
                 }
-                NewMessage("Dev mode " + (GameMain.DevMode ? "enabled" : "disabled"), Color.White);
+                NewMessage("Dev mode " + (GameMain.DevMode ? "enabled" : "disabled"), Color.Yellow);
             });
             AssignRelayToServer("devmode", false);
 
@@ -1258,8 +1297,8 @@ namespace Barotrauma
 
             AssignOnExecute("debugai", (string[] args) =>
             {
-                HumanAIController.debugai = !HumanAIController.debugai;
-                if (HumanAIController.debugai)
+                HumanAIController.DebugAI = !HumanAIController.DebugAI;
+                if (HumanAIController.DebugAI)
                 {
                     GameMain.DevMode = true;
                     GameMain.DebugDraw = true;
@@ -1274,7 +1313,7 @@ namespace Barotrauma
                     GameMain.LightManager.LosEnabled = true;
                     GameMain.LightManager.LosAlpha = 1f;
                 }
-                NewMessage(HumanAIController.debugai ? "AI debug info visible" : "AI debug info hidden", Color.Yellow);
+                NewMessage(HumanAIController.DebugAI ? "AI debug info visible" : "AI debug info hidden", Color.Yellow);
             });
             AssignRelayToServer("debugai", false);
 
@@ -2333,7 +2372,7 @@ namespace Barotrauma
                         {
                             if (mapEntity is Item item)
                             {
-                                item.Rect = new Rectangle(item.Rect.X, item.Rect.Y,
+                                item.Rect = item.DefaultRect = new Rectangle(item.Rect.X, item.Rect.Y,
                                     (int)(item.Prefab.Sprite.size.X * item.Prefab.Scale),
                                     (int)(item.Prefab.Sprite.size.Y * item.Prefab.Scale));
                             }
@@ -2806,7 +2845,26 @@ namespace Barotrauma
                 ContentPackageManager.EnabledPackages.ReloadCore();
             }));
 
-            #warning TODO: reimplement?
+#if WINDOWS
+            commands.Add(new Command("startdedicatedserver", "", (string[] args) =>
+            {
+                Process.Start("DedicatedServer.exe");
+            }));
+
+            commands.Add(new Command("editserversettings", "", (string[] args) =>
+            {
+                if (Process.GetProcessesByName("DedicatedServer").Length > 0)
+                {
+                    NewMessage("Can't be edited if DedicatedServer.exe is already running", Color.Red);
+                }
+                else
+                {
+                    Process.Start("notepad.exe", "serversettings.xml");
+                }
+            }));
+#endif
+
+#warning TODO: reimplement?
             /*commands.Add(new Command("ingamemodswap", "", (string[] args) =>
             {
                 ContentPackage.IngameModSwap = !ContentPackage.IngameModSwap;
@@ -2869,7 +2927,7 @@ namespace Barotrauma
                     NewMessage("Valid ranks are:", Color.White);
                     foreach (PermissionPreset permissionPreset in PermissionPreset.List)
                     {
-                        NewMessage(" - " + permissionPreset.Name, Color.White);
+                        NewMessage(" - " + permissionPreset.DisplayName, Color.White);
                     }
                     ShowQuestionPrompt("Rank to grant to client " + args[0] + "?", (rank) =>
                     {
@@ -3355,6 +3413,11 @@ namespace Barotrauma
                 else
                 {
                     NewMessage("Level seed: " + Level.Loaded.Seed);
+                    NewMessage("Level generation params: " + Level.Loaded.GenerationParams.Identifier);
+                    NewMessage("Adjacent locations: " + (Level.Loaded.StartLocation?.Type.Identifier ?? "none".ToIdentifier()) + ", " + (Level.Loaded.StartLocation?.Type.Identifier ?? "none".ToIdentifier()));
+                    NewMessage("Mirrored: " + Level.Loaded.Mirrored);
+                    NewMessage("Level size: " + Level.Loaded.Size.X + "x" + Level.Loaded.Size.Y);
+                    NewMessage("Minimum main path width: " + (Level.Loaded.LevelData?.MinMainPathWidth?.ToString() ?? "unknown"));
                 }
             });
 
@@ -3363,6 +3426,12 @@ namespace Barotrauma
                 if (GameMain.Client != null && !GameMain.Client.HasPermission(ClientPermissions.ConsoleCommands))
                 {
                     ThrowError("Command not permitted.");
+                    return;
+                }
+
+                if (GameMain.LuaCs.Lua == null)
+                {
+                    ThrowError("LuaCs not initialized, use the console command cl_reloadluacs to force initialization.");
                     return;
                 }
 
@@ -3379,6 +3448,18 @@ namespace Barotrauma
             commands.Add(new Command("cl_reloadlua|cl_reloadcs|cl_reloadluacs", "Re-initializes the LuaCs environment.", (string[] args) =>
             {
                 GameMain.LuaCs.Initialize();
+            }));
+
+            commands.Add(new Command("cl_toggleluadebug", "Toggles the MoonSharp Debug Server.", (string[] args) =>
+            {
+                int port = 41912;
+
+                if (args.Length > 0)
+                {
+                    int.TryParse(args[0], out port);
+                }
+
+                GameMain.LuaCs.ToggleDebugger(port);
             }));
         }
 

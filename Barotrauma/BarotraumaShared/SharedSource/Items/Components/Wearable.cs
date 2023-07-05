@@ -288,7 +288,7 @@ namespace Barotrauma.Items.Components
         public bool AutoEquipWhenFull { get; private set; }
         public bool DisplayContainedStatus { get; private set; }
 
-        [Serialize(false, IsPropertySaveable.No, description: "Can the item be used (assuming it has components that are usable in some way) when worn."), Editable(MinValueFloat = -1000.0f, MaxValueFloat = 1000.0f)]
+        [Serialize(false, IsPropertySaveable.No, description: "Can the item be used (assuming it has components that are usable in some way) when worn.")]
         public bool AllowUseWhenWorn { get; set; }
 
         public readonly int Variants;
@@ -482,11 +482,11 @@ namespace Barotrauma.Items.Components
             character.OnWearablesChanged();
         }
 
-        public override void Drop(Character dropper)
+        public override void Drop(Character dropper, bool setTransform = true)
         {
             Character previousPicker = picker;
             Unequip(picker);
-            base.Drop(dropper);
+            base.Drop(dropper, setTransform);
             previousPicker?.OnWearablesChanged();
             picker = null;
             IsActive = false;

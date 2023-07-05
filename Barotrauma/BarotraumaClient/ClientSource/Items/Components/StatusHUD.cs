@@ -46,6 +46,13 @@ namespace Barotrauma.Items.Components
             private set;
         }
 
+        [Serialize(false, IsPropertySaveable.No)]
+        public bool DebugWiring
+        {
+            get;
+            private set;
+        }
+
         [Serialize(true, IsPropertySaveable.No)]
         public bool ShowDeadCharacters
         {
@@ -111,6 +118,11 @@ namespace Barotrauma.Items.Components
                 refEntity = item;
             }
 
+            if (equipper != null && equipper == Character.Controlled && DebugWiring)
+            {
+                ConnectionPanel.DebugWiringEnabledUntil = Timing.TotalTimeUnpaused + 0.5;
+            }
+
             thermalEffectState += deltaTime;
             thermalEffectState %= 10000.0f;
 
@@ -151,6 +163,11 @@ namespace Barotrauma.Items.Components
         {
             equipper = null;
             IsActive = false;
+        }
+
+        public override void Drop(Character dropper, bool setTransform = true)
+        {
+            Unequip(dropper);
         }
 
         public override void DrawHUD(SpriteBatch spriteBatch, Character character)
@@ -212,7 +229,7 @@ namespace Barotrauma.Items.Components
                     Sprite pingCircle = GUIStyle.UIThermalGlow.Value.Sprite;
                     foreach (Limb limb in c.AnimController.Limbs)
                     {
-                        if (limb.Mass < 1.0f) { continue; }
+                        if (limb.Mass < 0.5f && limb != c.AnimController.MainLimb) { continue; }
                         float noise1 = PerlinNoise.GetPerlin((thermalEffectState + limb.Params.ID + c.ID) * 0.01f, (thermalEffectState + limb.Params.ID + c.ID) * 0.02f);
                         float noise2 = PerlinNoise.GetPerlin((thermalEffectState + limb.Params.ID + c.ID) * 0.01f, (thermalEffectState + limb.Params.ID + c.ID) * 0.008f);
                         Vector2 spriteScale = ConvertUnits.ToDisplayUnits(limb.body.GetSize()) / pingCircle.size * (noise1 * 0.5f + 2f);

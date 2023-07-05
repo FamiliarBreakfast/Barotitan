@@ -42,7 +42,11 @@ namespace Barotrauma
             {
                 if (passed)
                 {
-                    GameMain.Server?.SwitchSubmarine();
+                    if (GameMain.Server != null && !GameMain.Server.TrySwitchSubmarine())
+                    {
+                        passed = false;
+                        State = VoteState.Failed;
+                    }
                 }
                 else
                 {
@@ -225,7 +229,7 @@ namespace Barotrauma
             }
         }
 
-        public void ServerRead(IReadMessage inc, Client sender)
+        public void ServerRead(IReadMessage inc, Client sender, DoSProtection dosProtection)
         {
             if (GameMain.Server == null || sender == null) { return; }
 
@@ -337,7 +341,10 @@ namespace Barotrauma
 
             inc.ReadPadBits();
 
-            GameMain.Server.UpdateVoteStatus();
+            using (dosProtection.Pause(sender))
+            {
+                GameMain.Server.UpdateVoteStatus();
+            }
         }
 
         public void ServerWrite(IWriteMessage msg)

@@ -105,23 +105,29 @@ namespace Barotrauma
         {
             get
             {
-                if (Map.CurrentLocation != null)
+                //map can be null if we're in the process of loading the save
+                if (Map != null)
                 {
-                    foreach (Mission mission in map.CurrentLocation.SelectedMissions)
+                    if (Map.CurrentLocation != null)
                     {
-                        if (mission.Locations[0] == mission.Locations[1] ||
-                            mission.Locations.Contains(Map.SelectedLocation))
+                        foreach (Mission mission in map.CurrentLocation.SelectedMissions)
                         {
-                            yield return mission;
+                            if (mission.Locations[0] == mission.Locations[1] ||
+                                mission.Locations.Contains(Map.SelectedLocation))
+                            {
+                                yield return mission;
+                            }
                         }
                     }
-                }
-                foreach (Mission mission in extraMissions)
-                {
-                    yield return mission;
+                    foreach (Mission mission in extraMissions)
+                    {
+                        yield return mission;
+                    }
                 }
             }
         }
+
+        public Location CurrentLocation => Map?.CurrentLocation;
 
         public Wallet Bank;
 
@@ -136,6 +142,8 @@ namespace Barotrauma
         public virtual bool PurchasedHullRepairs { get; set; }
         public virtual bool PurchasedLostShuttles { get; set; }
         public virtual bool PurchasedItemRepairs { get; set; }
+
+        public bool DivingSuitWarningShown;
 
         private static bool AnyOneAllowedToManageCampaign(ClientPermissions permissions)
         {
@@ -246,6 +254,11 @@ namespace Barotrauma
 #if CLIENT
             prevCampaignUIAutoOpenType = TransitionType.None;
 #endif
+
+            foreach (var faction in factions)
+            {
+                faction.Reputation.ReputationAtRoundStart = faction.Reputation.Value;
+            }
 
             if (PurchasedHullRepairsInLatestSave)
             {
@@ -727,9 +740,11 @@ namespace Barotrauma
                     //if there's a sub docked to the outpost, we can leave the level
                     if (Level.Loaded.StartOutpost.DockedTo.Any())
                     {
-                        var dockedSub = Level.Loaded.StartOutpost.DockedTo.FirstOrDefault();
-                        if (dockedSub == GameMain.NetworkMember?.RespawnManager?.RespawnShuttle || dockedSub.TeamID != submarineTeam) { return null; }
-                        return dockedSub.DockedTo.Contains(Submarine.MainSub) ? Submarine.MainSub : dockedSub;
+                        foreach (var dockedSub in Level.Loaded.StartOutpost.DockedTo)
+                        {
+                            if (dockedSub == GameMain.NetworkMember?.RespawnManager?.RespawnShuttle || dockedSub.TeamID != submarineTeam) { continue; }
+                            return dockedSub.DockedTo.Contains(Submarine.MainSub) ? Submarine.MainSub : dockedSub;
+                        }
                     }
 
                     //nothing docked, check if there's a sub close enough to the outpost and someone inside the outpost
@@ -765,9 +780,11 @@ namespace Barotrauma
                     //if there's a sub docked to the outpost, we can leave the level
                     if (Level.Loaded.EndOutpost.DockedTo.Any())
                     {
-                        var dockedSub = Level.Loaded.EndOutpost.DockedTo.FirstOrDefault();
-                        if (dockedSub == GameMain.NetworkMember?.RespawnManager?.RespawnShuttle || dockedSub.TeamID != submarineTeam) { return null; }
-                        return dockedSub.DockedTo.Contains(Submarine.MainSub) ? Submarine.MainSub : dockedSub;
+                        foreach (var dockedSub in Level.Loaded.EndOutpost.DockedTo)
+                        {
+                            if (dockedSub == GameMain.NetworkMember?.RespawnManager?.RespawnShuttle || dockedSub.TeamID != submarineTeam) { continue; }
+                            return dockedSub.DockedTo.Contains(Submarine.MainSub) ? Submarine.MainSub : dockedSub;
+                        }
                     }
 
                     //nothing docked, check if there's a sub close enough to the outpost and someone inside the outpost
@@ -907,6 +924,10 @@ namespace Barotrauma
             {
                 location.TurnsInRadiation = 0;
             }
+            foreach (var faction in Factions)
+            {
+                faction.Reputation.SetReputation(faction.Prefab.InitialReputation);
+            }
             EndCampaignProjSpecific();
 
             if (CampaignMetadata != null)
@@ -914,6 +935,9 @@ namespace Barotrauma
                 int loops = CampaignMetadata.GetInt("campaign.endings".ToIdentifier(), 0);
                 CampaignMetadata.SetValue("campaign.endings".ToIdentifier(),  loops + 1);
             }
+
+            //no tutorials after finishing the campaign once
+            Settings.TutorialEnabled = false;
 
             GameAnalyticsManager.AddProgressionEvent(
                 GameAnalyticsManager.ProgressionStatus.Complete,
@@ -970,7 +994,7 @@ namespace Barotrauma
             if (characterInfo == null) { return false; }
             if (characterInfo.MinReputationToHire.factionId != Identifier.Empty)
             {
-                if (GetReputation(characterInfo.MinReputationToHire.factionId) < characterInfo.MinReputationToHire.reputation)
+                if (MathF.Round(GetReputation(characterInfo.MinReputationToHire.factionId)) < characterInfo.MinReputationToHire.reputation)
                 {
                     return false;
                 }
@@ -1154,15 +1178,12 @@ namespace Barotrauma
 
             if (npc.Faction != null && Factions.FirstOrDefault(f => f.Prefab.Identifier == npc.Faction) is Faction faction)
             {
-                faction.Reputation?.AddReputation(-attackResult.Damage * Reputation.ReputationLossPerNPCDamage);
+                faction.Reputation?.AddReputation(-attackResult.Damage * Reputation.ReputationLossPerNPCDamage, Reputation.MaxReputationLossFromNPCDamage);
             }
             else
             {
                 Location location = Map?.CurrentLocation;
-                if (location != null)
-                {
-                    location.Reputation?.AddReputation(-attackResult.Damage * Reputation.ReputationLossPerNPCDamage);
-                }
+                location?.Reputation?.AddReputation(-attackResult.Damage * Reputation.ReputationLossPerNPCDamage, Reputation.MaxReputationLossFromNPCDamage);
             }
         }
 
@@ -1192,15 +1213,17 @@ namespace Barotrauma
         {
             TotalPlayTime = element.GetAttributeDouble(nameof(TotalPlayTime).ToLowerInvariant(), 0);
             TotalPassedLevels = element.GetAttributeInt(nameof(TotalPassedLevels).ToLowerInvariant(), 0);
+            DivingSuitWarningShown = element.GetAttributeBool(nameof(DivingSuitWarningShown).ToLowerInvariant(), false);
         }
 
         protected XElement SaveStats()
         {
             return new XElement("stats", 
                 new XAttribute(nameof(TotalPlayTime).ToLowerInvariant(), TotalPlayTime), 
-                new XAttribute(nameof(TotalPassedLevels).ToLowerInvariant(), TotalPassedLevels));
+                new XAttribute(nameof(TotalPassedLevels).ToLowerInvariant(), TotalPassedLevels),
+                new XAttribute(nameof(DivingSuitWarningShown).ToLowerInvariant(), DivingSuitWarningShown));
         }
-        
+
         public void LogState()
         {
             DebugConsole.NewMessage("********* CAMPAIGN STATUS *********", Color.White);

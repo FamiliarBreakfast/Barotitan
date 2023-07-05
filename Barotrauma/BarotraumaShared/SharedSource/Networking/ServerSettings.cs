@@ -43,6 +43,11 @@ namespace Barotrauma.Networking
 
     partial class ServerSettings : ISerializableEntity
     {
+        public const int PacketLimitMin = 1200,
+                         PacketLimitWarning = 3500,
+                         PacketLimitDefault = 4000,
+                         PacketLimitMax = 10000;
+
         public const string SettingsFile = "serversettings.xml";
 
         [Flags]
@@ -391,8 +396,10 @@ namespace Barotrauma.Networking
             set;
         }
 
-        private int tickRate = 20;
-        [Serialize(20, IsPropertySaveable.Yes)]
+        public const int DefaultTickRate = 20;
+
+        private int tickRate = DefaultTickRate;
+        [Serialize(DefaultTickRate, IsPropertySaveable.Yes)]
         public int TickRate
         {
             get { return tickRate; }
@@ -521,7 +528,7 @@ namespace Barotrauma.Networking
             }
         }
 
-        [Serialize(LosMode.Opaque, IsPropertySaveable.Yes)]
+        [Serialize(LosMode.Transparent, IsPropertySaveable.Yes)]
         public LosMode LosMode
         {
             get;
@@ -687,6 +694,20 @@ namespace Barotrauma.Networking
 
         [Serialize(3, IsPropertySaveable.Yes)]
         public int MaxPasswordRetriesBeforeBan
+        {
+            get;
+            private set;
+        }
+
+        [Serialize(true, IsPropertySaveable.Yes)]
+        public bool EnableDoSProtection
+        {
+            get;
+            private set;
+        }
+
+        [Serialize(PacketLimitDefault, IsPropertySaveable.Yes)]
+        public int MaxPacketAmount
         {
             get;
             private set;

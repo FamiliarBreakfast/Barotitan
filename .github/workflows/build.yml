@@ -1,0 +1,51 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+
+name: Build
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      target:
+        required: true
+        type: string
+
+env:
+  CI_DIR: 717a3c49-f5dc-42eb-b332-fcf2988d00e3
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3.5.3
+        with:
+          ref: ${{ inputs.target }}
+          submodules: recursive
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@3447fd6a9f9e57506b15f895c5b76d3b197dc7c2 # v3.2.0
+        with:
+          dotnet-version: |
+            6.0.x
+
+      - name: Run deploy script
+        run: |
+          set -e
+          shopt -s globstar nullglob
+          shopt -u dotglob
+          cd Deploy
+          git apply < ./patches/disable-interactivity.diff
+          git apply < ./patches/prevent-crash-on-missing-dir.diff
+          ./DeployAll.sh
+
+      - name: Create tarball
+        run: |
+          mkdir -p "$CI_DIR"
+          tar -czf "$CI_DIR/build.tar.gz" -C Deploy/bin/content .
+
+      - name: Upload tarball
+        uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v3.1.2
+        with:
+          name: build
+          path: ${{ env.CI_DIR }}/build.tar.gz

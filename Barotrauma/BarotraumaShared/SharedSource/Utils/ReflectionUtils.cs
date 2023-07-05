@@ -12,9 +12,12 @@ namespace Barotrauma
         private static readonly Dictionary<Assembly, ImmutableArray<Type>> cachedNonAbstractTypes
             = new Dictionary<Assembly, ImmutableArray<Type>>();
 
-        
+        private static readonly Dictionary<Assembly, Dictionary<Type, ImmutableArray<Type>>> cachedDerivedNonAbstract
+            = new Dictionary<Assembly, Dictionary<Type, ImmutableArray<Type>>>();
+
         public static IEnumerable<Type> GetDerivedNonAbstract<T>()
         {
+            Type t = typeof(T);
             Assembly assembly = typeof(T).Assembly;
             lock (cachedNonAbstractTypes) 
             {

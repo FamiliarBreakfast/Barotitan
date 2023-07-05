@@ -115,17 +115,20 @@ namespace Barotrauma.Networking
                     float speechImpedimentMultiplier = 1.0f - client.Character.SpeechImpediment / 100.0f;
                     bool spectating = Character.Controlled == null;
                     float rangeMultiplier = spectating ? 2.0f : 1.0f;
-                    WifiComponent radio = null;
+                    WifiComponent senderRadio = null;
                     var messageType = 
-                        !client.VoipQueue.ForceLocal && ChatMessage.CanUseRadio(client.Character, out radio) && ChatMessage.CanUseRadio(Character.Controlled) ? 
-                        ChatMessageType.Radio : ChatMessageType.Default;
+                        !client.VoipQueue.ForceLocal && 
+                        ChatMessage.CanUseRadio(client.Character, out senderRadio) && 
+                        ChatMessage.CanUseRadio(Character.Controlled, out var recipientRadio) && 
+                        senderRadio.CanReceive(recipientRadio) ? 
+                            ChatMessageType.Radio : ChatMessageType.Default;
                     client.Character.ShowSpeechBubble(1.25f, ChatMessage.MessageColor[(int)messageType]);
 
                     client.VoipSound.UseRadioFilter = messageType == ChatMessageType.Radio && !GameSettings.CurrentConfig.Audio.DisableVoiceChatFilters;
                     client.RadioNoise = 0.0f;
                     if (messageType == ChatMessageType.Radio)
                     {
-                        client.VoipSound.SetRange(radio.Range * RangeNear * speechImpedimentMultiplier * rangeMultiplier, radio.Range * speechImpedimentMultiplier * rangeMultiplier);
+                        client.VoipSound.SetRange(senderRadio.Range * RangeNear * speechImpedimentMultiplier * rangeMultiplier, senderRadio.Range * speechImpedimentMultiplier * rangeMultiplier);
                         if (distanceFactor > RangeNear && !spectating)
                         {
                             //noise starts increasing exponentially after 40% range
@@ -146,7 +149,7 @@ namespace Barotrauma.Networking
 
                 if ((client.VoipSound.CurrentAmplitude * client.VoipSound.Gain * GameMain.SoundManager.GetCategoryGainMultiplier("voip")) > 0.1f) //TODO: might need to tweak
                 {
-                    if (client.Character != null && !client.Character.Removed)
+                    if (client.Character != null && !client.Character.Removed && !client.Character.IsDead)
                     {
                         Vector3 clientPos = new Vector3(client.Character.WorldPosition.X, client.Character.WorldPosition.Y, 0.0f);
                         Vector3 listenerPos = GameMain.SoundManager.ListenerPosition;

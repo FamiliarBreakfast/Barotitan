@@ -31,10 +31,13 @@ namespace Barotrauma
 
                 if (Wait)
                 {
-                    var gotoObjective = new AIObjectiveGoTo(npc, npc, humanAiController.ObjectiveManager, repeat: true)
+                    var gotoObjective = new AIObjectiveGoTo(
+                        AIObjectiveGoTo.GetTargetHull(npc) as ISpatialEntity ?? npc, npc, humanAiController.ObjectiveManager, repeat: true)
                     {
                         OverridePriority = 100.0f,
-                        SourceEventAction = this
+                        SourceEventAction = this,
+                        IsWaitOrder = true,
+                        CloseEnough = 100
                     };
                     humanAiController.ObjectiveManager.AddObjective(gotoObjective);
                     humanAiController.ObjectiveManager.WaitTimer = 0.0f;

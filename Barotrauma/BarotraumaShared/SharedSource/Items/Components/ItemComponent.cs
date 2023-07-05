@@ -238,7 +238,7 @@ namespace Barotrauma.Items.Components
             set;
         }
 
-        [Serialize(0f, IsPropertySaveable.No, description: "How useful the item is in combat? Used by AI to decide which item it should use as a weapon. For the sake of clarity, use a value between 0 and 100 (not enforced). Note that there's also a generic BotPriority for all item prefabs.")]
+        [Serialize(0f, IsPropertySaveable.No, description: "How useful the item is in combat? Used by AI to decide which item it should use as a weapon. For the sake of clarity, use a value between 0 and 100 (not forced). Note that there's also a generic BotPriority for all item prefabs.")]
         public float CombatPriority { get; private set; }
 
         /// <summary>
@@ -442,7 +442,7 @@ namespace Barotrauma.Items.Components
         }
 
         /// <summary>a Character has dropped the item</summary>
-        public virtual void Drop(Character dropper) { }
+        public virtual void Drop(Character dropper, bool setTransform = true) { }
 
         /// <returns>true if the operation was completed</returns>
         public virtual bool CrewAIOperate(float deltaTime, Character character, AIObjectiveOperateItem objective)
@@ -689,9 +689,10 @@ namespace Barotrauma.Items.Components
 
         public virtual void FlipY(bool relativeToSub) { }
 
-        public bool IsNotEmpty(Character user, bool checkContainedItems = true) =>
-            HasRequiredContainedItems(user, addMessage: false) &&
-            (!checkContainedItems || Item.OwnInventory == null || Item.OwnInventory.AllItems.Any(i => i.Condition > 0));
+        /// <summary>
+        /// Shorthand for !HasRequiredContainedItems()
+        /// </summary>
+        public bool IsEmpty(Character user) => !HasRequiredContainedItems(user, addMessage: false);
 
         public bool HasRequiredContainedItems(Character user, bool addMessage, LocalizedString msg = null)
         {
@@ -723,18 +724,48 @@ namespace Barotrauma.Items.Components
         {
             if (character.IsBot && item.IgnoreByAI(character)) { return false; }
             if (!item.IsInteractable(character)) { return false; }
-            if (requiredItems.None()) { return true; }
-            if (character.Inventory != null)
+            if (requiredItems.Count == 0) { return true; }
+            if (character.Inventory != null && requiredItems.TryGetValue(RelatedItem.RelationType.Picked, out List<RelatedItem> relatedItems))
             {
-                foreach (Item item in character.Inventory.AllItems)
+                foreach (RelatedItem relatedItem in relatedItems)
                 {
-                    if (requiredItems.Any(ri => ri.Value.Any(r => r.Type == RelatedItem.RelationType.Picked && r.MatchesItem(item))))
+                    foreach (Item otherItem in character.Inventory.AllItems)
                     {
-                        return true;
-                    }                    
+                        if (relatedItem.MatchesItem(otherItem))
+                        {
+                            if (otherItem.GetComponent<IdCard>() is IdCard idCard)
+                            {
+                                if (!CheckIdCardAccess(relatedItem, idCard))
+                                {
+                                    continue;
+                                }
+                            }
+                            return true;
+                        }
+                    }
                 }
             }
             return false;
+        }
+
+        /// <summary>
+        /// Presumes that matching is already checked.
+        /// </summary>
+        private bool CheckIdCardAccess(RelatedItem relatedItem, IdCard idCard)
+        {
+            if (item.Submarine != null)
+            {
+                //id cards don't work in enemy subs (except on items that only require the default "idcard" tag)
+                if (idCard.TeamID != CharacterTeamType.None && idCard.TeamID != item.Submarine.TeamID && relatedItem.Identifiers.Any(id => id != "idcard"))
+                {
+                    return false;
+                }
+                else if (idCard.SubmarineSpecificID != 0 && item.Submarine.SubmarineSpecificIDTag != idCard.SubmarineSpecificID)
+                {
+                    return false;
+                }
+            }
+            return true;
         }
 
         public virtual bool HasRequiredItems(Character character, bool addMessage, LocalizedString msg = null)
@@ -772,23 +803,14 @@ namespace Barotrauma.Items.Components
 
             bool CheckItems(RelatedItem relatedItem, IEnumerable<Item> itemList)
             {
-                bool Predicate(Item it)
+                bool Predicate(Item it) 
                 {
                     if (it == null || it.Condition <= 0.0f || !relatedItem.MatchesItem(it)) { return false; }
-                    if (item.Submarine != null)
+                    if (it.GetComponent<IdCard>() is IdCard idCard)
                     {
-                        var idCard = it.GetComponent<IdCard>();
-                        if (idCard != null)
+                        if (!CheckIdCardAccess(relatedItem, idCard))
                         {
-                            //id cards don't work in enemy subs (except on items that only require the default "idcard" tag)
-                            if (idCard.TeamID != CharacterTeamType.None && idCard.TeamID != item.Submarine.TeamID && relatedItem.Identifiers.Any(id => id != "idcard"))
-                            {
-                                return false;
-                            }
-                            else if (idCard.SubmarineSpecificID != 0 && item.Submarine.SubmarineSpecificIDTag != idCard.SubmarineSpecificID)
-                            {
-                                return false;
-                            }
+                            return false;
                         }
                     }
                     return true;
@@ -1028,7 +1050,7 @@ namespace Barotrauma.Items.Components
                             prevRequiredItems[newRequiredItem.Type].Find(ri => ri.JoinedIdentifiers == newRequiredItem.JoinedIdentifiers) : null;
                         if (prevRequiredItem != null)
                         {
-                            newRequiredItem.statusEffects = prevRequiredItem.statusEffects;
+                            newRequiredItem.StatusEffects = prevRequiredItem.StatusEffects;
                             newRequiredItem.Msg = prevRequiredItem.Msg;
                             newRequiredItem.IsOptional = prevRequiredItem.IsOptional;
                             newRequiredItem.IgnoreInEditor = prevRequiredItem.IgnoreInEditor;

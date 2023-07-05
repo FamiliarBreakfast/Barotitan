@@ -294,40 +294,37 @@ namespace Barotrauma
                 throw new Exception($"Generating a campaign map failed (no locations created). Width: {Width}, height: {Height}");
             }
 
-            foreach (Location location in Locations)
-            {
-                if (location.Type.Identifier != "outpost") { continue; }
-                SetStartLocation(location);
-            }
+            FindStartLocation(l => l.Type.Identifier == "outpost");
             //if no outpost was found (using a mod that replaces the outpost location type?), find any type of outpost
             if (CurrentLocation == null)
             {
+                FindStartLocation(l => l.Type.HasOutpost);
+            }
+
+            void FindStartLocation(Func<Location, bool> predicate)
+            {
                 foreach (Location location in Locations)
                 {
-                    if (!location.Type.HasOutpost) { continue; }
-                    SetStartLocation(location);
+                    if (!predicate(location)) { continue; }
+                    if (CurrentLocation == null || location.MapPosition.X < CurrentLocation.MapPosition.X)
+                    {
+                        CurrentLocation = StartLocation = furthestDiscoveredLocation = location;
+                    }
                 }
             }
-            
-            void SetStartLocation(Location location)
+
+            StartLocation.SecondaryFaction = null;             
+            var startOutpostFaction = campaign?.Factions.FirstOrDefault(f => f.Prefab.StartOutpost);
+            if (startOutpostFaction != null)
             {
-                if (CurrentLocation == null || location.MapPosition.X < CurrentLocation.MapPosition.X)
+                StartLocation.Faction = startOutpostFaction;
+                foreach (var connection in StartLocation.Connections)
                 {
-                    CurrentLocation = StartLocation = furthestDiscoveredLocation = location;
-                    StartLocation.SecondaryFaction = null;             
-                    var startOutpostFaction = campaign?.Factions.FirstOrDefault(f => f.Prefab.StartOutpost);
-                    if (startOutpostFaction != null)
+                    var otherLocation = connection.OtherLocation(StartLocation);
+                    if (otherLocation.HasOutpost() && otherLocation.Type.OutpostTeam == CharacterTeamType.FriendlyNPC)
                     {
-                        StartLocation.Faction = startOutpostFaction;
-                        foreach (var connection in StartLocation.Connections)
-                        {
-                            var otherLocation = connection.OtherLocation(StartLocation);
-                            if (otherLocation.HasOutpost() && otherLocation.Type.OutpostTeam == CharacterTeamType.FriendlyNPC)
-                            {
-                                otherLocation.Faction = startOutpostFaction;
-                            }
-                        }
-                    }                    
+                        otherLocation.Faction = startOutpostFaction;
+                    }
                 }
             }
 
@@ -1456,7 +1453,13 @@ namespace Barotrauma
                 switch (subElement.Name.ToString().ToLowerInvariant())
                 {
                     case "location":
-                        Location location = Locations[subElement.GetAttributeInt("i", 0)];
+                        int locationIndex = subElement.GetAttributeInt("i", -1);
+                        if (locationIndex < 0 || locationIndex >= Locations.Count)
+                        {
+                            DebugConsole.AddWarning($"Error while loading the campaign map: location index out of bounds ({locationIndex})");
+                            continue;
+                        }
+                        Location location = Locations[locationIndex];
                         location.ProximityTimer.Clear();
                         for (int i = 0; i < location.Type.CanChangeTo.Count; i++)
                         {
@@ -1502,9 +1505,17 @@ namespace Barotrauma
 
                         break;
                     case "connection":
-                        int connectionIndex = subElement.GetAttributeInt("i", 0);
+                        //the index wasn't saved previously, skip if that's the case
+                        if (subElement.Attribute("i") == null) { continue; }
+
+                        int connectionIndex = subElement.GetAttributeInt("i", -1);
+                        if (connectionIndex < 0 || connectionIndex >= Connections.Count)
+                        {
+                            DebugConsole.AddWarning($"Error while loading the campaign map: connection index out of bounds ({connectionIndex})");
+                            continue;
+                        }
                         Connections[connectionIndex].Passed = subElement.GetAttributeBool("passed", false);
-                        Connections[connectionIndex].Locked = subElement.GetAttributeBool("locked", false);
+                        Connections[connectionIndex].Locked = subElement.GetAttributeBool("locked", false);                        
                         break;
                     case "radiation":
                         Radiation = new Radiation(this, generationParams.RadiationParams, subElement);
@@ -1635,6 +1646,7 @@ namespace Barotrauma
                     new XAttribute("locked", connection.Locked),
                     new XAttribute("difficulty", connection.Difficulty),
                     new XAttribute("biome", connection.Biome.Identifier),
+                    new XAttribute("i", i),
                     new XAttribute("locations", Locations.IndexOf(connection.Locations[0]) + "," + Locations.IndexOf(connection.Locations[1])));
                 connection.LevelData.Save(connectionElement);
                 mapElement.Add(connectionElement);

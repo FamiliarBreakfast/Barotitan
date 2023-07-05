@@ -370,6 +370,8 @@ namespace Barotrauma.Networking
                     "192-255",
                     "384-591",
                     "1024-1279",
+                    "4352-4607", //Hangul Jamo
+                    "44032-55215", //Hangul Syllables
                     "19968-21327","21329-40959","13312-19903","131072-173791","173824-178207","178208-183983","63744-64255","194560-195103" //CJK
                 };
 
@@ -537,7 +539,7 @@ namespace Barotrauma.Networking
                 else
                 {
                     string presetName = clientElement.GetAttributeString("preset", "");
-                    PermissionPreset preset = PermissionPreset.List.Find(p => p.Name == presetName);
+                    PermissionPreset preset = PermissionPreset.List.Find(p => p.DisplayName == presetName);
                     if (preset == null)
                     {
                         DebugConsole.ThrowError("Failed to restore saved permissions to the client \"" + clientName + "\". Permission preset \"" + presetName + "\" not found.");
@@ -602,8 +604,7 @@ namespace Barotrauma.Networking
             foreach (SavedClientPermission clientPermission in ClientPermissions)
             {
                 var matchingPreset = PermissionPreset.List.Find(p => p.MatchesPermissions(clientPermission.Permissions, clientPermission.PermittedCommands));
-                #warning TODO: this is broken because of localization
-                if (matchingPreset != null && matchingPreset.Name == "None")
+                if (matchingPreset != null && matchingPreset.Identifier == "None")
                 {
                     continue;
                 }
@@ -617,7 +618,7 @@ namespace Barotrauma.Networking
 
                 clientElement.Add(matchingPreset == null
                     ? new XAttribute("permissions", clientPermission.Permissions.ToString())
-                    : new XAttribute("preset", matchingPreset.Name));
+                    : new XAttribute("preset", matchingPreset.DisplayName));
                 
                 if (clientPermission.Permissions.HasFlag(Networking.ClientPermissions.ConsoleCommands))
                 {

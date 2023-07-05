@@ -213,10 +213,11 @@ namespace Barotrauma
             };
 
             List<Mission> missionsToDisplay = new List<Mission>(selectedMissions.Where(m => m.Prefab.ShowInMenus));
-            if (!selectedMissions.Any() && startLocation != null)
+            if (startLocation != null)
             {
                 foreach (Mission mission in startLocation.SelectedMissions)
                 {
+                    if (missionsToDisplay.Contains(mission)) { continue; }
                     if (!mission.Prefab.ShowInMenus) { continue; }
                     if (mission.Locations[0] == mission.Locations[1] ||
                         mission.Locations.Contains(campaignMode?.Map.SelectedLocation))
@@ -309,21 +310,22 @@ namespace Barotrauma
                         };
                     }
                 }
+
                 var missionDescription = new GUITextBlock(new RectTransform(new Vector2(1.0f, 0.0f), missionTextContent.RectTransform),
                     RichString.Rich(missionMessage), wrap: true);
-                if (selectedMissions.Contains(displayedMission) && displayedMission.Completed)
+                if (selectedMissions.Contains(displayedMission))
                 {
                     RichString reputationText = displayedMission.GetReputationRewardText();
                     if (!reputationText.IsNullOrEmpty())
                     {
-                        new GUITextBlock(new RectTransform(new Vector2(1.0f, 0.0f), missionTextContent.RectTransform), reputationText);
+                        new GUITextBlock(new RectTransform(new Vector2(1.0f, 0.0f), missionTextContent.RectTransform), reputationText, wrap: true);
                     }
 
                     int totalReward = displayedMission.GetFinalReward(Submarine.MainSub);
                     if (totalReward > 0)
                     {
                         new GUITextBlock(new RectTransform(new Vector2(1.0f, 0.0f), missionTextContent.RectTransform), RichString.Rich(displayedMission.GetMissionRewardText(Submarine.MainSub)));
-                        if (GameMain.IsMultiplayer && Character.Controlled is { } controlled)
+                        if (GameMain.IsMultiplayer && Character.Controlled is { } controlled && displayedMission.Completed)
                         {
                             var (share, percentage, _) = Mission.GetRewardShare(controlled.Wallet.RewardDistribution, GameSession.GetSessionCrewCharacters(CharacterType.Player).Where(c => c != controlled), Option<int>.Some(totalReward));
                             if (share > 0)

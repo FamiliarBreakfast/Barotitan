@@ -10,7 +10,7 @@ using MoonSharp.Interpreter;
 
 namespace Barotrauma
 {
-    partial class Gap : MapEntity
+    partial class Gap : MapEntity, ISerializableEntity
     {
         public static List<Gap> GapList = new List<Gap>();
 
@@ -32,6 +32,8 @@ namespace Barotrauma
         /// Water still flows through them only horizontally or vertically
         /// </summary>
         public bool IsDiagonal { get; }
+
+        public readonly float GlowEffectT;
 
         //a value between 0.0f-1.0f (0.0 = closed, 1.0f = open)
         private float open;
@@ -57,6 +59,8 @@ namespace Barotrauma
         //used by ragdolls to prevent them from ending up inside colliders when teleporting out of the sub
         private Body outsideCollisionBlocker;
         private float outsideColliderRaycastTimer;
+
+        private bool wasRoomToRoom;
 
         public float Open
         {
@@ -154,12 +158,12 @@ namespace Barotrauma
             }
         }
 
-        public override string Name
+        public override string Name => "Gap";
+
+        public readonly Dictionary<Identifier, SerializableProperty> properties;
+        public Dictionary<Identifier, SerializableProperty> SerializableProperties
         {
-            get
-            {
-                return "Gap";
-            }
+            get { return properties; }
         }
 
         public Gap(Rectangle rectangle)
@@ -186,9 +190,13 @@ namespace Barotrauma
             IsDiagonal = isDiagonal;
             open = 1.0f;
 
+            properties = SerializableProperty.GetProperties(this);
+
             FindHulls();
             GapList.Add(this);
             InsertToList();
+
+            GlowEffectT = Rand.Range(0.0f, 1.0f);
 
             float blockerSize = ConvertUnits.ToSimUnits(Math.Max(rect.Width, rect.Height)) / 2;
             outsideCollisionBlocker = GameMain.World.CreateEdge(-Vector2.UnitX * blockerSize, Vector2.UnitX * blockerSize, 
@@ -200,7 +208,10 @@ namespace Barotrauma
             outsideCollisionBlocker.Enabled = false;
 #if CLIENT
             Resized += newRect => IsHorizontal = newRect.Width < newRect.Height;
-#endif
+# endif
+
+            wasRoomToRoom = IsRoomToRoom;
+            RefreshOutsideCollider();
             DebugConsole.Log("Created gap (" + ID + ")");
         }
 
@@ -209,7 +220,7 @@ namespace Barotrauma
             return new Gap(rect, IsHorizontal, Submarine);
         }
 
-        public override void Move(Vector2 amount, bool ignoreContacts = false)
+        public override void Move(Vector2 amount, bool ignoreContacts = true)
         {
             if (!MathUtils.IsValid(amount))
             {
@@ -217,7 +228,7 @@ namespace Barotrauma
                 return;
             }
 
-            base.Move(amount);
+            base.Move(amount, ignoreContacts);
 
             if (!DisableHullRechecks) { FindHulls(); }
         }
@@ -330,11 +341,36 @@ namespace Barotrauma
             }
         }
 
+        private int updateCount;
+
         public override void Update(float deltaTime, Camera cam)
         {
-            flowForce = Vector2.Zero;
+            int updateInterval = 4;
+            float flowMagnitude = flowForce.LengthSquared();
+            if (flowMagnitude < 1.0f)
+            {
+                //very sparse updates if there's practically no water moving
+                updateInterval = 8;
+            }
+            else if (linkedTo.Count == 2 && flowMagnitude > 10.0f)
+            {
+                //frequent updates if water is moving between hulls
+                updateInterval = 1;
+            }
 
+            updateCount++;
+            if (updateCount < updateInterval) { return; }
+            deltaTime *= updateCount;
+            updateCount = 0;
+
+            flowForce = Vector2.Zero;
             outsideColliderRaycastTimer -= deltaTime;
+
+            if (IsRoomToRoom != wasRoomToRoom)
+            {
+                RefreshOutsideCollider();
+                wasRoomToRoom = IsRoomToRoom;
+            }
 
             if (open == 0.0f || linkedTo.Count == 0)
             {
@@ -629,11 +665,16 @@ namespace Barotrauma
 
         public bool RefreshOutsideCollider()
         {
-            if (IsRoomToRoom || Submarine == null || open <= 0.0f || linkedTo.Count == 0 || !(linkedTo[0] is Hull)) return false;
+            if (outsideCollisionBlocker == null) { return false; }
+            if (IsRoomToRoom || Submarine == null || open <= 0.0f || linkedTo.Count == 0 || linkedTo[0] is not Hull) 
+            {
+                outsideCollisionBlocker.Enabled = false;
+                return false; 
+            }
 
             if (outsideColliderRaycastTimer <= 0.0f)
             {
-                UpdateOutsideColliderPos((Hull)linkedTo[0]);
+                UpdateOutsideColliderState((Hull)linkedTo[0]);
                 outsideColliderRaycastTimer = outsideCollisionBlocker.Enabled ?
                     OutsideColliderRaycastIntervalHighPrio :
                     OutsideColliderRaycastIntervalLowPrio;
@@ -642,7 +683,7 @@ namespace Barotrauma
             return outsideCollisionBlocker.Enabled;
         }
 
-        private void UpdateOutsideColliderPos(Hull hull)
+        private void UpdateOutsideColliderState(Hull hull)
         {
             if (Submarine == null || IsRoomToRoom || Level.Loaded == null) { return; }
 
@@ -679,7 +720,7 @@ namespace Barotrauma
                 if (blockingBody.UserData == Submarine) { return; }
                 outsideCollisionBlocker.Enabled = true;
                 Vector2 colliderPos = Submarine.LastPickedPosition - Submarine.SimPosition;
-                float colliderRotation = MathUtils.VectorToAngle(rayDir) - MathHelper.PiOver2;
+                float colliderRotation = MathUtils.VectorToAngle(Submarine.LastPickedNormal) - MathHelper.PiOver2;
                 outsideCollisionBlocker.SetTransformIgnoreContacts(ref colliderPos, colliderRotation);
             }
             else
@@ -780,8 +821,7 @@ namespace Barotrauma
 
         public static Gap Load(ContentXElement element, Submarine submarine, IdRemap idRemap)
         {
-            Rectangle rect = Rectangle.Empty;
-
+            Rectangle rect;
             if (element.GetAttribute("rect") != null)
             {
                 rect = element.GetAttributeRect("rect", Rectangle.Empty);

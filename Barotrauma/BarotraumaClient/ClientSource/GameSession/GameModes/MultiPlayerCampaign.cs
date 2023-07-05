@@ -125,38 +125,25 @@ namespace Barotrauma
 
         private void CreateButtons()
         {
-            int buttonHeight = (int) (GUI.Scale * 40),
-                buttonWidth = GUI.IntScale(450),
-                buttonCenter = buttonHeight / 2,
-                screenMiddle = GameMain.GraphicsWidth / 2;
-
-            endRoundButton = new GUIButton(HUDLayoutSettings.ToRectTransform(new Rectangle(screenMiddle - buttonWidth / 2, HUDLayoutSettings.ButtonAreaTop.Center.Y - buttonCenter, buttonWidth, buttonHeight), GUI.Canvas),
-                TextManager.Get("EndRound"), textAlignment: Alignment.Center, style: "EndRoundButton")
+            endRoundButton = CreateEndRoundButton();
+            endRoundButton.OnClicked = (btn, userdata) =>
             {
-                Pulse = true,
-                TextBlock =
-                {
-                    Shadow = true,
-                    AutoScaleHorizontal = true
-                },
-                OnClicked = (btn, userdata) =>
-                {
-                    TryEndRoundWithFuelCheck(
-                        onConfirm: () => GameMain.Client.RequestStartRound(),
-                        onReturnToMapScreen: () => 
-                        {
-                            ShowCampaignUI = true;
-                            if (CampaignUI == null) { InitCampaignUI(); }
-                            CampaignUI.SelectTab(InteractionType.Map);
-                        });
-                    return true;
-                }
+                TryEndRoundWithFuelCheck(
+                    onConfirm: () => GameMain.Client.RequestStartRound(),
+                    onReturnToMapScreen: () =>
+                    {
+                        ShowCampaignUI = true;
+                        if (CampaignUI == null) { InitCampaignUI(); }
+                        CampaignUI.SelectTab(InteractionType.Map);
+                    });
+                return true;
             };
 
-            int readyButtonHeight = buttonHeight;
-            int readyButtonWidth = (int) (GUI.Scale * 50);
-
-            ReadyCheckButton = new GUIButton(HUDLayoutSettings.ToRectTransform(new Rectangle(screenMiddle + (buttonWidth / 2) + GUI.IntScale(16), HUDLayoutSettings.ButtonAreaTop.Center.Y - buttonCenter, readyButtonWidth, readyButtonHeight), GUI.Canvas), 
+            int readyButtonWidth = (int)(GUI.Scale * 50 * (GUI.IsUltrawide ? 3.0f : 1.0f));
+            int readyButtonHeight = (int)(GUI.Scale * 40);
+            int readyButtonCenter = readyButtonHeight / 2,
+                screenMiddle = GameMain.GraphicsWidth / 2;
+            ReadyCheckButton = new GUIButton(HUDLayoutSettings.ToRectTransform(new Rectangle(screenMiddle + (endRoundButton.Rect.Width / 2) + GUI.IntScale(16), HUDLayoutSettings.ButtonAreaTop.Center.Y - readyButtonCenter, readyButtonWidth, readyButtonHeight), GUI.Canvas), 
                 style: "RepairBuyButton")
             {
                 ToolTip = TextManager.Get("ReadyCheck.Tooltip"),
@@ -206,7 +193,7 @@ namespace Barotrauma
 
             if (GameMain.Client == null)
             {
-                yield return CoroutineStatus.Failure;
+                yield return CoroutineStatus.Success;
             }
 
             if (GameMain.Client.LateCampaignJoin)
@@ -348,7 +335,7 @@ namespace Barotrauma
             //--------------------------------------
 
             //wait for the new level to be loaded
-            DateTime timeOut = DateTime.Now + new TimeSpan(0, 0, seconds: 60);
+            DateTime timeOut = DateTime.Now + GameClient.LevelTransitionTimeOut;
             while (Level.Loaded == prevLevel || Level.Loaded == null)
             {
                 if (DateTime.Now > timeOut || Screen.Selected != GameMain.GameScreen)  { break; }
@@ -358,8 +345,12 @@ namespace Barotrauma
             endTransition.Stop();
             overlayColor = Color.Transparent;
 
-            if (DateTime.Now > timeOut) { GameMain.NetLobbyScreen.Select(); }
-            if (!(Screen.Selected is RoundSummaryScreen))
+            if (DateTime.Now > timeOut) 
+            {
+                DebugConsole.ThrowError("Failed to start the round. Timed out while waiting for the level transition to finish.");
+                GameMain.NetLobbyScreen.Select(); 
+            }
+            if (Screen.Selected is not RoundSummaryScreen)
             {
                 if (continueButton != null)
                 {
@@ -947,7 +938,9 @@ namespace Barotrauma
                 if (firedCharacter != null) { CrewManager.FireCharacter(firedCharacter); }
             }
 
-            if (map?.CurrentLocation?.HireManager != null && CampaignUI?.CrewManagement != null)
+            if (map?.CurrentLocation?.HireManager != null && CampaignUI?.CrewManagement != null && 
+                /*can't apply until we have the latest save file*/
+                !NetIdUtils.IdMoreRecent(pendingSaveID, LastSaveID))
             {
                 CampaignUI.CrewManagement.SetHireables(map.CurrentLocation, availableHires);
                 if (hiredCharacters.Any()) { CampaignUI.CrewManagement.ValidateHires(hiredCharacters); }

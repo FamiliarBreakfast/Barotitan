@@ -143,6 +143,14 @@ namespace Barotrauma
             Directory.Delete(path, true);
         }
 
+        public static void Move(string path, string destination)
+        {
+            if (!IsPathAllowedException(path))
+                return;
+
+            File.Move(path, destination, true);
+        }
+
         public static FileStream OpenRead(string path)
         {
             if (!IsPathAllowedException(path))

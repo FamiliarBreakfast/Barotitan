@@ -1205,7 +1205,7 @@ namespace Barotrauma
             {
                 inWater = false;
                 headInWater = false;
-                RefreshFloorY(ignoreStairs: Stairs == null);
+                RefreshFloorY(deltaTime, ignoreStairs: Stairs == null);
             }
             //ragdoll isn't in any room -> it's in the water
             else if (currentHull == null)
@@ -1217,7 +1217,7 @@ namespace Barotrauma
             {
                 headInWater = false;
                 inWater = false;
-                RefreshFloorY(ignoreStairs: Stairs == null);
+                RefreshFloorY(deltaTime, ignoreStairs: Stairs == null);
                 if (currentHull.WaterPercentage > 0.001f)
                 {
                     (float waterSurfaceDisplayUnits, float ceilingDisplayUnits) = GetWaterSurfaceAndCeilingY();
@@ -1307,21 +1307,32 @@ namespace Barotrauma
                 limb.Update(deltaTime);
             }
 
-            if (!inWater && character.AllowInput && levitatingCollider && Collider.LinearVelocity.Y > -ImpactTolerance && onGround)
+            if (!inWater && character.AllowInput && levitatingCollider)
             {
-                float targetY = standOnFloorY + ((float)Math.Abs(Math.Cos(Collider.Rotation)) * Collider.Height * 0.5f) + Collider.Radius + ColliderHeightFromFloor;
-                if (Math.Abs(Collider.SimPosition.Y - targetY) > 0.01f && onGround)
+                if (onGround && Collider.LinearVelocity.Y > -ImpactTolerance)
                 {
-                    if (Stairs != null)
+                    float targetY = standOnFloorY + ((float)Math.Abs(Math.Cos(Collider.Rotation)) * Collider.Height * 0.5f) + Collider.Radius + ColliderHeightFromFloor;
+                    if (Math.Abs(Collider.SimPosition.Y - targetY) > 0.01f)
                     {
-                        Collider.LinearVelocity = new Vector2(Collider.LinearVelocity.X,
-                            (targetY < Collider.SimPosition.Y ? Math.Sign(targetY - Collider.SimPosition.Y) : (targetY - Collider.SimPosition.Y)) * 5.0f);
+                        if (Stairs != null)
+                        {
+                            Collider.LinearVelocity = new Vector2(Collider.LinearVelocity.X,
+                                (targetY < Collider.SimPosition.Y ? Math.Sign(targetY - Collider.SimPosition.Y) : (targetY - Collider.SimPosition.Y)) * 5.0f);
+                        }
+                        else
+                        {
+                            Collider.LinearVelocity = new Vector2(Collider.LinearVelocity.X, (targetY - Collider.SimPosition.Y) * 5.0f);
+                        }
                     }
-                    else
+                }
+                else
+                {
+                    // Falling -> ragdoll briefly if we are not moving at all, because we are probably stuck.
+                    if (Collider.LinearVelocity == Vector2.Zero)
                     {
-                        Collider.LinearVelocity = new Vector2(Collider.LinearVelocity.X, (targetY - Collider.SimPosition.Y) * 5.0f);
+                        character.IsRagdolled = true;
                     }
-                }                
+                }
             }
             UpdateProjSpecific(deltaTime, cam);
             forceNotStanding = false;
@@ -1551,15 +1562,24 @@ namespace Barotrauma
             lastFloorCheckPos = Vector2.Zero;
         }
 
-        private void RefreshFloorY(Limb refLimb = null, bool ignoreStairs = false)
+        // Force check floor y at least once a second so that we'll drop through gaps that we are standing upon.
+        private const float FloorYStaleTime = 1;
+        private float floorYCheckTimer;
+        private void RefreshFloorY(float deltaTime, Limb refLimb = null, bool ignoreStairs = false)
         {
+            floorYCheckTimer -= deltaTime;
             PhysicsBody refBody = refLimb == null ? Collider : refLimb.body;
-            if (Vector2.DistanceSquared(lastFloorCheckPos, refBody.SimPosition) > 0.1f * 0.1f || lastFloorCheckIgnoreStairs != ignoreStairs || lastFloorCheckIgnorePlatforms != IgnorePlatforms)
+            if (floorYCheckTimer < 0 ||
+                lastFloorCheckIgnoreStairs != ignoreStairs ||
+                lastFloorCheckIgnorePlatforms != IgnorePlatforms ||
+                Vector2.DistanceSquared(lastFloorCheckPos, refBody.SimPosition) > 0.1f * 0.1f)
             {
                 floorY = GetFloorY(refBody.SimPosition, ignoreStairs);
                 lastFloorCheckPos = refBody.SimPosition;
                 lastFloorCheckIgnoreStairs = ignoreStairs;
                 lastFloorCheckIgnorePlatforms = IgnorePlatforms;
+                // Add some randomness to prevent all stationary characters doing the checks at the same frame.
+                floorYCheckTimer = FloorYStaleTime * Rand.Range(0.9f, 1.1f);
             }
         }
 
@@ -1843,6 +1863,7 @@ namespace Barotrauma
 
 
         private bool collisionsDisabled;
+        private double lastObstacleRayCastTime;
 
         protected void CheckDistFromCollider()
         {
@@ -1850,15 +1871,28 @@ namespace Barotrauma
             allowedDist = Math.Max(allowedDist, 1.0f);
             float resetDist = allowedDist * 5.0f;
 
+            float obstacleCheckDist = 0.3f;
+
             Vector2 diff = Collider.SimPosition - MainLimb.SimPosition;
             float distSqrd = diff.LengthSquared();
 
-            if (distSqrd > resetDist * resetDist)
+            bool shouldReset = distSqrd > resetDist * resetDist;
+            if (!shouldReset && distSqrd > obstacleCheckDist * obstacleCheckDist)
+            {
+                if (Timing.TotalTime > lastObstacleRayCastTime + 1 &&
+                    Submarine.PickBody(Collider.SimPosition, MainLimb.SimPosition, collisionCategory: Physics.CollisionWall) != null)
+                {
+                    shouldReset = true;
+                    lastObstacleRayCastTime = Timing.TotalTime;
+                }
+            }
+
+            if (shouldReset)
             {
                 //ragdoll way too far, reset position
                 SetPosition(Collider.SimPosition, lerp: true, forceMainLimbToCollider: true);
             }
-            if (distSqrd > allowedDist * allowedDist)
+            else if (distSqrd > allowedDist * allowedDist)
             {
                 //ragdoll too far from the collider, disable collisions until it's close enough
                 //(in case the ragdoll has gotten stuck somewhere)
@@ -1880,7 +1914,7 @@ namespace Barotrauma
                 collisionsDisabled = false;
                 //force collision categories to be updated
                 prevCollisionCategory = Category.None;
-            }
+            }            
         }
 
         partial void UpdateNetPlayerPositionProjSpecific(float deltaTime, float lowestSubPos);

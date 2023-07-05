@@ -23,15 +23,13 @@ namespace Barotrauma.Networking
 
         public override Voting Voting { get; }
 
-        private string serverName;
         public string ServerName
         {
-            get { return serverName; }
+            get { return ServerSettings.ServerName; }
             set
             {
                 if (string.IsNullOrEmpty(value)) { return; }
-
-                serverName = value;
+                ServerSettings.ServerName = value;
             }
         }
 
@@ -135,8 +133,6 @@ namespace Barotrauma.Networking
             {
                 name = name.Substring(0, NetConfig.ServerNameMaxLength);
             }
-
-            this.serverName = name;
 
             LastClientListUpdateID = 0;
 
@@ -310,7 +306,7 @@ namespace Barotrauma.Networking
             }
             else
             {
-                var defaultPerms = PermissionPreset.List.Find(p => p.Name == "None");
+                var defaultPerms = PermissionPreset.List.Find(p => p.Identifier == "None");
                 if (defaultPerms != null)
                 {
                     newClient.SetPermissions(defaultPerms.Permissions, defaultPerms.PermittedCommands);
@@ -339,9 +335,8 @@ namespace Barotrauma.Networking
 
         public void Update(float deltaTime)
         {
-#if CLIENT
-            if (ShowNetStats) { netStats.Update(deltaTime); }
-#endif
+            dosProtection.Update(deltaTime);
+
             if (!started) { return; }
 
             if (ChildServerRelay.HasShutDown)
@@ -397,10 +392,10 @@ namespace Barotrauma.Networking
                 Voting.Update(deltaTime);
 
                 bool isCrewDead =
-                    connectedClients.All(c => c.Character == null || c.Character.IsDead || c.Character.IsIncapacitated);
+                    connectedClients.All(c => !c.UsingFreeCam && (c.Character == null || c.Character.IsDead || c.Character.IsIncapacitated));
 
                 bool subAtLevelEnd = false;
-                if (Submarine.MainSub != null && !(GameMain.GameSession.GameMode is PvPMode))
+                if (Submarine.MainSub != null && GameMain.GameSession.GameMode is not PvPMode)
                 {
                     if (Level.Loaded?.EndOutpost != null)
                     {
@@ -702,9 +697,13 @@ namespace Barotrauma.Networking
             }
         }
 
+        private readonly DoSProtection dosProtection = new();
+
         private void ReadDataMessage(NetworkConnection sender, IReadMessage inc)
         {
             var connectedClient = connectedClients.Find(c => c.Connection == sender);
+
+            using var _ = dosProtection.Start(connectedClient);
 
             ClientPacketHeader header = (ClientPacketHeader)inc.ReadByte();
             
@@ -785,9 +784,12 @@ namespace Barotrauma.Networking
                             string localSavePath = SaveUtil.CreateSavePath(SaveUtil.SaveType.Multiplayer, saveName);
                             if (CampaignMode.AllowedToManageCampaign(connectedClient, ClientPermissions.ManageRound))
                             {
-                                ServerSettings.CampaignSettings = settings;
-                                ServerSettings.SaveSettings();
-                                MultiPlayerCampaign.StartNewCampaign(localSavePath, matchingSub.FilePath, seed, settings);
+                                using (dosProtection.Pause(connectedClient))
+                                {
+                                    ServerSettings.CampaignSettings = settings;
+                                    ServerSettings.SaveSettings();
+                                    MultiPlayerCampaign.StartNewCampaign(localSavePath, matchingSub.FilePath, seed, settings);
+                                }
                             }
                         }
                     }
@@ -797,11 +799,14 @@ namespace Barotrauma.Networking
                         if (GameStarted)
                         {
                             SendDirectChatMessage(TextManager.Get("CampaignStartFailedRoundRunning").Value, connectedClient, ChatMessageType.MessageBox);
-                            return;
+                            break;
                         }
                         if (CampaignMode.AllowedToManageCampaign(connectedClient, ClientPermissions.ManageRound)) 
-                        { 
-                            MultiPlayerCampaign.LoadCampaign(saveName); 
+                        {
+                            using (dosProtection.Pause(connectedClient))
+                            {
+                                MultiPlayerCampaign.LoadCampaign(saveName);
+                            }
                         }
                     }
                     break;
@@ -1098,7 +1103,7 @@ namespace Barotrauma.Networking
                         ChatMessage.ServerRead(inc, c);
                         break;
                     case ClientNetSegment.Vote:
-                        Voting.ServerRead(inc, c);
+                        Voting.ServerRead(inc, c, dosProtection);
                         break;
                     default:
                         return SegmentTableReader<ClientNetSegment>.BreakSegmentReading.Yes;
@@ -1259,7 +1264,7 @@ namespace Barotrauma.Networking
                         entityEventManager.Read(inc, c);
                         break;
                     case ClientNetSegment.Vote:
-                        Voting.ServerRead(inc, c);
+                        Voting.ServerRead(inc, c, dosProtection);
                         break;
                     case ClientNetSegment.SpectatingPos:
                         c.SpectatePos = new Vector2(inc.ReadSingle(), inc.ReadSingle());
@@ -1419,19 +1424,23 @@ namespace Barotrauma.Networking
                             bool quitCampaign = inc.ReadBoolean();
                             if (GameStarted)
                             {
-                                Log($"Client \"{ClientLogName(sender)}\" ended the round.", ServerLog.MessageType.ServerMessage);
-                                if (mpCampaign != null && Level.IsLoadedFriendlyOutpost && save)
+                                using (dosProtection.Pause(sender))
                                 {
-                                    mpCampaign.SavePlayers();
-                                    GameMain.GameSession.SubmarineInfo = new SubmarineInfo(GameMain.GameSession.Submarine);
-                                    mpCampaign.UpdateStoreStock();
-                                    SaveUtil.SaveGame(GameMain.GameSession.SavePath);                                
+                                    Log($"Client \"{ClientLogName(sender)}\" ended the round.", ServerLog.MessageType.ServerMessage);
+                                    if (mpCampaign != null && Level.IsLoadedFriendlyOutpost && save)
+                                    {
+                                        mpCampaign.SavePlayers();
+                                        GameMain.GameSession.SubmarineInfo = new SubmarineInfo(GameMain.GameSession.Submarine);
+                                        mpCampaign.UpdateStoreStock();
+                                        GameMain.GameSession?.EventManager?.RegisterEventHistory(registerFinishedOnly: true);
+                                        SaveUtil.SaveGame(GameMain.GameSession.SavePath);                                
+                                    }
+                                    else
+                                    {
+                                        save = false;
+                                    }
+                                    EndGame(wasSaved: save);
                                 }
-                                else
-                                {
-                                    save = false;
-                                }
-                                EndGame(wasSaved: save);
                             }
                             else if (mpCampaign != null)
                             {
@@ -1455,45 +1464,54 @@ namespace Barotrauma.Networking
                             }
                             else if (CampaignMode.AllowedToManageCampaign(sender, ClientPermissions.ManageCampaign) || CampaignMode.AllowedToManageCampaign(sender, ClientPermissions.ManageMap))
                             {
-                                MultiPlayerCampaign.LoadCampaign(GameMain.GameSession.SavePath);
+                                using (dosProtection.Pause(sender))
+                                {
+                                    MultiPlayerCampaign.LoadCampaign(GameMain.GameSession.SavePath);
+                                }
                             }
                         }
                         else if (!GameStarted && !initiatedStartGame)
                         {
-                            Log("Client \"" + ClientLogName(sender) + "\" started the round.", ServerLog.MessageType.ServerMessage);
-                            TryStartGame();
+                            using (dosProtection.Pause(sender))
+                            {
+                                Log("Client \"" + ClientLogName(sender) + "\" started the round.", ServerLog.MessageType.ServerMessage);
+                                TryStartGame();
+                            }
                         }
                         else if (mpCampaign != null && (CampaignMode.AllowedToManageCampaign(sender, ClientPermissions.ManageCampaign) || CampaignMode.AllowedToManageCampaign(sender, ClientPermissions.ManageMap)))
                         {
-                            var availableTransition = mpCampaign.GetAvailableTransition(out _, out _);
-                            //don't force location if we've teleported
-                            bool forceLocation = !mpCampaign.Map.AllowDebugTeleport || mpCampaign.Map.CurrentLocation == Level.Loaded.StartLocation;
-                            switch (availableTransition)
+                            using (dosProtection.Pause(sender))
                             {
-                                case CampaignMode.TransitionType.ReturnToPreviousEmptyLocation:
-                                    if (forceLocation)
-                                    {
-                                        mpCampaign.Map.SelectLocation(
-                                            mpCampaign.Map.CurrentLocation.Connections.Find(c => c.LevelData == Level.Loaded?.LevelData).OtherLocation(mpCampaign.Map.CurrentLocation));
-                                    }
-                                    mpCampaign.LoadNewLevel();
-                                    break;
-                                case CampaignMode.TransitionType.ProgressToNextEmptyLocation:
-                                    if (forceLocation)
-                                    {
-                                        mpCampaign.Map.SetLocation(mpCampaign.Map.Locations.IndexOf(Level.Loaded.EndLocation));
-                                    }
-                                    mpCampaign.LoadNewLevel();
-                                    break;
-                                case CampaignMode.TransitionType.None:
-#if DEBUG || UNSTABLE
-                                    DebugConsole.ThrowError($"Client \"{sender.Name}\" attempted to trigger a level transition. No transitions available.");
-#endif
-                                    return;
-                                default:
-                                    Log("Client \"" + ClientLogName(sender) + "\" ended the round.", ServerLog.MessageType.ServerMessage);
-                                    mpCampaign.LoadNewLevel();
-                                    break;
+                                var availableTransition = mpCampaign.GetAvailableTransition(out _, out _);
+                                //don't force location if we've teleported
+                                bool forceLocation = !mpCampaign.Map.AllowDebugTeleport || mpCampaign.Map.CurrentLocation == Level.Loaded.StartLocation;
+                                switch (availableTransition)
+                                {
+                                    case CampaignMode.TransitionType.ReturnToPreviousEmptyLocation:
+                                        if (forceLocation)
+                                        {
+                                            mpCampaign.Map.SelectLocation(
+                                                mpCampaign.Map.CurrentLocation.Connections.Find(c => c.LevelData == Level.Loaded?.LevelData).OtherLocation(mpCampaign.Map.CurrentLocation));
+                                        }
+                                        mpCampaign.LoadNewLevel();
+                                        break;
+                                    case CampaignMode.TransitionType.ProgressToNextEmptyLocation:
+                                        if (forceLocation)
+                                        {
+                                            mpCampaign.Map.SetLocation(mpCampaign.Map.Locations.IndexOf(Level.Loaded.EndLocation));
+                                        }
+                                        mpCampaign.LoadNewLevel();
+                                        break;
+                                    case CampaignMode.TransitionType.None:
+    #if DEBUG || UNSTABLE
+                                        DebugConsole.ThrowError($"Client \"{sender.Name}\" attempted to trigger a level transition. No transitions available.");
+    #endif
+                                        break;
+                                    default:
+                                        Log("Client \"" + ClientLogName(sender) + "\" ended the round.", ServerLog.MessageType.ServerMessage);
+                                        mpCampaign.LoadNewLevel();
+                                        break;
+                                }
                             }
                         }
                     }
@@ -1533,11 +1551,7 @@ namespace Barotrauma.Networking
                     mpCampaign?.ServerRead(inc, sender);
                     break;
                 case ClientPermissions.ConsoleCommands:
-                    {
-                        string consoleCommand = inc.ReadString();
-                        Vector2 clientCursorPos = new Vector2(inc.ReadSingle(), inc.ReadSingle());
-                        DebugConsole.ExecuteClientCommand(sender, clientCursorPos, consoleCommand);
-                    }
+                    DebugConsole.ServerRead(inc, sender);
                     break;
                 case ClientPermissions.ManagePermissions:
                     byte targetClientID = inc.ReadByte();
@@ -1662,38 +1676,54 @@ namespace Barotrauma.Networking
             //characters or items spawned mid-round don't necessarily exist at the client's end yet
             if (!c.NeedsMidRoundSync)
             {
-                foreach (Character character in Character.CharacterList)
+                Character clientCharacter = c.Character;
+                foreach (Character otherCharacter in Character.CharacterList)
                 {
-                    if (!character.Enabled) { continue; }
+                    if (!otherCharacter.Enabled) { continue; }
                     if (c.SpectatePos == null)
                     {
-                        float distSqr = Vector2.DistanceSquared(character.WorldPosition, c.Character.WorldPosition);
-                        if (c.Character.ViewTarget != null)
+                        //not spectating ->
+                        //  check if the client's character, or the entity they're viewing,
+                        //  is close enough to the other character or the entity the other character is viewing
+                        float distSqr = GetShortestDistance(clientCharacter.WorldPosition, otherCharacter);
+                        if (clientCharacter.ViewTarget != null && clientCharacter.ViewTarget != clientCharacter)
                         {
-                            distSqr = Math.Min(distSqr, Vector2.DistanceSquared(character.WorldPosition, c.Character.ViewTarget.WorldPosition));
+                            distSqr = Math.Min(distSqr, GetShortestDistance(clientCharacter.ViewTarget.WorldPosition, otherCharacter));
                         }
-                        if (distSqr >= MathUtils.Pow2(character.Params.DisableDistance)) { continue; }
+                        if (distSqr >= MathUtils.Pow2(otherCharacter.Params.DisableDistance)) { continue; }
                     }
-                    else
+                    else if (otherCharacter != clientCharacter)
                     {
-                        if (character != c.Character && Vector2.DistanceSquared(character.WorldPosition, c.SpectatePos.Value) >= MathUtils.Pow2(character.Params.DisableDistance))
-                        {
-                            continue;
-                        }
+                        //spectating ->
+                        //  check if the position the client is viewing
+                        //  is close enough to the other character or the entity the other character is viewing
+                        if (GetShortestDistance(c.SpectatePos.Value, otherCharacter) >= MathUtils.Pow2(otherCharacter.Params.DisableDistance)) { continue; }
                     }
 
-                    float updateInterval = character.GetPositionUpdateInterval(c);
-                    c.PositionUpdateLastSent.TryGetValue(character, out float lastSent);
+                    static float GetShortestDistance(Vector2 viewPos, Character targetCharacter)
+                    {
+                        float distSqr = Vector2.DistanceSquared(viewPos, targetCharacter.WorldPosition);
+                        if (targetCharacter.ViewTarget != null && targetCharacter.ViewTarget != targetCharacter)
+                        {
+                            //if the character is viewing something (far-away turret?),
+                            //we might want to send updates about it to the spectating client even though they're far away from the actual character
+                            distSqr = Math.Min(distSqr, Vector2.DistanceSquared(viewPos, targetCharacter.ViewTarget.WorldPosition));
+                        }
+                        return distSqr;
+                    }
+
+                    float updateInterval = otherCharacter.GetPositionUpdateInterval(c);
+                    c.PositionUpdateLastSent.TryGetValue(otherCharacter, out float lastSent);
                     if (lastSent > NetTime.Now)
                     {
                         //sent in the future -> can't be right, remove
-                        c.PositionUpdateLastSent.Remove(character);
+                        c.PositionUpdateLastSent.Remove(otherCharacter);
                     }
                     else
                     {
                         if (lastSent > NetTime.Now - updateInterval) { continue; }
                     }
-                    if (!c.PendingPositionUpdates.Contains(character)) { c.PendingPositionUpdates.Enqueue(character); }
+                    if (!c.PendingPositionUpdates.Contains(otherCharacter)) { c.PendingPositionUpdates.Enqueue(otherCharacter); }
                 }
 
                 foreach (Submarine sub in Submarine.Loaded)
@@ -2609,16 +2639,20 @@ namespace Barotrauma.Networking
         {
             if (!CampaignMode.AllowedToManageCampaign(client, ClientPermissions.ManageRound)) { return false; }
 
-            const int MaxSaves = 255;
-            var saveInfos = SaveUtil.GetSaveFiles(SaveUtil.SaveType.Multiplayer, includeInCompatible: false);
-            IWriteMessage msg = new WriteOnlyMessage();
-            msg.WriteByte((byte)ServerPacketHeader.CAMPAIGN_SETUP_INFO);
-            msg.WriteByte((byte)Math.Min(saveInfos.Count, MaxSaves));
-            for (int i = 0; i < saveInfos.Count && i < MaxSaves; i++)
+            using (dosProtection.Pause(client))
             {
-                msg.WriteNetSerializableStruct(saveInfos[i]);
+                const int MaxSaves = 255;
+                var saveInfos = SaveUtil.GetSaveFiles(SaveUtil.SaveType.Multiplayer, includeInCompatible: false);
+                IWriteMessage msg = new WriteOnlyMessage();
+                msg.WriteByte((byte)ServerPacketHeader.CAMPAIGN_SETUP_INFO);
+                msg.WriteByte((byte)Math.Min(saveInfos.Count, MaxSaves));
+                for (int i = 0; i < saveInfos.Count && i < MaxSaves; i++)
+                {
+                    msg.WriteNetSerializableStruct(saveInfos[i]);
+                }
+                serverPeer.Send(msg, client.Connection, DeliveryMethod.Reliable);
             }
-            serverPeer.Send(msg, client.Connection, DeliveryMethod.Reliable);
+
             return true;
         }
 
@@ -3116,7 +3150,7 @@ namespace Barotrauma.Networking
                     default:
                         if (command != "")
                         {
-                            if (command.ToLower() == serverName.ToLower())
+                            if (command.ToLower() == ServerName.ToLower())
                             {
                                 //a private message to the host
                                 if (OwnerConnection != null)
@@ -3171,7 +3205,7 @@ namespace Barotrauma.Networking
                     //msg sent by the server
                     if (senderCharacter == null)
                     {
-                        senderName = serverName;
+                        senderName = ServerName;
                     }
                     else //msg sent by an AI character
                     {
@@ -3205,7 +3239,7 @@ namespace Barotrauma.Networking
                     //msg sent by the server
                     if (senderCharacter == null)
                     {
-                        senderName = serverName;
+                        senderName = ServerName;
                     }
                     else //sent by an AI character, not allowed when the game is not running
                     {
@@ -3437,33 +3471,35 @@ namespace Barotrauma.Networking
             }
         }
 
-        public void SwitchSubmarine()
+        public bool TrySwitchSubmarine()
         {
-            if (Voting.ActiveVote is not Voting.SubmarineVote subVote) { return; }
+            if (Voting.ActiveVote is not Voting.SubmarineVote subVote) { return false; }
 
             SubmarineInfo targetSubmarine = subVote.Sub;
             VoteType voteType = Voting.ActiveVote.VoteType;
             Client starter = Voting.ActiveVote.VoteStarter;
 
+            bool purchaseFailed = false;
             switch (voteType)
             {
                 case VoteType.PurchaseAndSwitchSub:
                 case VoteType.PurchaseSub:
                     // Pay for submarine
-                    GameMain.GameSession.PurchaseSubmarine(targetSubmarine, starter);
+                    purchaseFailed = !GameMain.GameSession.TryPurchaseSubmarine(targetSubmarine, starter);
                     break;
                 case VoteType.SwitchSub:
                     break;
                 default:
-                    return;
+                    return false;
             }
 
-            if (voteType != VoteType.PurchaseSub)
+            if (voteType != VoteType.PurchaseSub && !purchaseFailed)
             {
                 GameMain.GameSession.SwitchSubmarine(targetSubmarine, subVote.TransferItems, starter);
             }
 
-            Voting.StopSubmarineVote(true);
+            Voting.StopSubmarineVote(passed: !purchaseFailed);
+            return !purchaseFailed;
         }
 
         public void UpdateClientPermissions(Client client)
@@ -3641,15 +3677,28 @@ namespace Barotrauma.Networking
             }
         }
 
+        private readonly RateLimiter charInfoRateLimiter = new(
+            maxRequests: 5,
+            expiryInSeconds: 10,
+            punishmentRules: new[]
+            {
+                (RateLimitAction.OnLimitReached, RateLimitPunishment.Announce),
+                (RateLimitAction.OnLimitDoubled, RateLimitPunishment.Kick)
+            });
+
         private void UpdateCharacterInfo(IReadMessage message, Client sender)
         {
-            sender.SpectateOnly = message.ReadBoolean() && (ServerSettings.AllowSpectating || sender.Connection == OwnerConnection);
-            if (sender.SpectateOnly)
-            {
-                return;
-            }
+            bool spectateOnly = message.ReadBoolean();
+            message.ReadPadBits();
 
-            string newName = message.ReadString();
+            sender.SpectateOnly = spectateOnly && (ServerSettings.AllowSpectating || sender.Connection == OwnerConnection);
+            if (sender.SpectateOnly) { return; }
+
+            var netInfo = INetSerializableStruct.Read<NetCharacterInfo>(message);
+
+            if (charInfoRateLimiter.IsLimitReached(sender)) { return; }
+
+            string newName = netInfo.NewName;
             if (string.IsNullOrEmpty(newName))
             {
                 newName = sender.Name;
@@ -3667,42 +3716,31 @@ namespace Barotrauma.Networking
                 }
             }
 
-            int tagCount = message.ReadByte();
-            HashSet<Identifier> tagSet = new HashSet<Identifier>();
-            for (int i = 0; i < tagCount; i++)
-            {
-                tagSet.Add(message.ReadIdentifier());
-            }
-            int hairIndex = message.ReadByte();
-            int beardIndex = message.ReadByte();
-            int moustacheIndex = message.ReadByte();
-            int faceAttachmentIndex = message.ReadByte();
-            Color skinColor = message.ReadColorR8G8B8();
-            Color hairColor = message.ReadColorR8G8B8();
-            Color facialHairColor = message.ReadColorR8G8B8();
-
-            List<JobVariant> jobPreferences = new List<JobVariant>();
-            int count = message.ReadByte();
-            for (int i = 0; i < Math.Min(count, 3); i++)
-            {
-                string jobIdentifier = message.ReadString();
-                int variant = message.ReadByte();
-                if (JobPrefab.Prefabs.TryGet(jobIdentifier, out JobPrefab jobPrefab))
-                {
-                    if (jobPrefab.HiddenJob) { continue; }
-                    jobPreferences.Add(new JobVariant(jobPrefab, variant));
-                }
-            }
-
             sender.CharacterInfo = new CharacterInfo(CharacterPrefab.HumanSpeciesName, newName);
-            sender.CharacterInfo.RecreateHead(tagSet.ToImmutableHashSet(), hairIndex, beardIndex, moustacheIndex, faceAttachmentIndex);
-            sender.CharacterInfo.Head.SkinColor = skinColor;
-            sender.CharacterInfo.Head.HairColor = hairColor;
-            sender.CharacterInfo.Head.FacialHairColor = facialHairColor;
 
-            if (jobPreferences.Count > 0)
+            sender.CharacterInfo.RecreateHead(
+                tags: netInfo.Tags.ToImmutableHashSet(),
+                hairIndex: netInfo.HairIndex,
+                beardIndex: netInfo.BeardIndex,
+                moustacheIndex: netInfo.MoustacheIndex,
+                faceAttachmentIndex: netInfo.FaceAttachmentIndex);
+
+            sender.CharacterInfo.Head.SkinColor = netInfo.SkinColor;
+            sender.CharacterInfo.Head.HairColor = netInfo.HairColor;
+            sender.CharacterInfo.Head.FacialHairColor = netInfo.FacialHairColor;
+
+            if (netInfo.JobVariants.Length > 0)
             {
-                sender.JobPreferences = jobPreferences;
+                List<JobVariant> variants = new List<JobVariant>();
+                foreach (NetJobVariant jv in netInfo.JobVariants)
+                {
+                    if (jv.ToJobVariant() is { } variant)
+                    {
+                        variants.Add(variant);
+                    }
+                }
+
+                sender.JobPreferences = variants;
             }
         }
 

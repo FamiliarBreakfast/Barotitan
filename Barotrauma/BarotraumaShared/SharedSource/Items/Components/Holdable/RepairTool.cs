@@ -84,6 +84,9 @@ namespace Barotrauma.Items.Components
         [Serialize(false, IsPropertySaveable.No, description: "Can the item repair multiple things at once, or will it only affect the first thing the ray from the barrel hits.")]
         public bool RepairMultiple { get; set; }
 
+        [Serialize(true, IsPropertySaveable.No, description: "Can the item repair multiple walls at once? Only relevant if RepairMultiple is true.")]
+        public bool RepairMultipleWalls { get; set; }
+
         [Serialize(false, IsPropertySaveable.No, description: "Can the item repair things through holes in walls.")]
         public bool RepairThroughHoles { get; set; }
 
@@ -383,6 +386,7 @@ namespace Barotrauma.Items.Components
                         //stop the ray if it already hit a door/wall and is now about to hit some other type of entity
                         if (lastHitType == typeof(Item) || lastHitType == typeof(Structure)) { break; }
                     }
+                    if (!RepairMultipleWalls && (bodyType == typeof(Structure) || (body.UserData as Item)?.GetComponent<Door>() != null)) { break; }
 
                     Character hitCharacter = null;
                     if (body.UserData is Limb limb)
@@ -908,17 +912,16 @@ namespace Barotrauma.Items.Components
                 // A general purpose system could be better, but it would most likely require changes in the way we define the status effects in xml.
                 foreach (ISerializableEntity target in currentTargets)
                 {
-                    if (!(target is Door door)) { continue; }                    
+                    if (target is not Door door) { continue; }                    
                     if (!door.CanBeWelded || !door.Item.IsInteractable(user)) { continue; }
-                    for (int i = 0; i < effect.propertyNames.Length; i++)
+                    foreach (var propertyEffect in effect.PropertyEffects)
                     {
-                        Identifier propertyName = effect.propertyNames[i];
-                        if (propertyName != "stuck") { continue; }
-                        if (door.SerializableProperties == null || !door.SerializableProperties.TryGetValue(propertyName, out SerializableProperty property)) { continue; }
+                        if (propertyEffect.propertyName != "stuck") { continue; }
+                        if (door.SerializableProperties == null || !door.SerializableProperties.TryGetValue(propertyEffect.propertyName, out SerializableProperty property)) { continue; }
                         object value = property.GetValue(target);
                         if (door.Stuck > 0)
                         {
-                            bool isCutting = effect.propertyEffects[i].GetType() == typeof(float) && (float)effect.propertyEffects[i] < 0;
+                            bool isCutting = propertyEffect.value is float and < 0;
                             var progressBar = user.UpdateHUDProgressBar(door, door.Item.WorldPosition, door.Stuck / 100, Color.DarkGray * 0.5f, Color.White,
                                 textTag: isCutting ? "progressbar.cutting" : "progressbar.welding");
                             if (progressBar != null) { progressBar.Size = new Vector2(60.0f, 20.0f); }
