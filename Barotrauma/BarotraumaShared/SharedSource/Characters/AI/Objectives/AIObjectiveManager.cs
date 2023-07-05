@@ -436,7 +436,7 @@ namespace Barotrauma
                         ExtraDistanceWhileSwimming = 100,
                         AllowGoingOutside = true,
                         IgnoreIfTargetDead = true,
-                        IsFollowOrderObjective = true,
+                        IsFollowOrder = true,
                         Mimic = character.IsOnPlayerTeam,
                         DialogueIdentifier = "dialogcannotreachplace".ToIdentifier()
                     };
@@ -444,7 +444,11 @@ namespace Barotrauma
                 case "wait":
                     newObjective = new AIObjectiveGoTo(order.TargetSpatialEntity ?? character, character, this, repeat: true, priorityModifier: priorityModifier)
                     {
-                        AllowGoingOutside = true
+                        AllowGoingOutside = true,
+                        IsWaitOrder = true,
+                        DebugLogWhenFails = false,
+                        SpeakIfFails = false,
+                        CloseEnough = 100
                     };
                     break;
                 case "return":

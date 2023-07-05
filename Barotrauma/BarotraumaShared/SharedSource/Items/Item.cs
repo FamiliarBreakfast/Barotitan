@@ -44,6 +44,13 @@ namespace Barotrauma
         /// </summary>
         public static IReadOnlyCollection<Item> CleanableItems => cleanableItems;
 
+        private static readonly List<Item> sonarVisibleItems = new List<Item>();
+
+        /// <summary>
+        /// Items whose <see cref="ItemPrefab.SonarSize"/> is larger than 0
+        /// </summary>
+        public static IReadOnlyCollection<Item> SonarVisibleItems => sonarVisibleItems;
+
         public new ItemPrefab Prefab => base.Prefab as ItemPrefab;
 
         public static bool ShowLinks = true;
@@ -127,7 +134,8 @@ namespace Barotrauma
         private float condition;
 
         private bool inWater;
-        private readonly bool hasWaterStatusEffects;
+        private readonly bool hasInWaterStatusEffects;
+        private readonly bool hasNotInWaterStatusEffects;
 
         private Inventory parentInventory;
         private readonly ItemInventory ownInventory;
@@ -207,6 +215,10 @@ namespace Barotrauma
             }
         }
 
+        public Item RootContainer { get; private set; }
+
+        private bool inWaterProofContainer;
+
         private Item container;
         public Item Container
         {
@@ -218,6 +230,8 @@ namespace Barotrauma
                     container = value;
                     CheckCleanable();
                     SetActiveSprite();
+
+                    RefreshRootContainer();
                 }
             }
         }
@@ -409,14 +423,15 @@ namespace Barotrauma
             set { spriteColor = value; }
         }
 
-        [Serialize("1.0,1.0,1.0,1.0", IsPropertySaveable.Yes), Editable]
+        [Serialize("1.0,1.0,1.0,1.0", IsPropertySaveable.Yes), ConditionallyEditable(ConditionallyEditable.ConditionType.Pickable)]
         public Color InventoryIconColor
         {
             get;
             protected set;
         }
 
-        [Editable, Serialize("1.0,1.0,1.0,1.0", IsPropertySaveable.Yes, description: "Changes the color of the item this item is contained inside. Only has an effect if either of the UseContainedSpriteColor or UseContainedInventoryIconColor property of the container is set to true.")]
+        [Serialize("1.0,1.0,1.0,1.0", IsPropertySaveable.Yes, description: "Changes the color of the item this item is contained inside. Only has an effect if either of the UseContainedSpriteColor or UseContainedInventoryIconColor property of the container is set to true."), 
+            ConditionallyEditable(ConditionallyEditable.ConditionType.Pickable)]
         public Color ContainerColor
         {
             get;
@@ -700,14 +715,26 @@ namespace Barotrauma
             }
         }
 
+        [Serialize(false, IsPropertySaveable.No)]
         public bool FireProof
         {
-            get { return Prefab.FireProof; }
+            get; private set;
         }
 
+        private bool waterProof;
+        [Serialize(false, IsPropertySaveable.No)]
         public bool WaterProof
         {
-            get { return Prefab.WaterProof; }
+            get { return waterProof; }
+            private set
+            {
+                if (waterProof == value) { return; }
+                waterProof = value;
+                foreach (Item containedItem in ContainedItems)
+                {
+                    containedItem.RefreshInWaterProofContainer();
+                }
+            }
         }
 
         public bool UseInHealthInterface
@@ -736,7 +763,7 @@ namespace Barotrauma
             {
                 //if the item has an active physics body, inWater is updated in the Update method
                 if (body != null && body.Enabled) { return inWater; }
-                if (hasWaterStatusEffects) { return inWater; }
+                if (hasInWaterStatusEffects) { return inWater; }
 
                 //if not, we'll just have to check
                 return IsInWater();
@@ -1068,7 +1095,8 @@ namespace Barotrauma
                 }
             }
 
-            hasWaterStatusEffects = hasStatusEffectsOfType[(int)ActionType.InWater] || hasStatusEffectsOfType[(int)ActionType.NotInWater];
+            hasInWaterStatusEffects = hasStatusEffectsOfType[(int)ActionType.InWater];
+            hasNotInWaterStatusEffects = hasStatusEffectsOfType[(int)ActionType.NotInWater];
 
             if (body != null)
             {
@@ -1124,6 +1152,7 @@ namespace Barotrauma
             ItemList.Add(this);
             if (Prefab.IsDangerous) { dangerousItems.Add(this); }
             if (Repairables.Any()) { repairableItems.Add(this); }
+            if (Prefab.SonarSize > 0.0f) { sonarVisibleItems.Add(this); }
             CheckCleanable();
 
             DebugConsole.Log("Created " + Name + " (" + ID + ")");
@@ -1419,7 +1448,7 @@ namespace Barotrauma
             }
         }
 
-        public override void Move(Vector2 amount, bool ignoreContacts = false)
+        public override void Move(Vector2 amount, bool ignoreContacts = true)
         {
             if (!MathUtils.IsValid(amount))
             {
@@ -1427,7 +1456,7 @@ namespace Barotrauma
                 return;
             }
 
-            base.Move(amount);
+            base.Move(amount, ignoreContacts);
 
             if (ItemList != null && body != null)
             {
@@ -1511,17 +1540,51 @@ namespace Barotrauma
             return CurrentHull;
         }
 
-        public Item GetRootContainer()
+        private void RefreshRootContainer()
         {
-            if (Container == null) { return null; }
-            Item rootContainer = Container;
-            while (rootContainer.Container != null)
+            Item newRootContainer = null;
+            inWaterProofContainer = false;
+            if (Container != null)
             {
-                rootContainer = rootContainer.Container;
+                Item rootContainer = Container;
+                inWaterProofContainer |= Container.WaterProof;
+
+                while (rootContainer.Container != null)
+                {
+                    rootContainer = rootContainer.Container;
+                    inWaterProofContainer |= rootContainer.WaterProof;
+                }
+                newRootContainer = rootContainer;
             }
-            return rootContainer;
+            if (newRootContainer != RootContainer)
+            {
+                RootContainer = newRootContainer;
+                isActive = true;
+                foreach (Item containedItem in ContainedItems)
+                {
+                    containedItem.RefreshRootContainer();
+                }
+            }
         }
-        
+
+        private void RefreshInWaterProofContainer()
+        {
+            inWaterProofContainer = false;
+            if (container == null) { return; }
+            if (container.WaterProof || container.inWaterProofContainer)
+            {
+                inWaterProofContainer = true;
+            }
+            foreach (Item containedItem in ContainedItems)
+            {
+                containedItem.RefreshInWaterProofContainer();
+            }
+        }
+
+        /// <summary>
+        /// Used by the AI to check whether they can (in principle) and are allowed (in practice) to interact with an object or not.
+        /// Unlike CanInteractWith(), this method doesn't check the distance, the triggers, or anything like that.
+        /// </summary>
         public bool HasAccess(Character character)
         {
             if (character.IsBot && IgnoreByAI(character)) { return false; }
@@ -1529,6 +1592,7 @@ namespace Barotrauma
             var itemContainer = GetComponent<ItemContainer>();
             if (itemContainer != null && !itemContainer.HasAccess(character)) { return false; }
             if (Container != null && !Container.HasAccess(character)) { return false; }
+            if (GetComponent<Pickable>() is { CanBePicked: false }) { return false; }
             return true;
         }
 
@@ -1538,9 +1602,8 @@ namespace Barotrauma
         {
             if (ParentInventory == null) { return this; }
             if (ParentInventory.Owner is Character) { return ParentInventory.Owner; }
-            var rootContainer = GetRootContainer();
-            if (rootContainer?.ParentInventory?.Owner is Character) { return rootContainer.ParentInventory.Owner; }
-            return rootContainer ?? this;
+            if (RootContainer?.ParentInventory?.Owner is Character) { return RootContainer.ParentInventory.Owner; }
+            return RootContainer ?? this;
         }
 
         public Inventory FindParentInventory(Func<Inventory, bool> predicate)
@@ -1784,8 +1847,23 @@ namespace Barotrauma
 
             bool wasInFullCondition = IsFullCondition;
 
+            float diff = value - condition;
+            if (GetComponent<Door>() is Door door && door.IsStuck && diff < 0)
+            {
+                float dmg = -diff;
+                // When the door is fully welded shut, reduce the welded state instead of the condition.
+                float prevStuck = door.Stuck;
+                door.Stuck -= dmg;
+                if (door.IsStuck) { return; }
+                // Reduce the damage by the amount we just adjusted the welded state by.
+                float damageReduction = dmg - prevStuck;
+                if (damageReduction < 0) { return; }
+                value -= damageReduction;
+            }
+
             condition = MathHelper.Clamp(value, 0.0f, MaxCondition);
-            if (MathUtils.NearlyEqual(prevCondition, condition, epsilon: 0.000001f)) { return; }
+
+            if (MathUtils.NearlyEqual(prevCondition, value, epsilon: 0.000001f)) { return; }
 
             RecalculateConditionValues();
 
@@ -2008,7 +2086,7 @@ namespace Barotrauma
 
             if (Removed) { return; }
 
-            bool needsWaterCheck = hasWaterStatusEffects;
+            bool needsWaterCheck = hasInWaterStatusEffects || hasNotInWaterStatusEffects;
             if (body != null && body.Enabled)
             {
                 System.Diagnostics.Debug.Assert(body.FarseerBody.FixtureList != null);
@@ -2037,7 +2115,7 @@ namespace Barotrauma
             if (needsWaterCheck)
             {
                 bool wasInWater = inWater;
-                inWater = IsInWater() && !WaterProof;
+                inWater = !inWaterProofContainer && IsInWater() && !WaterProof;
                 if (inWater)
                 {
                     //the item has gone through the surface of the water
@@ -2050,36 +2128,29 @@ namespace Barotrauma
                             body.LinearVelocity *= 0.2f;
                         }                   
                     }
-
-                    Item container = this.Container;
-                    while (container != null)
-                    {
-                        if (container.WaterProof)
-                        {
-                            inWater = false;
-                            break;
-                        }
-                        container = container.Container;
-                    }
                 }
-                if (hasWaterStatusEffects && condition > 0.0f)
+                if ((hasInWaterStatusEffects || hasNotInWaterStatusEffects) && condition > 0.0f)
                 {
                     ApplyStatusEffects(inWater ? ActionType.InWater : ActionType.NotInWater, deltaTime);
                 }
-            }
-            else
-            {
-                if (updateableComponents.Count == 0 && 
-                    (aiTarget == null || !aiTarget.NeedsUpdate) && 
-                    !hasStatusEffectsOfType[(int)ActionType.Always] && 
-                    (body == null || !body.Enabled))
+                if (inWaterProofContainer && !hasNotInWaterStatusEffects)
                 {
-#if CLIENT
-                    positionBuffer.Clear();
-#endif
-                    isActive = false;
+                    needsWaterCheck = false;
                 }
             }
+
+            if (!needsWaterCheck &&
+                updateableComponents.Count == 0 && 
+                (aiTarget == null || !aiTarget.NeedsUpdate) && 
+                !hasStatusEffectsOfType[(int)ActionType.Always] && 
+                (body == null || !body.Enabled))
+            {
+#if CLIENT
+                positionBuffer.Clear();
+#endif
+                isActive = false;
+            }
+            
         }
 
         partial void Splash();
@@ -2877,7 +2948,7 @@ namespace Barotrauma
 
             if (user != null)
             {
-                var abilityItem = new AbilityApplyTreatment(user, character, this);
+                var abilityItem = new AbilityApplyTreatment(user, character, this, targetLimb);
                 user.CheckTalents(AbilityEffectType.OnApplyTreatment, abilityItem);
             }
 
@@ -2938,7 +3009,7 @@ namespace Barotrauma
                 }
             }
 
-            foreach (ItemComponent ic in components) { ic.Drop(dropper); }
+            foreach (ItemComponent ic in components) { ic.Drop(dropper, setTransform); }
             
             if (Container != null)
             {
@@ -3577,7 +3648,7 @@ namespace Barotrauma
                 element.Add(new XAttribute("healthmultiplier", HealthMultiplier.ToString("G", CultureInfo.InvariantCulture)));
             }
 
-            Item rootContainer = GetRootContainer() ?? this;
+            Item rootContainer = RootContainer ?? this;
             System.Diagnostics.Debug.Assert(Submarine != null || rootContainer.ParentInventory?.Owner is Character);
 
             Vector2 subPosition = Submarine == null ? Vector2.Zero : Submarine.HiddenSubPosition;
@@ -3758,6 +3829,7 @@ namespace Barotrauma
             ItemList.Remove(this);
             dangerousItems.Remove(this);
             repairableItems.Remove(this);
+            sonarVisibleItems.Remove(this);
             cleanableItems.Remove(this);
         }
 
@@ -3781,12 +3853,14 @@ namespace Barotrauma
         public Character Character { get; set; }
         public Character User { get; set; }
         public Item Item { get; set; }
+        public Limb TargetLimb { get; set; }
 
-        public AbilityApplyTreatment(Character user, Character target, Item item)
+        public AbilityApplyTreatment(Character user, Character target, Item item, Limb limb)
         {
             Character = target;
             User = user;
             Item = item;
+            TargetLimb = limb;
         }
     }
 }
