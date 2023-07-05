@@ -1,0 +1,46 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<infotexts language="English" nowhitespace="false" translatedname="English">
+  
+<!-- When adding new text, do it so at the bottom under the 'New values' & 'Modified values' sections. If it's a new tag entirely, put it under the new additions one; If it's an update to an existing value, put it under the changed values one. -->
+<!-- DO NOT EDIT EXISTING TAGS FOR ALREADY TRANSLATED LINES -> if you need a new tag for something, add it under the 'New values' header and comment if there's some other tag that should be replaced -->
+
+<!-- Modified values after January 11 (These are missing from the latest localization pass) -->
+  
+<entitydescription.morbusine>A highly potent neurotoxin, which causes an eventual shutdown of lungs and muscles, greatly hindering movement.</entitydescription.morbusine>
+<entitydescription.cyanide>A highly toxic chemical, which causes a rapid death once a sufficiently large dose has been administered.</entitydescription.cyanide>
+<entitydescription.radiotoxin>A highly radioactive substance, which causes radiation sickness and eventual liquification of inner organs.</entitydescription.radiotoxin>
+<entitydescription.sufforin>A stealthy neurotoxin, undetectable in early stages. Causes a loss of vision and in the end, death.</entitydescription.sufforin>
+
+<!-- New values after January 11 (These are missing from the latest localization pass) -->
+
+<sp.turret.AutoOperate.name>Auto Operate</sp.turret.AutoOperate.name>
+<sp.turret.AutoOperate.description>Should the turret operate automatically using AI targeting? Comes with some optional random movement that can be adjusted below.</sp.turret.AutoOperate.description>
+<sp.turret.RandomAimAmount.name>Random Aim Amount</sp.turret.RandomAimAmount.name>
+<sp.turret.RandomAimAmount.description>[Auto Operate] How much the turret should adjust the aim off the target randomly instead of tracking the target perfectly? In Degrees.</sp.turret.RandomAimAmount.description>
+<sp.turret.RandomAimMinTime.name>Random Aim Min Time</sp.turret.RandomAimMinTime.name>
+<sp.turret.RandomAimMinTime.description>[Auto Operate] How often the turret should adjust the aim randomly instead of tracking the target perfectly? Minimum wait time, in seconds.</sp.turret.RandomAimMinTime.description>
+<sp.turret.RandomAimMaxTime.name>Random Aim Max Time</sp.turret.RandomAimMaxTime.name>
+<sp.turret.RandomAimMaxTime.description>[Auto Operate] How often the turret should adjust the aim randomly instead of tracking the target perfectly? Maximum wait time, in seconds.</sp.turret.RandomAimMaxTime.description>
+<sp.turret.RandomMovement.name>Random Movement</sp.turret.RandomMovement.name>
+<sp.turret.RandomMovement.description>[Auto Operate] Should the turret move randomly while idle?</sp.turret.RandomMovement.description>
+<sp.turret.AimDelay.name>Aim Delay</sp.turret.AimDelay.name>
+<sp.turret.AimDelay.description>[Auto Operate] Should the turret have a delay while targeting targets or always aim prefectly?</sp.turret.AimDelay.description>
+<sp.turret.TargetCharacters.name>Target Characters</sp.turret.TargetCharacters.name>
+<sp.turret.TargetCharacters.description>[Auto Operate] Should the turret target characters in general?</sp.turret.TargetCharacters.description>
+<sp.turret.TargetMonsters.name>Target Monsters</sp.turret.TargetMonsters.name>
+<sp.turret.TargetMonsters.description>[Auto Operate] Should the turret target all monsters?</sp.turret.TargetMonsters.description>
+<sp.turret.TargetHumans.name>Target Humans</sp.turret.TargetHumans.name>
+<sp.turret.TargetHumans.description>[Auto Operate] Should the turret target all humans (or creatures in the same group, like pets)?</sp.turret.TargetHumans.description>
+<sp.turret.TargetSubmarines.name>Target Submarines</sp.turret.TargetSubmarines.name>
+<sp.turret.TargetSubmarines.description>[Auto Operate] Should the turret target other submarines?</sp.turret.TargetSubmarines.description>
+<sp.turret.TargetItems.name>Target Items</sp.turret.TargetItems.name>
+<sp.turret.TargetItems.description>[Auto Operate] Should the turret target items?</sp.turret.TargetItems.description>
+<sp.turret.FriendlyTag.name>Friendly Tag</sp.turret.FriendlyTag.name>
+<sp.turret.FriendlyTag.description>[Auto Operate] Group or SpeciesName that the AI ignores when the turret is operated automatically."</sp.turret.FriendlyTag.description>
+  
+<sp.greatercomponent.output.description>The signal sent when the 1st signal is larger than the 2nd (if empty, no signal is sent).</sp.greatercomponent.output.description>
+<sp.greatercomponent.falseoutput.description>The signal sent when the 1st signal is smaller or equal to the 2nd (if empty, no signal is sent).</sp.greatercomponent.falseoutput.description>
+
+<beaconstationplacement>Place in ceiling</beaconstationplacement>
+
+</infotexts>
