@@ -133,7 +133,7 @@ namespace Barotrauma
         private float prevCondition;
         private float condition;
 
-        private bool inWater;
+        internal bool inWater;
         private readonly bool hasInWaterStatusEffects;
         private readonly bool hasNotInWaterStatusEffects;
 
@@ -2108,7 +2108,7 @@ namespace Barotrauma
                 if (inWater)
                 {
                     ApplyWaterForces();
-                    CurrentHull?.ApplyFlowForces(deltaTime, this);
+                    body.ApplyForce(CurrentHull?.ApplyFlowForces(deltaTime, this) ?? Vector2.Zero);
                 }
             }
 
