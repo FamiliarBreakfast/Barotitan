@@ -1,4 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<contentpackage name="BaroTITAN" path="Mods/BaroTITANOverhaul/filelist.xml" corepackage="false" gameversion="1.0.0.0">
-  <Afflictions file="Mods/BaroTITANOverhaul/Medical/Symptoms.xml"/>
-</contentpackage>

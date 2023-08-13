@@ -4588,8 +4588,8 @@
 <jobname.captain3>Admiral</jobname.captain3>
 <jobname.engineer1>Nuclear engineer</jobname.engineer1>
 <jobname.engineer2>Electrical engineer</jobname.engineer2>
-<jobname.mechanic1>Welder</jobname.mechanic1>
-<jobname.mechanic2>Fabricator</jobname.mechanic2>
+<!--<jobname.mechanic1>Welder</jobname.mechanic1>-->
+<!--<jobname.mechanic2>Fabricator</jobname.mechanic2>-->
 <jobname.securityofficer1>Commando</jobname.securityofficer1>
 <jobname.securityofficer2>Peacekeeper</jobname.securityofficer2>
 <jobname.securityofficer3>Gunner</jobname.securityofficer3>
