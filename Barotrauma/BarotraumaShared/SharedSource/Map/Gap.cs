@@ -14,7 +14,7 @@ namespace Barotrauma
     {
         public static List<Gap> GapList = new List<Gap>();
 
-        const float MaxFlowForce = 500.0f;
+        const float MaxFlowForce = 800.0f;
 
         public static bool ShowGaps = true;
 

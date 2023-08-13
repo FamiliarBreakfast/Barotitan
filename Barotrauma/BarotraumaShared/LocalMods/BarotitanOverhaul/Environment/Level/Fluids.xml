@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Fluids>
+  <!-- Necessary for the game to function -->
+  <Fluid
+    identifier="oxygen"
+    name="Oxygen"
+    density="1.429"
+    meltingPoint="54.36"
+    boilingPoint="90.18"
+    color="#00001950"
+  />
+  <Fluid 
+    identifier="water" 
+    name="Water"
+    density="1.000"
+    meltingPoint="273.15"
+    boilingPoint="373.15"
+    color="#0000FF50"
+  />
+  <!-- The rest are optional -->
+  <Fluid
+    identifier="methane"
+    name="Methane"
+    density="0.656"
+    meltingPoint="90.7"
+    boilingPoint="111.7"
+    color="#00FF19FF"
+  />
+  <Fluid
+    identifier="carbon dioxide"
+    name="Carbon Dioxide"
+    density="1.977"
+    meltingPoint="216.6"
+    boilingPoint="194.7"
+    color="#14141450"
+  />
+  <Fluid
+    identifier="blood"
+    name="Blood"
+    density="1.060"
+    meltingPoint="273.15"
+    boilingPoint="353.15"
+    color="#FF0F0FFF"
+  />
+</Fluids>

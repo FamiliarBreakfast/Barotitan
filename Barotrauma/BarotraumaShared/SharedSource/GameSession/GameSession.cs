@@ -416,6 +416,7 @@ namespace Barotrauma
             LevelData = levelData;
 
             Submarine.Unload();
+
             Submarine = Submarine.MainSub = new Submarine(SubmarineInfo);
             foreach (Submarine sub in Submarine.GetConnectedSubs())
             {

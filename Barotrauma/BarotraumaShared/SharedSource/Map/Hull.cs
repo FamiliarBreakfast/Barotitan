@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Xml.Linq;
+using Barotrauma.Items.Components;
 using Barotrauma.MapCreatures.Behavior;
 
 namespace Barotrauma
@@ -113,6 +114,7 @@ namespace Barotrauma
     {
         public readonly static List<Hull> HullList = new List<Hull>();
         public readonly static List<EntityGrid> EntityGrids = new List<EntityGrid>();
+        public readonly static List<FluidVolume> FluidList = new List<FluidVolume>();
 
         public static bool ShowHulls = true;
 
@@ -140,13 +142,15 @@ namespace Barotrauma
             get { return properties; }
         }
 
+        private float temperature;
+        
         private float lethalPressure;
 
         private float surface;
         private float waterVolume;
         private float pressure;
 
-        private float oxygen;
+        private FluidVolume oxygen;
 
         private bool update;
 
@@ -284,7 +288,8 @@ namespace Barotrauma
             get { return Submarine == null ? surface : surface + Submarine.Position.Y; }
         }
 
-        public float WaterVolume
+        public readonly List<FluidVolume> FluidVolumes = new List<FluidVolume>();
+        public float WaterVolume//todo: integrate with new fluid system
         {
             get { return waterVolume; }
             set
@@ -302,11 +307,11 @@ namespace Barotrauma
         [Serialize(100000.0f, IsPropertySaveable.Yes)]
         public float Oxygen
         {
-            get { return oxygen; }
-            set 
+            get => oxygen.GasVolume;
+            set
             {
                 if (!MathUtils.IsValid(value)) return;
-                oxygen = MathHelper.Clamp(value, 0.0f, Volume); 
+                if (oxygen != null) oxygen.GasVolume = MathHelper.Clamp(value, 0.0f, oxygen.MaxVolume);
             }
         }
 
@@ -351,7 +356,11 @@ namespace Barotrauma
 
         public float OxygenPercentage
         {
-            get { return Volume <= 0.0f ? 100.0f : oxygen / Volume * 100.0f; }
+            get
+            {
+                if (oxygen != null) return Volume <= 0.0f ? 100.0f : oxygen.GasVolume / Volume * 100.0f;
+                return 0.0f;
+            }
             set { Oxygen = (value / 100.0f) * Volume; }
         }
 
@@ -463,6 +472,16 @@ namespace Barotrauma
 
             CreateBackgroundSections();
 
+            foreach (FluidPrefab fluidPrefab in FluidPrefab.Prefabs)
+            {
+                if (fluidPrefab.Identifier == "oxygen")
+                {
+                    oxygen = new FluidVolume(this, fluidPrefab, Volume, Volume);
+                }
+                FluidList.Add(new FluidVolume(this, fluidPrefab, 0, Volume));
+                DebugConsole.NewMessage("Created fluid volume (" + fluidPrefab.Identifier + ") in hull (" + ID + ")");
+            }
+            
             WaterVolume = 0.0f;
 
             InsertToList();
@@ -829,7 +848,7 @@ namespace Barotrauma
             UpdateProjSpecific(deltaTime, cam);
 
             Oxygen -= OxygenDeteriorationSpeed * deltaTime;
-
+            
             if (FakeFireSources.Count > 0)
             {
                 if ((Character.Controlled?.CharacterHealth?.GetAffliction("psychosis")?.Strength ?? 0.0f) <= 0.0f)
@@ -878,7 +897,9 @@ namespace Barotrauma
                 lethalPressure = 0.0f;
                 return;
             }
-
+            
+            
+            //todo: if hull is full, don't allow adding more fluid
             float waterDepth = WaterVolume / rect.Width;
             if (waterDepth < 1.0f)
             {
@@ -999,21 +1020,23 @@ namespace Barotrauma
 
         partial void UpdateProjSpecific(float deltaTime, Camera cam);
 
-        public void ApplyFlowForces(float deltaTime, Item item)
+        public Vector2 ApplyFlowForces(float deltaTime, Item item)
         {
-            if (item.body.Mass <= 0.0f)
+            /*if (item.body.Mass <= 0.0f)
             {
-                return;
-            }
+                return new Vector2(0,0);
+            }*/
             foreach (var gap in ConnectedGaps.Where(gap => gap.Open > 0))
             {
                 var distance = MathHelper.Max(Vector2.DistanceSquared(item.Position, gap.Position) / 1000, 1f);
                 Vector2 force = (gap.LerpedFlowForce / distance) * deltaTime;
                 if (force.LengthSquared() > 0.01f)
                 {
-                    item.body.ApplyForce(force);
+                    //item.body.ApplyForce(force);
+                    return force;
                 }
             }
+            return Vector2.Zero;
         }
 
         public void Extinguish(float deltaTime, float amount, Vector2 position, bool extinguishRealFires = true, bool extinguishFakeFires = true)

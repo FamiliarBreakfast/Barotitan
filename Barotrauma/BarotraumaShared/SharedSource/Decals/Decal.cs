@@ -132,7 +132,7 @@ namespace Barotrauma
             }
         }
 
-        public void Update(float deltaTime)
+        public virtual void Update(float deltaTime)
         {
             fadeTimer += deltaTime;
         }

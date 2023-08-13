@@ -61,6 +61,12 @@
     <Compile Include="..\BarotraumaShared\**\*.cs" />
     <Compile Remove="..\BarotraumaShared\Content\**\*.cs" />
     <Content Include="DedicatedServer.exe" CopyToOutputDirectory="PreserveNewest" />
+    <Compile Update="..\BarotraumaShared\SharedSource\Items\Components\Plumbing\Fluids.cs">
+      <Link>SharedSource\Items\Components\Plumbing\Fluids.cs</Link>
+    </Compile>
+    <Compile Update="..\BarotraumaShared\SharedSource\ContentManagement\ContentFile\FluidFile.cs">
+      <Link>SharedSource\ContentManagement\ContentFile\FluidFile.cs</Link>
+    </Compile>
   </ItemGroup>
 
   <ItemGroup Condition="'$(Configuration)'!='Debug'">
