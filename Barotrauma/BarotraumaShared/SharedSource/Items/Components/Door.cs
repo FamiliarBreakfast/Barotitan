@@ -443,6 +443,14 @@ namespace Barotrauma.Items.Components
                 }
             }
 
+            //if (item.inWater)# todo: fix
+            //{
+            //    item.Condition -= (item.CurrentHull?.ApplyFlowForces(deltaTime, item).LengthSquared() ?? (float)0.0) / 1000.0f;
+            //    if (item.Condition < 99.0f && item.Condition != 75)
+            //    {
+            //        DebugConsole.NewMessage(item.Name + " condition: " + item.Condition, Color.Cyan);
+            //    }
+            //}
             //don't use the predicted state here, because it might set
             //other items to an incorrect state if the prediction is wrong
             item.SendSignal(isOpen ? "1" : "0", "state_out");
