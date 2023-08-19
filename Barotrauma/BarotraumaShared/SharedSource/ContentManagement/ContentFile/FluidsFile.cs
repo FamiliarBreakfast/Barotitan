@@ -2,6 +2,7 @@
 
 namespace Barotrauma
 {
+    [NotSyncedInMultiplayer]
     sealed class FluidsFile : GenericPrefabFile<FluidPrefab>
     {
         public FluidsFile(ContentPackage contentPackage, ContentPath path) : base(contentPackage, path) { }

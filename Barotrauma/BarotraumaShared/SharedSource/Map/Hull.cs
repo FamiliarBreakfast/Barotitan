@@ -150,7 +150,9 @@ namespace Barotrauma
         private float waterVolume;
         private float pressure;
 
-        private FluidVolume oxygen;
+        private float oxygen;
+        [NonSerialized()] //must be seperate variables else bt shits itself
+        private FluidVolume oxygenVolume;
 
         private bool update;
 
@@ -307,11 +309,15 @@ namespace Barotrauma
         [Serialize(100000.0f, IsPropertySaveable.Yes)]
         public float Oxygen
         {
-            get => oxygen.GasVolume;
+            get
+            {
+                if (oxygenVolume != null) return oxygenVolume.GasVolume;
+                return 100000.0f;
+            }
             set
             {
                 if (!MathUtils.IsValid(value)) return;
-                if (oxygen != null) oxygen.GasVolume = MathHelper.Clamp(value, 0.0f, oxygen.MaxVolume);
+                if (oxygenVolume != null) oxygenVolume.GasVolume = MathHelper.Clamp(value, 0.0f, oxygenVolume.MaxVolume);
             }
         }
 
@@ -358,7 +364,7 @@ namespace Barotrauma
         {
             get
             {
-                if (oxygen != null) return Volume <= 0.0f ? 100.0f : oxygen.GasVolume / Volume * 100.0f;
+                if (oxygenVolume != null) return Volume <= 0.0f ? 100.0f : Oxygen / Volume * 100.0f;
                 return 0.0f;
             }
             set { Oxygen = (value / 100.0f) * Volume; }
@@ -476,7 +482,7 @@ namespace Barotrauma
             {
                 if (fluidPrefab.Identifier == "oxygen")
                 {
-                    oxygen = new FluidVolume(this, fluidPrefab, Volume, Volume);
+                    oxygenVolume = new FluidVolume(this, fluidPrefab, Volume, Volume);
                 }
                 FluidList.Add(new FluidVolume(this, fluidPrefab, 0, Volume));
                 DebugConsole.NewMessage("Created fluid volume (" + fluidPrefab.Identifier + ") in hull (" + ID + ")");
