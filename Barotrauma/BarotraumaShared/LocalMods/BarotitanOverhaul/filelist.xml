@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <contentpackage name="BaroTITAN" path="%ModDir%/filelist.xml" corepackage="false" gameversion="1.0.0.0">
   <Fluids file="%ModDir%/Environment/Level/Fluids.xml"/>
+  <Afflictions file="%ModDir%/Prefabs/Afflictions.xml"/>
 </contentpackage>

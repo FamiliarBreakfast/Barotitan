@@ -173,15 +173,44 @@
 	showinhealthscannerthreshold="100"
 	maxstrength="100">
 	</Affliction>
-	<Affliction name="Bleeding" identifier="bleedingminor" description="Blood is dripping from a small nick." type="symptom"
-	limbspecific="true"
-	showiconthreshold="0"
-	showicontoothersthreshold="0"
-	showinhealthscannerthreshold="100"
-	maxstrength="100"
-    causeofdeathdescription="Bled to death"
-    selfcauseofdeathdescription="You have bled to death.">
-	</Affliction>
+  <Override>
+    <Affliction name="Bleeding" identifier="bleeding" description="Blood is dripping from a small nick." type="symptom"
+                limbspecific="true"
+                showiconthreshold="0"
+                showicontoothersthreshold="0"
+                showinhealthscannerthreshold="100"
+                maxstrength="100"
+                causeofdeathdescription="Bled to death"
+                selfcauseofdeathdescription="You have bled to death.">
+      <Effect minstrength="20" maxstrength="100">
+        <StatusEffect target="Character">
+          <Conditional bleedingslash="gt 20"/>
+          <Affliction identifier="bleedingslash" strength="5"/>
+          <ReduceAffliction identifier="bleeding" strength="5"/>
+        </StatusEffect>
+        <StatusEffect target="Character" comparison="and">
+          <Conditional bleedinghole="gt 20"/>
+          <Affliction identifier="bleedinghole" strength="5"/>
+          <ReduceAffliction identifier="bleeding" strength="5"/>
+        </StatusEffect>
+      </Effect>
+      <Description
+        textidentifier="Blood is dripping from a small nick."
+        target="Self"
+        minstrength="0"
+        maxstrength="20"/>
+      <Description
+        textidentifier="Blood spills from an open wound."
+        target="Self"
+        minstrength="20"
+        maxstrength="60"/>
+      <Description
+        textidentifier="Blood is pouring from a massive open wound."
+        target="Self"
+        minstrength="60"
+        maxstrength="100"/>
+    </Affliction>
+  </Override>
 	<Affliction name="Bleeding" identifier="bleedingslash" description="Blood is pouring from a large slash." type="symptom"
 	limbspecific="true"
 	showiconthreshold="0"
@@ -190,15 +219,22 @@
 	maxstrength="100"
     causeofdeathdescription="Bled to death"
     selfcauseofdeathdescription="You have bled to death.">
-	</Affliction>
-	<Affliction name="Bleeding" identifier="bleedingslashmany" description="Blood is pouring from many large slashes." type="symptom"
-	limbspecific="true"
-	showiconthreshold="0"
-	showicontoothersthreshold="0"
-	showinhealthscannerthreshold="100"
-	maxstrength="100"
-    causeofdeathdescription="Bled to death"
-    selfcauseofdeathdescription="You have bled to death."> <!--priority over bleedingslash-->
+    <Effect minstrength="0" maxstrength="20">
+      <StatusEffect target="Character">
+        <Affliction identifier="bleeding" strength="5"/>
+        <ReduceAffliction identifier="bleedingslash" strength="5"/>
+      </StatusEffect>
+    </Effect>
+    <Description
+      textidentifier="Blood is pouring from a large slash."
+      target="Self"
+      minstrength="20"
+      maxstrength="60"/>
+    <Description
+      textidentifier="Blood is pouring from several large slashes."
+      target="Self"
+      minstrength="60"
+      maxstrength="100"/>
 	</Affliction>
 	<Affliction name="Bleeding" identifier="bleedinghole" description="Blood is pouring from a deep hole." type="symptom"
 	limbspecific="true"
@@ -208,24 +244,22 @@
 	maxstrength="100"
     causeofdeathdescription="Bled to death"
     selfcauseofdeathdescription="You have bled to death.">
-	</Affliction>
-	<Affliction name="Bleeding" identifier="bleedingholemany" description="Blood is pouring from deep holes." type="symptom"
-	limbspecific="true"
-	showiconthreshold="0"
-	showicontoothersthreshold="0"
-	showinhealthscannerthreshold="100"
-	maxstrength="100"
-    causeofdeathdescription="Bled to death"
-    selfcauseofdeathdescription="You have bled to death."> <!--priority over bleedinghole-->
-	</Affliction>
-	<Affliction name="Bleeding" identifier="bleedingwound" description="Blood is pouring from a massive open wound." type="symptom"
-	limbspecific="true"
-	showiconthreshold="0"
-	showicontoothersthreshold="0"
-	showinhealthscannerthreshold="100"
-	maxstrength="100"
-    causeofdeathdescription="Bled to death"
-    selfcauseofdeathdescription="You have bled to death.">
+    <Effect minstrength="0" maxstrength="20">
+      <StatusEffect target="Character">
+        <Affliction identifier="bleeding" strength="5"/>
+        <ReduceAffliction identifier="bleedingslash" strength="5"/>
+      </StatusEffect>
+    </Effect>
+    <Description
+      textidentifier="Blood is pouring from a deep hole."
+      target="Self"
+      minstrength="20"
+      maxstrength="60"/>
+    <Description
+      textidentifier="Blood is pouring from a massive open wound."
+      target="Self"
+      minstrength="60"
+      maxstrength="100"/>
 	</Affliction>
 	<Affliction name="Bruising" identifier="bruise" description="Blood vessels below the skin have burst, turning the area purple." type="symptom"
 	limbspecific="true"
@@ -240,6 +274,21 @@
 	showicontoothersthreshold="100"
 	showinhealthscannerthreshold="100"
 	maxstrength="100">
+    <Description
+      textidentifier="The area is mildly itchy. Scratch it, maybe it will go away."
+      target="Self"
+      minstrength="0"
+      maxstrength="50"/>
+    <Description
+      textidentifier="The area is intensely itchy. Keep scratching it, maybe it will go away."
+      target="Self"
+      minstrength="50"
+      maxstrength="80"/>
+    <Description
+      textidentifier="Keep scratching it, maybe it will go away. Keep scratching it, maybe it will go away. Keep scratching it, maybe it will go away."
+      target="Self"
+      minstrength="80"
+      maxstrength="100"/>
 	</Affliction>
 	<Affliction name="Itchy" identifier="itchingwhole" description="Itchy. Itchy everywhere." type="symptom"
 	limbspecific="false"
@@ -274,18 +323,21 @@
 	causeofdeathdescription="Decayed"
 	selfcauseofdeathdescription="You rotted alive.">
 	</Affliction>
-	<Burn name="Burn" identifier="_burn" description="The skin is blistered and peeling." type="burn"
-	limbspecific="true"
-	showiconthreshold="0"
-	showicontoothersthreshold="0"
-	showinhealthscannerthreshold="100"
-	maxstrength="200"
-	causeofdeathdescription="Burned to death"
-	selfcauseofdeathdescription="You have burned to death."
-	burnoverlayalpha="1">
-	<Effect minstrength="0" maxstrength="25" multiplybymaxvitality="true" minvitalitydecrease="0" maxvitalitydecrease="2"/>
-	<icon texture="Content/UI/MainIconsAtlas.png" sourcerect="768,640,128,128" color="195,104,60,255" origin="0,0"/>
-	</Burn>
+  <Override>
+    <Burn name="Burn" identifier="burn" description="The skin is blistered and peeling." type="burn"
+          limbspecific="true"
+          showiconthreshold="0"
+          showicontoothersthreshold="0"
+          showinhealthscannerthreshold="100"
+          maxstrength="200"
+          causeofdeathdescription="Burned to death"
+          selfcauseofdeathdescription="You have burned to death."
+          burnoverlayalpha="1">
+      <Effect minstrength="0" maxstrength="25" multiplybymaxvitality="true" minvitalitydecrease="0" maxvitalitydecrease="2"/>
+      <icon texture="Content/UI/MainIconsAtlas.png" sourcerect="768,640,128,128" color="195,104,60,255" origin="0,0"/>
+    </Burn>
+  </Override>
+
 	<!--Abdomen-->
 	<Affliction name="Diarrhea" identifier="shit" description="The patient is constantly excreting." type="symptom"
 	limbspecific="false"
@@ -327,16 +379,46 @@
 	showinhealthscannerthreshold="100"
 	maxstrength="100">
 	</Affliction>
-	<Affliction name="Dyspnea" identifier="choking" description="The patient is struggling to breath." type="symptom"
-	limbspecific="false"
-	indicatorlimb="Torso"
-	showiconthreshold="20"
-	showicontoothersthreshold="20"
-	showinhealthscannerthreshold="100"
-	maxstrength="100"
-    causeofdeathdescription="Asphyxiated"
-    selfcauseofdeathdescription="You have choked to death.">
-	</Affliction>
+  <Override>
+    <Affliction name="Dyspnea" identifier="oxygenlow" description="The patient is struggling to breath." type="symptom"
+                limbspecific="false"
+                indicatorlimb="Torso"
+                showiconthreshold="20"
+                showicontoothersthreshold="20"
+                showinhealthscannerthreshold="100"
+                maxstrength="200"
+                causeofdeathdescription="Asphyxiated"
+                selfcauseofdeathdescription="You have choked to death.">
+      <Effect minstrength="1" maxstrength="50"
+              minvitalitydecrease="0"
+              maxvitalitydecrease="2"
+              minfacetint="200,180,255,0"
+              maxfacetint="200,180,255,100"/>
+      <Effect minstrength="50" maxstrength="200" multiplybymaxvitality="true"
+              minvitalitydecrease="0"
+              maxvitalitydecrease="2"
+              minfacetint="200,180,255,100"
+              maxfacetint="200,180,255,200"
+              minbodytint="150,150,255,0"
+              maxbodytint="150,150,255,100"/>
+      <Description
+        textidentifier="The patient is choking on their own spit."
+        target="Self"
+        minstrength="0"
+        maxstrength="50"/>
+      <Description
+        textidentifier="The patient is struggling to breath."
+        target="Self"
+        minstrength="50"
+        maxstrength="100"/>
+      <Description
+        textidentifier="The patient is not breathing"
+        target="Self"
+        minstrength="100"
+        maxstrength="200"/>
+      <icon texture="Content/UI/MainIconsAtlas.png" sourcerect="512,640,128,128" color="68,157,198,255" origin="0,0"/>
+    </Affliction>
+  </Override>
 	<Affliction name="Pulmonary Edema" identifier="lungfluid" description="Fluid of some kind has entered the lungs." type="symptom"
 	limbspecific="false"
 	indicatorlimb="Torso"
@@ -358,30 +440,32 @@
 	<!--Extremities/limbs-->
 
 	<!--Head (physical)-->
-	<Affliction name="Paralysis" identifier="_paralysis" description="The patient is incapable of moving." type="paralysis"
-	limbspecific="false"
-	indicatorlimb="Head"
-	showiconthreshold="70"
-	showicontoothersthreshold="70"
-	showinhealthscannerthreshold="100"
-	maxstrength="100">
-	<Effect minstrength="0" maxstrength="99" strengthchange="1"
-		minscreendistort="0.0"
-		maxscreendistort="0.5"
-		minscreenblur="0.0"
-		maxscreenblur="0.5"
-		minspeedmultiplier="1.0"
-		maxspeedmultiplier="0.25">
-    </Effect>
-	<Effect minstrength="99" maxstrength="100" strengthchange="1"
-		minscreendistort="0.5"
-		maxscreendistort="0.75"
-		minscreenblur="0.5"
-		maxscreenblur="0.75"
-		minspeedmultiplier="0"
-		maxspeedmultiplier="0">
-    </Effect>
-	</Affliction>
+  <Override>
+    <Affliction name="Paralysis" identifier="paralysis" description="The patient is incapable of moving." type="paralysis"
+                limbspecific="false"
+                indicatorlimb="Head"
+                showiconthreshold="70"
+                showicontoothersthreshold="70"
+                showinhealthscannerthreshold="100"
+                maxstrength="100">
+      <Effect minstrength="0" maxstrength="99" strengthchange="1"
+              minscreendistort="0.0"
+              maxscreendistort="0.5"
+              minscreenblur="0.0"
+              maxscreenblur="0.5"
+              minspeedmultiplier="1.0"
+              maxspeedmultiplier="0.25">
+      </Effect>
+      <Effect minstrength="99" maxstrength="100" strengthchange="1"
+              minscreendistort="0.5"
+              maxscreendistort="0.75"
+              minscreenblur="0.5"
+              maxscreenblur="0.75"
+              minspeedmultiplier="0"
+              maxspeedmultiplier="0">
+      </Effect>
+    </Affliction>
+  </Override>
 	<Affliction name="Fever" identifier="fever" description="The body's natural immune response by increasing temperature within the body." type="symptom"
 	limbspecific="false"
 	indicatorlimb="Head"
@@ -390,7 +474,7 @@
 	showinhealthscannerthreshold="100"
 	maxstrength="100">
 	</Affliction>
-	<Affliction name="Tremors" identifier="jittery" description="The patient is shaking." type="symptom"
+	<Affliction name="Tremors" identifier="tremor" description="The patient's extremities shake noticably." type="symptom"
 	limbspecific="false"
 	indicatorlimb="Head"
 	showiconthreshold="0"
@@ -446,16 +530,45 @@
 	showiconthreshold="100"
 	showicontoothersthreshold="100"
 	showinhealthscannerthreshold="100"
-	maxstrength="100">
+	maxstrength="100"><!--todo: override-->
 	</Affliction>
-	<Affliction name="Nausea" identifier="_nausea" description="A sick sense of discomfort." type="symptom"
-	limbspecific="false"
-	indicatorlimb="Head"
-	showiconthreshold="0"
-	showicontoothersthreshold="100"
-	showinhealthscannerthreshold="100"
-	maxstrength="100"> <!--priority over malaise-->
-	</Affliction>
+  <Override>
+    <Affliction name="Nausea" identifier="nausea" description="A sick sense of discomfort." type="symptom"
+                limbspecific="false"
+                indicatorlimb="Head"
+                showiconthreshold="0"
+                showicontoothersthreshold="100"
+                showinhealthscannerthreshold="100"
+                maxstrength="100"> <!--priority over malaise-->
+      <PeriodicEffect mininterval="12" maxinterval="16">
+        <StatusEffect target="Character" SpeedMultiplier="0.0" setvalue="true" duration="1.7" />
+        <StatusEffect target="Character" comparison="and">
+          <Conditional ishuman="true" />
+          <Conditional hasspecifiertag="male"/>
+          <Sound file="Content/Sounds/HUMAN_chokeMale1.ogg" selectionmode="Random" />
+          <Sound file="Content/Sounds/HUMAN_chokeMale2.ogg" />
+          <Sound file="Content/Sounds/HUMAN_chokeMale3.ogg" />
+        </StatusEffect>
+        <StatusEffect target="Character" comparison="and">
+          <Conditional ishuman="true" />
+          <Conditional hasspecifiertag="female"/>
+          <Sound file="Content/Sounds/HUMAN_chokeFemale1.ogg" selectionmode="Random" />
+          <Sound file="Content/Sounds/HUMAN_chokeFemale2.ogg" />
+          <Sound file="Content/Sounds/HUMAN_chokeFemale3.ogg" />
+        </StatusEffect>
+        <StatusEffect target="Character">
+          <Affliction identifier="stun" strength="0.1"/>
+          <Affliction identifier="organdamage" strength="0.5"/>
+        </StatusEffect>
+        <StatusEffect target="Character" targetlimbs="Head" duration="1">
+          <ParticleEmitter particle="vomitsplash" copyentityangle="true" anglemin="-10" anglemax="10" particlespersecond="50" velocitymin="50" velocitymax="200" scalemin="0.1" scalemax="0.2" />
+          <Explosion range="0.0" structuredamage="0" itemdamage="0" force="0.0" severlimbsprobability="0.0" decal="vomitsplatter" decalsize="1.25" shockwave="false" underwaterbubble="false" />
+          <Conditional HideFace="eq False" />
+        </StatusEffect>
+      </PeriodicEffect>
+      <icon texture="Content/UI/CommandUIAtlas.png" sourcerect="896,896,128,128" origin="0,0"/>
+    </Affliction>
+  </Override>
 	<Affliction name="Fatigue" identifier="fatigue" description="Try getting some sleep." type="symptom"
 	limbspecific="false"
 	indicatorlimb="Head"
