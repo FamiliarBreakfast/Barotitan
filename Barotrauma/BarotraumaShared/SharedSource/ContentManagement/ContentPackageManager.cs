@@ -321,9 +321,11 @@ namespace Barotrauma
                     result = ContentPackage.TryLoad(serverFileListPath);
                     if (!result.TryUnwrapSuccess(out newPackage))
                     {
+                        #if DEBUG
                         onLoadFail?.Invoke(
                             fileListPath,
                             result.TryUnwrapFailure(out var exception) ? exception : throw new Exception("unreachable"));
+                        #endif
                         continue;
                     }
                     
