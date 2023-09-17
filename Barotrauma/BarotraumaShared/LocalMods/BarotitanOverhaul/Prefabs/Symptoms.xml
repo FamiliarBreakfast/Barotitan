@@ -94,7 +94,7 @@
 	</Affliction>
 	<Affliction name="Malaise" identifier="discomfort" description="A general sense of discomfort." type="symptom"
 	limbspecific="false"
-	indicatorlimb="Abdomen"
+	indicatorlimb="Waist"
 	showiconthreshold="0"
 	showicontoothersthreshold="100"
 	showinhealthscannerthreshold="100"
@@ -195,17 +195,17 @@
         </StatusEffect>
       </Effect>
       <Description
-        textidentifier="Blood is dripping from a small nick."
+        textidentifier="afflictiondescription.bleeding.small"
         target="Self"
         minstrength="0"
         maxstrength="20"/>
       <Description
-        textidentifier="Blood spills from an open wound."
+        textidentifier="afflictiondescription.bleeding.medium"
         target="Self"
         minstrength="20"
         maxstrength="60"/>
       <Description
-        textidentifier="Blood is pouring from a massive open wound."
+        textidentifier="afflictiondescription.bleeding.large"
         target="Self"
         minstrength="60"
         maxstrength="100"/>
@@ -226,13 +226,16 @@
       </StatusEffect>
     </Effect>
     <Description
-      textidentifier="Blood is pouring from a large slash."
+      textidentifier="afflictiondescription.bleeding.small"
       target="Self"
+      minstrength="0"
+      maxstrength="20"/>
+    <Description
+      textidentifier="afflictiondescription.bloodslash.small"
       minstrength="20"
       maxstrength="60"/>
     <Description
-      textidentifier="Blood is pouring from several large slashes."
-      target="Self"
+      textidentifier="afflictiondescription.bloodslash.large"
       minstrength="60"
       maxstrength="100"/>
 	</Affliction>
@@ -251,13 +254,16 @@
       </StatusEffect>
     </Effect>
     <Description
-      textidentifier="Blood is pouring from a deep hole."
+      textidentifier="afflictiondescription.bleeding.small"
       target="Self"
+      minstrength="0"
+      maxstrength="20"/>
+    <Description
+      textidentifier="afflictiondescription.bloodhole"
       minstrength="20"
       maxstrength="60"/>
     <Description
-      textidentifier="Blood is pouring from a massive open wound."
-      target="Self"
+      textidentifier="afflictiondescription.bleeding.large"
       minstrength="60"
       maxstrength="100"/>
 	</Affliction>
@@ -341,7 +347,7 @@
 	<!--Abdomen-->
 	<Affliction name="Diarrhea" identifier="shit" description="The patient is constantly excreting." type="symptom"
 	limbspecific="false"
-	indicatorlimb="Abdomen"
+	indicatorlimb="Waist"
 	showiconthreshold="20"
 	showicontoothersthreshold="100"
 	showinhealthscannerthreshold="100"
@@ -349,7 +355,7 @@
 	</Affliction>
 	<Affliction name="Explosive Diarrhea" identifier="explosiveshit" description="The patient is constantly excreting in projectile pulses." type="symptom"
 	limbspecific="false"
-	indicatorlimb="Abdomen"
+	indicatorlimb="Waist"
 	showiconthreshold="20"
 	showicontoothersthreshold="100"
 	showinhealthscannerthreshold="100"
@@ -357,7 +363,7 @@
 	</Affliction>
 	<Affliction name="Constipation" identifier="constipated" description="The patient cannot excrete." type="symptom"
 	limbspecific="false"
-	indicatorlimb="Abdomen"
+	indicatorlimb="Waist"
 	showiconthreshold="20"
 	showicontoothersthreshold="100"
 	showinhealthscannerthreshold="100"
@@ -402,18 +408,33 @@
               minbodytint="150,150,255,0"
               maxbodytint="150,150,255,100"/>
       <Description
-        textidentifier="The patient is choking on their own spit."
+        textidentifier="afflictiondescription.oxygenlow.self.small"
         target="Self"
         minstrength="0"
         maxstrength="50"/>
       <Description
-        textidentifier="The patient is struggling to breath."
+        textidentifier="afflictiondescription.oxygenlow.self.medium"
         target="Self"
         minstrength="50"
         maxstrength="100"/>
       <Description
-        textidentifier="The patient is not breathing"
+        textidentifier="afflictiondescription.oxygenlow.self.large"
         target="Self"
+        minstrength="100"
+        maxstrength="200"/>
+      <Description
+        textidentifier="afflictiondescription.oxygenlow.small"
+        target="OtherCharacter"
+        minstrength="0"
+        maxstrength="50"/>
+      <Description
+        textidentifier="afflictiondescription.oxygenlow.medium"
+        target="OtherCharacter"
+        minstrength="50"
+        maxstrength="100"/>
+      <Description
+        textidentifier="afflictiondescription.oxygenlow.large"
+        target="OtherCharacter"
         minstrength="100"
         maxstrength="200"/>
       <icon texture="Content/UI/MainIconsAtlas.png" sourcerect="512,640,128,128" color="68,157,198,255" origin="0,0"/>

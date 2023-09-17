@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<infotexts language="English" nowhitespace="false" translatedname="English">
+  <afflictiondescription.bleeding.small>Blood is dripping from a small nick.</afflictiondescription.bleeding.small>
+  <afflictiondescription.bleeding.medium>Blood spills from an open wound.</afflictiondescription.bleeding.medium>
+  <afflictiondescription.bleeding.large>Blood is pouring from a massive open wound.</afflictiondescription.bleeding.large>
+  <afflictiondescription.bloodslash.small>Blood is pouring from a large slash.</afflictiondescription.bloodslash.small>
+  <afflictiondescription.bloodslash.large>Blood is pouring from several large slashes.</afflictiondescription.bloodslash.large>
+  <afflictiondescription.bloodhole>Blood is pouring from a deep hole.</afflictiondescription.bloodhole>
+
+  <afflictiondescription.itchy.small>The area is mildly itchy. Scratch it, maybe it will go away.</afflictiondescription.itchy.small>
+  <afflictiondescription.itchy.medium>The area is intensely itchy. Keep scratching it, maybe it will go away.</afflictiondescription.itchy.medium>
+  <afflictiondescription.itchy.large>Keep scratching it, maybe it will go away. Keep scratching it, maybe it will go away. Keep scratching it, maybe it will go away.</afflictiondescription.itchy.large>
+  
+  <afflictiondescription.oxygenlow.small>The patient is struggling to breath.</afflictiondescription.oxygenlow.small>
+  <afflictiondescription.oxygenlow.medium>The patient is not breathing.</afflictiondescription.oxygenlow.medium>
+  <afflictiondescription.oxygenlow.large>The patient is not breathing, their skin has turned a pale blue.</afflictiondescription.oxygenlow.large>
+  <afflictiondescription.oxygenlow.self.small>You struggle to breath.</afflictiondescription.oxygenlow.self.small>
+  <afflictiondescription.oxygenlow.self.medium>You can't breath.</afflictiondescription.oxygenlow.self.medium>
+  <afflictiondescription.oxygenlow.self.large>You are not breathing.</afflictiondescription.oxygenlow.self.large>
+</infotexts>

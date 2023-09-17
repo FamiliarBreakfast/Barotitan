@@ -56,6 +56,12 @@
 
   <ItemGroup Condition="'$(Configuration)'!='Debug'">
     <Content Include="..\BarotraumaShared\**\*" CopyToOutputDirectory="PreserveNewest" Exclude="..\BarotraumaShared\Data\Saves\*.save;..\BarotraumaShared\ModLists\*.xml" />
+    <Content Update="..\BarotraumaShared\LocalMods\BarotitanOverhaul\Characters\Human\HumanDefaultRagdoll.xml">
+      <Link>LocalMods\BarotitanOverhaul\Characters\Human\HumanDefaultRagdoll.xml</Link>
+    </Content>
+    <Content Update="..\BarotraumaShared\LocalMods\BarotitanOverhaul\Characters\Human\Ragdolls\HumanDefaultRagdoll.xml">
+      <Link>LocalMods\BarotitanOverhaul\Characters\Human\Ragdolls\HumanDefaultRagdoll.xml</Link>
+    </Content>
   </ItemGroup>
   <ItemGroup Condition="'$(Configuration)'=='Debug'">
     <Content Include="..\BarotraumaShared\**\*" CopyToOutputDirectory="PreserveNewest" />
