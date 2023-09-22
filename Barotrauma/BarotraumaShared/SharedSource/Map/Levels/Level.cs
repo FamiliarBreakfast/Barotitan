@@ -2130,7 +2130,9 @@ namespace Barotrauma
                         wayPoint.ConnectTo(wayPoints[wayPoints.Count - 2]);
                     }
                 }
-                cornerWaypoint[i, 1] = wayPoints[wayPoints.Count - 1];
+
+                //cornerWaypoint[i, 1] = wayPoints[wayPoints.Count - 1];
+                // i dont know what this does but when i uncomment it the game crashes
             }
 
             for (int i = 0; i < 2; i++)

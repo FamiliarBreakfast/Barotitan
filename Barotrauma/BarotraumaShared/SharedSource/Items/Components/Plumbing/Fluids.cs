@@ -33,9 +33,9 @@ internal class FluidVolume
 {
     private readonly FluidPrefab _fluidPrefab;
     
-    public float LiquidVolume;
-    public float GasVolume;
-    public float PlasmaVolume;
+    public float LiquidVolume = 0.0f;
+    public float GasVolume = 0.0f;
+    public float PlasmaVolume = 0.0f;
 
     private List<Solid> _solids = new List<Solid>();
     private const int MaximumSolidCount = 5;
