@@ -19,7 +19,7 @@ namespace Barotrauma
             List<ContentPackage> csharpMods = new List<ContentPackage>();
             foreach (ContentPackage cp in ContentPackageManager.EnabledPackages.All)
             {
-                if (Directory.Exists(cp.Dir + "/CSharp"))
+                if (Directory.Exists(cp.Dir + "/CSharp") || Directory.Exists(cp.Dir + "/bin"))
                 {
                     csharpMods.Add(cp);
                 }
@@ -34,6 +34,7 @@ namespace Barotrauma
             if (GameMain.Client.IsServerOwner)
             {
                 new GUIMessageBox("", "You have CSharp mods enabled but don't have the Cs For Barotrauma package enabled, those mods might not work.");
+                Initialize();
                 return;
             }
 
