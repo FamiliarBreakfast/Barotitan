@@ -1330,7 +1330,7 @@ namespace Barotrauma
             //----------------------------------------------------------------------------------
 
             TopBarrier = GameMain.World.CreateEdge( 
-                ConvertUnits.ToSimUnits(new Vector2(borders.X, 0)), 
+                ConvertUnits.ToSimUnits(new Vector2(borders.Right, 0)), 
                 ConvertUnits.ToSimUnits(new Vector2(borders.Right, 0)));
             //for debugging purposes
             TopBarrier.UserData = "topbarrier";
