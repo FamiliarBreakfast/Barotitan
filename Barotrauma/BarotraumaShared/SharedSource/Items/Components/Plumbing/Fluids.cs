@@ -7,6 +7,7 @@ namespace Barotrauma.Items.Components;
 internal class FluidPrefab : Prefab
 {
     public static readonly PrefabCollection<FluidPrefab> Prefabs = new PrefabCollection<FluidPrefab>();
+    public static List<FluidPrefab> FluidList = new List<FluidPrefab>();
 
     public readonly float Density;
     public readonly float MeltingPoint;
@@ -24,6 +25,8 @@ internal class FluidPrefab : Prefab
         _color = element.GetAttributeColor("color", Color.TransparentBlack);
         
         _sublimates = MeltingPoint >= BoilingPoint;
+        
+        FluidList.Add(this);
     }
 
     public override void Dispose() { }

@@ -27,7 +27,7 @@
     color="#00FF19FF"
   />
   <Fluid
-    identifier="carbon dioxide"
+    identifier="co2"
     name="Carbon Dioxide"
     density="1.977"
     meltingPoint="216.6"

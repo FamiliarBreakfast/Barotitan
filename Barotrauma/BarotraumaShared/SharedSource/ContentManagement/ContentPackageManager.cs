@@ -295,9 +295,9 @@ namespace Barotrauma
                 foreach (string subDir in subDirs)
                 {
                     var fileListPath = Path.Combine(subDir, ContentPackage.FileListFileName).CleanUpPathCrossPlatform();
-                    #if SERVER
+                    //#if SERVER todo: FIX THIS URGENT
                     var serverFileListPath = Path.Combine(subDir, "filelist.server.xml").CleanUpPathCrossPlatform();
-                    #endif
+                    //#endif
                     if (this.Any(p => p.Path.Equals(fileListPath, StringComparison.OrdinalIgnoreCase))) { continue; }
 
                     if (!File.Exists(fileListPath)) { continue; }
@@ -323,7 +323,7 @@ namespace Barotrauma
                     }
 
                     Debug.WriteLine($"Loaded \"{newPackage.Name}\"");
-                    #if SERVER
+//#if SERVER
                     result = ContentPackage.TryLoad(serverFileListPath);
                     if (!result.TryUnwrapSuccess(out newPackage))
                     {
@@ -346,7 +346,7 @@ namespace Barotrauma
                     }
 
                     Debug.WriteLine($"Loaded \"{newPackage.Name}\"");
-#endif
+//#endif
                 }
             }
 

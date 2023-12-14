@@ -329,6 +329,7 @@ namespace Barotrauma
             {
                 if (!MathUtils.IsValid(value)) return;
                 if (oxygenVolume != null) oxygenVolume.GasVolume = MathHelper.Clamp(value, 0.0f, oxygenVolume.MaxVolume);
+                if (oxygenVolume != null) oxygen = MathHelper.Clamp(value, 0.0f, oxygenVolume.MaxVolume);
             }
         }
 
@@ -475,8 +476,6 @@ namespace Barotrauma
             rect = rectangle;
 
             if (BackgroundSections == null) { CreateBackgroundSections(); }
-            
-            OxygenPercentage = 100.0f;
 
             FireSources = new List<FireSource>();
             FakeFireSources = new List<DummyFireSource>();
@@ -511,7 +510,7 @@ namespace Barotrauma
 
             CreateBackgroundSections();
 
-            foreach (FluidPrefab fluidPrefab in FluidPrefab.Prefabs)
+            foreach (FluidPrefab fluidPrefab in FluidPrefab.FluidList)
             {
                 if (fluidPrefab.Identifier == "oxygen")
                 {
@@ -521,6 +520,7 @@ namespace Barotrauma
                 DebugConsole.NewMessage("Created fluid volume (" + fluidPrefab.Identifier + ") in hull (" + ID + ")");
             }
             
+            OxygenPercentage = 100.0f;
             WaterVolume = 0.0f;
 
             InsertToList();
