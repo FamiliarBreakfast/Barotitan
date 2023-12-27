@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
@@ -364,7 +364,7 @@ namespace Barotrauma
                     }
                     GameMain.NetLobbyScreen.UpdateSubList(GameMain.NetLobbyScreen.SubList, GameMain.Client.ServerSubmarines);
                     GameMain.NetLobbyScreen.Select();
-                    GameMain.LuaCs.Initialize();
+                    GameMain.LuaCs.CheckInitialize();
                 }
             }
         }

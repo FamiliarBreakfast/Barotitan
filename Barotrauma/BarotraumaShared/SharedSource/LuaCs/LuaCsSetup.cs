@@ -17,9 +17,10 @@ namespace Barotrauma
     {
         public bool FirstTimeCsWarning = true;
         public bool ForceCsScripting = false;
-        public bool TreatForcedModsAsNormal = false;
+        public bool TreatForcedModsAsNormal = true;
         public bool PreferToUseWorkshopLuaSetup = false;
         public bool DisableErrorGUIOverlay = false;
+        public bool HideUserNames = true;
 
         public LuaCsSetupConfig() { }
     }
@@ -52,6 +53,18 @@ namespace Barotrauma
         public const bool IsServer = false;
         public const bool IsClient = true;
 #endif
+
+        public static bool IsRunningInsideWorkshop
+        {
+            get
+            {
+#if SERVER
+                return Path.GetDirectoryName(System.Reflection.Assembly.GetEntryAssembly().Location) == Directory.GetCurrentDirectory();
+#else
+                return false; // unnecessary but just keeps things clear that this is NOT for client stuff
+#endif
+            }
+        }
 
         private static int executionNumber = 0;
 
@@ -109,6 +122,8 @@ namespace Barotrauma
             {
                 Config = new LuaCsSetupConfig();
             }
+
+            UpdateConfigVars();
         }
         
         [Obsolete("Use AssemblyManager::GetTypesByName()")]
@@ -149,6 +164,11 @@ namespace Barotrauma
 
         public void DetachDebugger() => DebugServer.Detach(Lua);
 
+        public void UpdateConfigVars()
+        {
+            LuaCsLogger.HideUserNames = Config.HideUserNames;
+        }
+
         public void UpdateConfig()
         {
             FileStream file;
@@ -156,6 +176,8 @@ namespace Barotrauma
             else { file = File.Open(configFileName, FileMode.Truncate, FileAccess.Write); }
             LuaCsConfig.Save(file, Config);
             file.Close();
+
+            UpdateConfigVars();
         }
 
         public static ContentPackage GetPackage(ContentPackageId id, bool fallbackToAll = true, bool useBackup = false)
@@ -324,7 +346,11 @@ namespace Barotrauma
         public void Initialize(bool forceEnableCs = false)
         {
             if (IsInitialized)
+            {
                 Stop();
+            }
+
+            IsInitialized = true;
 
             LuaCsLogger.LogMessage("Lua! Version " + AssemblyInfo.GitRevision);
 
@@ -457,8 +483,6 @@ namespace Barotrauma
                 {
                     ModUtils.Logging.PrintError($"{nameof(LuaCsSetup)}::{nameof(Initialize)}() | Error while loading assemblies! Details: {e.Message} | {e.StackTrace}");
                 }
-
-                IsInitialized = true;
             }
 
 
@@ -495,6 +519,10 @@ namespace Barotrauma
                 else if (luaPackage != null) { RunWorkshop(); }
                 else { RunNone(); }
             }
+
+#if SERVER
+            GameMain.Server.ServerSettings.LoadClientPermissions();
+#endif
 
             executionNumber++;
         }
