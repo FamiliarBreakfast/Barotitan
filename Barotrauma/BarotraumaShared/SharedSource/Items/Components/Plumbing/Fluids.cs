@@ -8,34 +8,39 @@ internal class FluidPrefab : Prefab
 {
     public static readonly PrefabCollection<FluidPrefab> Prefabs = new PrefabCollection<FluidPrefab>();
 
-    public readonly float MolarMass;
-    public readonly float MolarVolume;
+    //public readonly float MolarMass;
+    //public readonly float MolarVolume;
     public readonly float CriticalTemperature;
     public readonly float CriticalPressure;
+    public readonly float LatentHeat;
     public readonly float BoilingTemperature;
+    
+    const int GasConstant = 8314; //J/(kmol*K)
+    const int StandardPressure = 100000; //Pascals
 
-    private float _enthalpy; //Joules
-    private float _specificVolume; //m^3/kg
+    //private float _enthalpy; //Joules
+    //private float _specificVolume; //m^3/kg
     public FluidPrefab(FluidsFile file, ContentXElement element) : base(file, element)
     {
-        MolarMass = element.GetAttributeFloat("molarMass", 18); //g/mol
-        MolarVolume = element.GetAttributeFloat("molarVolume", 0.0224f); //m^3/mol
+        //MolarMass = element.GetAttributeFloat("molarMass", 18); //g/mol
+        //MolarVolume = element.GetAttributeFloat("molarVolume", 0.0224f); //m^3/mol
         CriticalTemperature = element.GetAttributeFloat("criticalTemperature", 647); //Kelvins
         CriticalPressure = element.GetAttributeFloat("criticalPressure", 22064000); //Pascals
+        LatentHeat = element.GetAttributeFloat("latentHeat", 2257); //Joules
         BoilingTemperature = element.GetAttributeFloat("boilingTemperature", 373); //Kelvins
 
-        _specificVolume = MolarVolume / MolarMass;
+        //_specificVolume = MolarVolume / MolarMass;
     }
     
     public float BoilingPoint(float pressure)
     {
-        return CriticalTemperature * (1 - (pressure / CriticalPressure));
+        //Clausius-Clapeyron equation
+        return (float)(1 / ((GasConstant / LatentHeat) * -Math.Log(pressure / StandardPressure) + 1 / BoilingTemperature));
     }
     public override void Dispose() { }
 }
 internal class FluidVolume
 {
-    const int gasConstant = 8314; //J/(kmol*K)
     
     private readonly FluidPrefab _fluidPrefab;
     
