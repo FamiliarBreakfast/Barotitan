@@ -552,7 +552,7 @@ namespace Barotrauma
             }
 #endif
 #if CLIENT
-            if (campaignMode != null && levelData != null) { SteamAchievementManager.OnBiomeDiscovered(levelData.Biome); }
+            if (campaignMode != null && levelData != null) { AchievementManager.OnBiomeDiscovered(levelData.Biome); }
 
             var existingRoundSummary = GUIMessageBox.MessageBoxes.Find(mb => mb.UserData is RoundSummary)?.UserData as RoundSummary;
             if (existingRoundSummary?.ContinueButton != null)
@@ -656,7 +656,7 @@ namespace Barotrauma
                 ObjectiveManager.ResetObjectives();
 #endif
                 EventManager?.StartRound(Level.Loaded);
-                SteamAchievementManager.OnStartRound();
+                AchievementManager.OnStartRound();
 
                 GameMode.ShowStartMessage();
 
@@ -947,7 +947,7 @@ namespace Barotrauma
                 ObjectiveManager.ResetUI();
                 CharacterHUD.ClearBossProgressBars();
 #endif
-                SteamAchievementManager.OnRoundEnded(this);
+                AchievementManager.OnRoundEnded(this);
 
 #if SERVER
                 GameMain.Server?.TraitorManager?.EndRound();

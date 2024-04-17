@@ -309,7 +309,7 @@ namespace Barotrauma
                     {
                         onLoadFail?.Invoke(
                             fileListPath,
-                            result.TryUnwrapFailure(out var exception) ? exception : throw new Exception("unreachable"));
+                            result.TryUnwrapFailure(out var exception) ? exception : throw new UnreachableCodeException());
                         continue;
                     }
                     
@@ -524,7 +524,7 @@ namespace Barotrauma
             List<RegularPackage> enabledRegularPackages = new List<RegularPackage>();
 
 #if CLIENT
-            TaskPool.Add("EnqueueWorkshopUpdates", EnqueueWorkshopUpdates(), t => { });
+            TaskPool.AddWithResult("EnqueueWorkshopUpdates", EnqueueWorkshopUpdates(), t => { });
 #else
             #warning TODO: implement Workshop updates for servers at some point
 #endif
