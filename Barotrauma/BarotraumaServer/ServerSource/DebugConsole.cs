@@ -2723,6 +2723,46 @@ namespace Barotrauma
                 }
             );
 
+            commands.Add(new Command("fluids", "list create", (string[] args) =>
+            {
+                NewMessage("Can't execute as server.", Color.Red);
+            }));
+
+            AssignOnClientRequestExecute(
+                "fluids",
+                (senderClient, cursorWorldPos, args) =>
+            {
+                if (args.Length == 0)
+                {
+                    NewMessage("Missing arguments. Expected at least 1 but got 0 (list, create)", Color.Red);
+                    return;
+                }
+                if (args[0].Equals("list", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (Convert.ToBoolean(args[1]))
+                    {
+                        NewMessage("not implemented", Color.Red);
+                    }
+                    else
+                    {
+                        //NewMessage($"Pressure: {senderClient.Character.CurrentHull.Pressure}, Oxygen: {senderClient.Character.CurrentHull.OxygenPercentage}, Water: {senderClient.Character.CurrentHull.WaterPercentage}, Temperature: {senderClient.Character.CurrentHull.Temperature}", Color.Yellow);
+                        foreach (FluidVolume volume in senderClient.Character.CurrentHull.FluidVolumes)
+                        {
+                            NewMessage($"Fluid: nil, Moles: {volume.Moles}, GasMoles: {volume.GasMoles}, Temperature: {volume.Temperature}, Plasma: {volume.plasma}", Color.Yellow); //todo: fix name
+                        }
+                    }
+                }
+                else if (args[0].Equals("create", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (args.Length < 2)
+                    {
+                        NewMessage("Missing arguments. Expected at least 2 but got 1 (create, fluid, hull[optional])", Color.Red);
+                        return;
+                    }
+                    NewMessage("not implemented", Color.Red);
+                }
+            });
+                
 #if DEBUG
             commands.Add(new Command("spamevents", "A debug command that creates a ton of entity events.", (string[] args) =>
             {
