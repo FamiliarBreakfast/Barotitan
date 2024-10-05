@@ -323,13 +323,13 @@ namespace Barotrauma
         {
             get
             {
-                if (oxygenVolume != null) return oxygenVolume.GasVolume;
+                if (oxygenVolume != null) return oxygenVolume.GasMoles;
                 return 100000.0f;
             }
             set
             {
                 if (!MathUtils.IsValid(value)) return;
-                if (oxygenVolume != null) oxygenVolume.GasVolume = MathHelper.Clamp(value, 0.0f, oxygenVolume.MaxVolume);
+                if (oxygenVolume != null) oxygenVolume.GasMoles = MathHelper.Clamp(value, 0.0f, oxygenVolume.GasMoles);
             }
         }
 
@@ -378,10 +378,10 @@ namespace Barotrauma
         {
             get
             {
-                if (oxygenVolume != null) return MathUtils.Percentage(Oxygen, oxygenVolume.MaxVolume);
+                if (oxygenVolume != null) return MathUtils.Percentage(Oxygen, Volume);
                 return 0.0f;
             }
-            set { Oxygen = (value / 100.0f) * oxygenVolume.MaxVolume; }
+            set { Oxygen = (value / 100.0f) * Volume; }
         }
 
         public float Volume
@@ -391,7 +391,14 @@ namespace Barotrauma
 
         public float Pressure
         {
-            get { return pressure; }
+            //get { return pressure; }
+            get
+            {
+                float n = FluidList.Sum(fluidvolume => fluidvolume.Moles);
+
+                float p = n*8.314f*temperature/Volume; //ideal gas law //todo: volume should be the volume of the hull minus the volume of the fluids
+                return p; //todo: add water pressure
+            }
             set { pressure = value; }
         }
 
@@ -904,6 +911,7 @@ namespace Barotrauma
                     {
                         if (FakeFireSources[i].CausedByPsychosis)
                         {
+                            
                             FakeFireSources[i].Remove();
                         }
                     }

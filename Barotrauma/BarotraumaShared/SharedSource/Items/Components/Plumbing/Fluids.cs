@@ -43,19 +43,22 @@ internal class FluidVolume
 {
     
     private readonly FluidPrefab _fluidPrefab;
-    
-    public float LiquidVolume = 0.0f;
-    public float GasVolume = 0.0f;
-    public float PlasmaVolume = 0.0f;
+
+    public float Moles;
+    public float GasMoles;
+    public float Temperature;
+    //calculate pressure in hull.cs
+    //public bool plasma;
 
     private List<Solid> _solids = new List<Solid>();
     private const int MaximumSolidCount = 5;
 
-    public readonly float MaxVolume;
-
-    public FluidVolume(Hull hull, FluidPrefab fluidPrefab, float volume, float maxVolume = 10000f)
+    public FluidVolume(Hull hull, FluidPrefab fluidPrefab, float moles, float gasPercentage = 100)
     {
-        
+        Moles = moles;
+        _fluidPrefab = fluidPrefab;
+        GasMoles = moles * gasPercentage / 100;
+        Temperature = 293;
     }
     
     public void Update(float deltaTime)

@@ -3,6 +3,7 @@ using Barotrauma.Networking;
 using Microsoft.Xna.Framework;
 using System;
 using System.Linq;
+using System.Security.Cryptography;
 
 namespace Barotrauma
 {
@@ -193,6 +194,26 @@ namespace Barotrauma
                 default:
                     throw new Exception($"Malformed incoming hull event: {eventType} is not a supported event type");
             }         
+        }
+
+        public void ServerFluidsWrite(Client c)
+        {
+            WriteOnlyMessage msg = new WriteOnlyMessage();
+            
+            msg.WriteUInt16(ID); //hull id
+            msg.WriteDouble(); //temperature
+            msg.WriteInt32(FluidVolumes.Count); //fluid count
+            
+            //pseudo-code
+            //foreach (FluidVolume fluid in hull)
+            //{
+            //msg.WriteFloat(fluid.Moles);
+            //msg.WriteFloat(fluid.GasMoles);
+            //msg.WriteFloat(fluid.Temperature);
+            //msg.WriteBoolean(fluid.plasma);
+            //msg.WriteColorR8G8B8A8(fluid.Color); //stupid but easy
+            // deal with solids later
+            //}
         }
     }
 }
