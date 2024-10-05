@@ -45,7 +45,9 @@ namespace Barotrauma
 
         public static readonly Version Version = Assembly.GetEntryAssembly().GetName().Version;
 
-        public static string[] ConsoleArguments;
+        public readonly ImmutableArray<string> ConsoleArguments;
+
+        public readonly Option<string> EgsExchangeCode;
 
         public static GameScreen GameScreen;
         public static MainMenuScreen MainMenuScreen;
@@ -112,7 +114,8 @@ namespace Barotrauma
         public static LoadingScreen TitleScreen;
         private bool loadingScreenOpen;
 
-        private CoroutineHandle loadingCoroutine;
+        private Thread initialLoadingThread;
+
         public bool HasLoaded { get; private set; }
 
         private readonly GameTime fixedTime;
@@ -123,9 +126,13 @@ namespace Barotrauma
 
         private Viewport defaultViewport;
 
+        /// <summary>
+        /// NOTE: Use very carefully. You need to ensure that you ALWAYS unsubscribe from this when you no longer need the subscriber!
+        /// If you're subscribing to this from something else than a singleton or something that there's only ever one instance of, you're probably in dangerous territory.
+        /// </summary>
         public event Action ResolutionChanged;
 
-        private bool exiting;
+        public static bool IsExiting { get; private set; }
 
         public static bool IsFirstLaunch
         {
@@ -169,7 +176,7 @@ namespace Barotrauma
             {
                 try
                 {
-                    return Instance != null && !Instance.exiting && Instance.IsActive;
+                    return Instance != null && !IsExiting && Instance.IsActive;
                 }
                 catch (NullReferenceException)
                 {
@@ -210,6 +217,10 @@ namespace Barotrauma
 
         public static ChatMode ActiveChatMode { get; set; } = ChatMode.Radio;
 
+        private static bool contentLoaded;
+
+        private static readonly Queue<Action> postContentLoadActions = new();
+
         public GameMain(string[] args)
         {
             Content.RootDirectory = "Content";
@@ -237,11 +248,13 @@ namespace Barotrauma
             GameSettings.Init();
             CreatureMetrics.Init();
             
-            ConsoleArguments = args;
+            ConsoleArguments = args.ToImmutableArray();
+
+            EgsExchangeCode = EosInterface.Login.ParseEgsExchangeCode(args);
 
             try
             {
-                ConnectCommand = ToolBox.ParseConnectCommand(ConsoleArguments);
+                ConnectCommand = Barotrauma.Networking.ConnectCommand.Parse(ConsoleArguments);
             }
             catch (IndexOutOfRangeException e)
             {
@@ -266,6 +279,16 @@ namespace Barotrauma
             MainThread = Thread.CurrentThread;
 
             Window.FileDropped += OnFileDropped;
+        }
+
+        public static void ExecuteAfterContentFinishedLoading(Action action)
+        {
+            if (contentLoaded)
+            {
+                action();
+                return;
+            }
+            postContentLoadActions.Enqueue(action);
         }
 
         public static void OnFileDropped(object sender, FileDropEventArgs args)
@@ -406,7 +429,7 @@ namespace Barotrauma
             //do this here because we need it for the loading screen
             WaterRenderer.Instance = new WaterRenderer(base.GraphicsDevice);
 
-            Quad.Init(GraphicsDevice);
+            GraphicsQuad.Init(GraphicsDevice);
 
             loadingScreenOpen = true;
             TitleScreen = new LoadingScreen(GraphicsDevice)
@@ -414,24 +437,23 @@ namespace Barotrauma
                 WaitForLanguageSelection = GameSettings.CurrentConfig.Language == LanguageIdentifier.None
             };
 
-            bool canLoadInSeparateThread = true;
+            Eos.EosAccount.LoginPlatformSpecific();
 
-            loadingCoroutine = CoroutineManager.StartCoroutine(Load(canLoadInSeparateThread), "Load", canLoadInSeparateThread);
+            initialLoadingThread = new Thread(Load);
+            initialLoadingThread.Start();
         }
 
-        public class LoadingException : Exception
+        private void Load()
         {
-            public LoadingException(Exception e) : base("Loading was interrupted due to an error.", innerException: e)
+            static void log(string str)
             {
+                if (GameSettings.CurrentConfig.VerboseLogging)
+                {
+                    DebugConsole.NewMessage(str, Color.Lime);
+                }
             }
-        }
-
-        private IEnumerable<CoroutineStatus> Load(bool isSeparateThread)
-        {
-            if (GameSettings.CurrentConfig.VerboseLogging)
-            {
-                DebugConsole.NewMessage("LOADING COROUTINE", Color.Lime);
-            }
+            
+            log("LOADING COROUTINE");
 
             ContentPackageManager.LoadVanillaFileList();
 
@@ -441,9 +463,17 @@ namespace Barotrauma
                 TitleScreen.AvailableLanguages = TextManager.AvailableLanguages.OrderBy(l => l.Value != "english".ToIdentifier()).ThenBy(l => l.Value).ToArray();
                 while (TitleScreen.WaitForLanguageSelection)
                 {
-                    yield return CoroutineStatus.Running;
+                    Thread.Sleep((int)(Timing.Step * 1000));
                 }
+                LanguageIdentifier selectedLanguage = GameSettings.CurrentConfig.Language;
+                //unload text files at this point - we only loaded for the purposes of the language selection screen,
+                //they will be loaded "normally" with the rest of the files later
                 ContentPackageManager.VanillaCorePackage.UnloadFilesOfType<TextFile>();
+                //the selected language got unloaded, need to reselect it
+                var config = GameSettings.CurrentConfig;
+                config.Language = selectedLanguage;
+                GameSettings.SetCurrentConfig(config);
+                GameSettings.SaveCurrentConfig();
             }
 
             SoundManager = new Sounds.SoundManager();
@@ -453,24 +483,12 @@ namespace Barotrauma
             {
                 var pendingSplashScreens = TitleScreen.PendingSplashScreens;
                 float baseVolume = MathHelper.Clamp(GameSettings.CurrentConfig.Audio.SoundVolume * 2.0f, 0.0f, 1.0f);
-                pendingSplashScreens?.Enqueue(new LoadingScreen.PendingSplashScreen("Content/SplashScreens/Splash_UTG.webm", baseVolume * 0.5f));
-                pendingSplashScreens?.Enqueue(new LoadingScreen.PendingSplashScreen("Content/SplashScreens/Splash_FF.webm", baseVolume));
-                pendingSplashScreens?.Enqueue(new LoadingScreen.PendingSplashScreen("Content/SplashScreens/Splash_Daedalic.webm", baseVolume * 0.1f));
-            }
-
-            //if not loading in a separate thread, wait for the splash screens to finish before continuing the loading
-            //otherwise the videos will look extremely choppy
-            if (!isSeparateThread)
-            {
-                while (TitleScreen.PlayingSplashScreen || TitleScreen.PendingSplashScreens.Count > 0)
-                {
-                    yield return CoroutineStatus.Running;
-                }
+                pendingSplashScreens.Enqueue(new LoadingScreen.PendingSplashScreen("Content/SplashScreens/Splash_UTG.webm", baseVolume * 0.5f));
+                pendingSplashScreens.Enqueue(new LoadingScreen.PendingSplashScreen("Content/SplashScreens/Splash_FF.webm", baseVolume));
+                pendingSplashScreens.Enqueue(new LoadingScreen.PendingSplashScreen("Content/SplashScreens/Splash_Daedalic.webm", baseVolume * 0.1f));
             }
 
             GUI.Init();
-
-            yield return CoroutineStatus.Running;
 
             LegacySteamUgcTransition.Prepare();
             var contentPackageLoadRoutine = ContentPackageManager.Init();
@@ -478,9 +496,10 @@ namespace Barotrauma
                          .Select(p => p.Result).Successes())
             {
                 const float min = 1f, max = 70f;
+                if (IsExiting) { break; }
                 TitleScreen.LoadState = MathHelper.Lerp(min, max, progress);
-                yield return CoroutineStatus.Running;
             }
+            if (IsExiting) { return; }
 
             var corePackage = ContentPackageManager.EnabledPackages.Core;
             if (corePackage.EnableError.TryUnwrap(out var error))
@@ -497,6 +516,7 @@ namespace Barotrauma
 
             TextManager.VerifyLanguageAvailable();
 
+            SocialOverlay.Init();
             DebugConsole.Init();
 
             ContentPackageManager.LogEnabledRegularPackageErrors();
@@ -508,7 +528,6 @@ namespace Barotrauma
             TaskPool.Add("InitRelayNetworkAccess", SteamManager.InitRelayNetworkAccess(), (t) => { });
 
             HintManager.Init();
-        yield return CoroutineStatus.Running;
             CoreEntityPrefab.InitCorePrefabs();
             GameModePreset.Init();
 
@@ -516,7 +535,6 @@ namespace Barotrauma
             SubmarineInfo.RefreshSavedSubs();
 
             TitleScreen.LoadState = 75.0f;
-        yield return CoroutineStatus.Running;
 
             GameScreen = new GameScreen(GraphicsDeviceManager.GraphicsDevice);
 
@@ -524,44 +542,42 @@ namespace Barotrauma
             LightManager = new Lights.LightManager(base.GraphicsDevice);
             
             TitleScreen.LoadState = 80.0f;
-        yield return CoroutineStatus.Running;
 
             MainMenuScreen          = new MainMenuScreen(this);
             ServerListScreen        = new ServerListScreen();
 
             TitleScreen.LoadState = 85.0f;
-        yield return CoroutineStatus.Running;
 
-#if USE_STEAM
             if (SteamManager.IsInitialized)
             {
-                Steamworks.SteamFriends.OnGameRichPresenceJoinRequested += OnInvitedToGame;
-                Steamworks.SteamFriends.OnGameLobbyJoinRequested += OnLobbyJoinRequested;
+                Steamworks.SteamFriends.OnGameRichPresenceJoinRequested += OnInvitedToSteamGame;
+                Steamworks.SteamFriends.OnGameLobbyJoinRequested += OnSteamLobbyJoinRequested;
 
                 if (SteamManager.TryGetUnlockedAchievements(out List<Steamworks.Data.Achievement> achievements))
                 {
                     //check the achievements too, so we don't consider people who've played the game before this "gamelaunchcount" stat was added as being 1st-time-players
                     //(people who have played previous versions, but not unlocked any achievements, will be incorrectly considered 1st-time-players, but that should be a small enough group to not skew the statistics)
-                    if (!achievements.Any() && SteamManager.GetStatInt("gamelaunchcount".ToIdentifier()) <= 0)
+                    if (!achievements.Any() && SteamManager.GetStatInt(AchievementStat.GameLaunchCount) <= 0)
                     {
                         IsFirstLaunch = true;
                         GameAnalyticsManager.AddDesignEvent("FirstLaunch");
                     }
                 }
-                SteamManager.IncrementStat("gamelaunchcount".ToIdentifier(), 1);
+                SteamManager.IncrementStat(AchievementStat.GameLaunchCount, 1);
             }
-#endif
+            
+            
+
+            Eos.EosAccount.ExecuteAfterLogin(ProcessLaunchCountEos);
 
             SubEditorScreen         = new SubEditorScreen();
             TestScreen              = new TestScreen();
 
             TitleScreen.LoadState = 90.0f;
-        yield return CoroutineStatus.Running;
 
             ParticleEditorScreen    = new ParticleEditorScreen();
 
             TitleScreen.LoadState = 95.0f;
-        yield return CoroutineStatus.Running;
 
             LevelEditorScreen       = new LevelEditorScreen();
             SpriteEditorScreen      = new SpriteEditorScreen();
@@ -569,13 +585,13 @@ namespace Barotrauma
             CharacterEditorScreen   = new CharacterEditor.CharacterEditorScreen();
             CampaignEndScreen       = new CampaignEndScreen();
 
-        yield return CoroutineStatus.Running;
-
 #if DEBUG
             LevelGenerationParams.CheckValidity();
 #endif
 
             MainMenuScreen.Select();
+
+            ContainerTagPrefab.CheckForContainerTagErrors();
 
             foreach (Identifier steamError in SteamManager.InitializationErrors)
             {
@@ -586,17 +602,48 @@ namespace Barotrauma
 
             TitleScreen.LoadState = 100.0f;
             HasLoaded = true;
-            if (GameSettings.CurrentConfig.VerboseLogging)
-            {
-                DebugConsole.NewMessage("LOADING COROUTINE FINISHED", Color.Lime);
-            }
 
+            log("LOADING COROUTINE FINISHED");
 #if CLIENT
             LuaCsInstaller.CheckUpdate();
 #endif
 
-            yield return CoroutineStatus.Success;
+            contentLoaded = true;
+            while (postContentLoadActions.TryDequeue(out Action action))
+            {
+                action();
+            }
+        }
 
+        private static void ProcessLaunchCountEos()
+        {
+            if (!EosInterface.Core.IsInitialized) { return; }
+
+            static void trySetConnectCommand(string commandStr)
+            {
+                Instance.ConnectCommand = Instance.ConnectCommand.Fallback(Networking.ConnectCommand.Parse(commandStr));
+            }
+
+            EosInterface.Presence.OnJoinGame.Register("onJoinGame".ToIdentifier(), static jgi => trySetConnectCommand(jgi.JoinCommand));
+            EosInterface.Presence.OnInviteAccepted.Register("onInviteAccepted".ToIdentifier(), static aii => trySetConnectCommand(aii.JoinCommand));
+            
+            TaskPool.AddWithResult("Eos.GameMain.Load.QueryStats", EosInterface.Achievements.QueryStats(AchievementStat.GameLaunchCount), static result =>
+            {
+                result.Match(
+                    success: static stats =>
+                    {
+                        if (!stats.TryGetValue(AchievementStat.GameLaunchCount, out int launchCount)) { return; }
+
+                        if (launchCount > 0) { return; }
+
+                        IsFirstLaunch = true;
+                        GameAnalyticsManager.AddDesignEvent("FirstLaunch_Epic");
+                    },
+                    failure: static error => DebugConsole.ThrowError($"Failed to query stats for launch count: {error}")
+                );
+
+                TaskPool.Add("Eos.GameMain.Load.IngestStat", EosInterface.Achievements.IngestStats((AchievementStat.GameLaunchCount, 1)), TaskPool.IgnoredCallback);
+            });
         }
 
         /// <summary>
@@ -613,13 +660,13 @@ namespace Barotrauma
             MainThread = null;
         }
 
-        public void OnInvitedToGame(Steamworks.Friend friend, string connectCommand) => OnInvitedToGame(connectCommand);
+        private void OnInvitedToSteamGame(Steamworks.Friend friend, string connectCommand) => OnInvitedToSteamGame(connectCommand);
 
-        public void OnInvitedToGame(string connectCommand)
+        private void OnInvitedToSteamGame(string connectCommand)
         {
             try
             {
-                ConnectCommand = ToolBox.ParseConnectCommand(ToolBox.SplitCommand(connectCommand));
+                ConnectCommand = Barotrauma.Networking.ConnectCommand.Parse(ToolBox.SplitCommand(connectCommand));
             }
             catch (IndexOutOfRangeException e)
             {
@@ -632,7 +679,7 @@ namespace Barotrauma
             }
         }
 
-        public void OnLobbyJoinRequested(Steamworks.Data.Lobby lobby, Steamworks.SteamId friendId)
+        private void OnSteamLobbyJoinRequested(Steamworks.Data.Lobby lobby, Steamworks.SteamId friendId)
         {
             SteamManager.JoinLobby(lobby.Id, true);
         }
@@ -686,6 +733,8 @@ namespace Barotrauma
                 base.Update(fixedTime);
 
                 PlayerInput.Update(Timing.Step);
+
+                SocialOverlay.Instance?.Update();
 
                 if (loadingScreenOpen)
                 {
@@ -749,11 +798,6 @@ namespace Barotrauma
 #endif
 
                     Client?.Update((float)Timing.Step);
-
-                    if (!HasLoaded && !CoroutineManager.IsCoroutineRunning(loadingCoroutine))
-                    {
-                        throw new LoadingException(loadingCoroutine.Exception);
-                    }
                 }
                 else if (HasLoaded)
                 {
@@ -766,16 +810,16 @@ namespace Barotrauma
                         }
                         MainMenuScreen.Select();
 
-                        if (connectCommand.EndpointOrLobby.TryGet(out ulong lobbyId))
+                        if (connectCommand.SteamLobbyIdOption.TryUnwrap(out var lobbyId))
                         {
-                            SteamManager.JoinLobby(lobbyId, joinServer: true);
+                            SteamManager.JoinLobby(lobbyId.Value, joinServer: true);
                         }
-                        else if (connectCommand.EndpointOrLobby.TryGet(out ConnectCommand.NameAndEndpoint nameAndEndpoint)
-                                 && nameAndEndpoint is { ServerName: var serverName, Endpoint: var endpoint })
+                        else if (connectCommand.NameAndP2PEndpointsOption.TryUnwrap(out var nameAndEndpoint)
+                                 && nameAndEndpoint is { ServerName: var serverName, Endpoints: var endpoints })
                         {
                             Client = new GameClient(MultiplayerPreferences.Instance.PlayerName.FallbackNullOrEmpty(SteamManager.GetUsername()),
-                                endpoint,
-                                string.IsNullOrWhiteSpace(serverName) ? endpoint.StringRepresentation : serverName,
+                                endpoints.Cast<Endpoint>().ToImmutableArray(),
+                                string.IsNullOrWhiteSpace(serverName) ? endpoints.First().StringRepresentation : serverName,
                                 Option<int>.None());
                         }
                         
@@ -783,6 +827,18 @@ namespace Barotrauma
                     }
 
                     SoundPlayer.Update((float)Timing.Step);
+
+                    if ((PlayerInput.KeyDown(Keys.LeftControl) || PlayerInput.KeyDown(Keys.RightControl))
+                        && (PlayerInput.KeyDown(Keys.LeftShift) || PlayerInput.KeyDown(Keys.RightShift))
+                        && PlayerInput.KeyHit(Keys.Tab)
+                        && SocialOverlay.Instance is { } socialOverlay)
+                    {
+                        socialOverlay.IsOpen = !socialOverlay.IsOpen;
+                        if (socialOverlay.IsOpen)
+                        {
+                            socialOverlay.RefreshFriendList();
+                        }
+                    }
 
                     if (PlayerInput.KeyHit(Keys.Escape) && WindowActive)
                     {
@@ -795,15 +851,16 @@ namespace Barotrauma
                             }
                             GUI.KeyboardDispatcher.Subscriber = null;
                         }
+                        else if (SocialOverlay.Instance is { IsOpen: true })
+                        {
+                            SocialOverlay.Instance.IsOpen = false;
+                        }
                         //if a verification prompt (are you sure you want to x) is open, close it
-                        else if (GUIMessageBox.VisibleBox as GUIMessageBox != null &&
-                                GUIMessageBox.VisibleBox.UserData as string == "verificationprompt")
+                        else if (GUIMessageBox.VisibleBox is GUIMessageBox { UserData: "verificationprompt" })
                         {
                             ((GUIMessageBox)GUIMessageBox.VisibleBox).Close();
                         }
-                        else if (GUIMessageBox.VisibleBox?.UserData is RoundSummary roundSummary &&
-                                roundSummary.ContinueButton != null &&
-                                roundSummary.ContinueButton.Visible)
+                        else if (GUIMessageBox.VisibleBox?.UserData is RoundSummary { ContinueButton.Visible: true })
                         {
                             GUIMessageBox.MessageBoxes.Remove(GUIMessageBox.VisibleBox);
                         }
@@ -815,8 +872,7 @@ namespace Barotrauma
                         {
                             gameSession.ToggleTabMenu();
                         }
-                        else if (GUIMessageBox.VisibleBox as GUIMessageBox != null &&
-                                 GUIMessageBox.VisibleBox.UserData as string == "bugreporter")
+                        else if (GUIMessageBox.VisibleBox is GUIMessageBox { UserData: "bugreporter" })
                         {
                             ((GUIMessageBox)GUIMessageBox.VisibleBox).Close();
                         }
@@ -943,6 +999,7 @@ namespace Barotrauma
                 CoroutineManager.Update(Paused, (float)Timing.Step);
 
                 SteamManager.Update((float)Timing.Step);
+                EosInterface.Core.Update();
 
                 TaskPool.Update();
 
@@ -1090,19 +1147,14 @@ namespace Barotrauma
             if (save)
             {
                 GUI.SetSavingIndicatorState(true);
+
+                GameSession.Campaign?.HandleSaveAndQuit();
                 if (GameSession.Submarine != null && !GameSession.Submarine.Removed)
                 {
                     GameSession.SubmarineInfo = new SubmarineInfo(GameSession.Submarine);
                 }
-                if (GameSession.Campaign is CampaignMode campaign)
-                {
-                    if (campaign is SinglePlayerCampaign spCampaign && Level.IsLoadedFriendlyOutpost)
-                    {
-                        spCampaign.UpdateStoreStock();
-                    }
-                    GameSession.EventManager?.RegisterEventHistory(registerFinishedOnly: true);
-                    campaign.End();
-                }
+                GameSession.Campaign?.End();
+                
                 SaveUtil.SaveGame(GameSession.SavePath);
             }
 
@@ -1140,14 +1192,16 @@ namespace Barotrauma
 
         public void ShowBugReporter()
         {
-            if (GUIMessageBox.VisibleBox != null && GUIMessageBox.VisibleBox.UserData as string == "bugreporter")
+            if (GUIMessageBox.VisibleBox != null && 
+                GUIMessageBox.VisibleBox.UserData as string == "bugreporter")
             {
                 return;
             }
 
             var msgBox = new GUIMessageBox(TextManager.Get("bugreportbutton"), "")
             {
-                UserData = "bugreporter"
+                UserData = "bugreporter",
+                DrawOnTop = true
             };
             var linkHolder = new GUILayoutGroup(new RectTransform(new Vector2(1.0f, 1.0f), msgBox.Content.RectTransform)) { Stretch = true, RelativeSpacing = 0.025f };
             linkHolder.RectTransform.MaxSize = new Point(int.MaxValue, linkHolder.Rect.Height);
@@ -1160,7 +1214,7 @@ namespace Barotrauma
                 {
                     if (!SteamManager.OverlayCustomUrl(userdata as string))
                     {
-                        ShowOpenUrlInWebBrowserPrompt(userdata as string);
+                        ShowOpenUriPrompt(userdata as string);
                     }
                     msgBox.Close();
                     return true;
@@ -1170,10 +1224,10 @@ namespace Barotrauma
 
             new GUIButton(new RectTransform(new Vector2(1.0f, 1.0f), linkHolder.RectTransform), TextManager.Get("bugreportgithubform"), style: "MainMenuGUIButton", textAlignment: Alignment.Left)
             {
-                UserData = "https://github.com/Regalis11/Barotrauma/issues/new/choose",
+                UserData = "https://github.com/FakeFishGames/Barotrauma/discussions/new?category=bug-reports",
                 OnClicked = (btn, userdata) =>
                 {
-                    ShowOpenUrlInWebBrowserPrompt(userdata as string);
+                    ShowOpenUriPrompt(userdata as string);
                     msgBox.Close();
                     return true;
                 }
@@ -1188,13 +1242,13 @@ namespace Barotrauma
         {
             waitForKeyHit = waitKeyHit;
             loadingScreenOpen = true;
-            TitleScreen.LoadState = null;
+            TitleScreen.LoadState = 0f;
             return CoroutineManager.StartCoroutine(TitleScreen.DoLoading(loader));
         }
 
         protected override void OnExiting(object sender, EventArgs args)
         {
-            exiting = true;
+            IsExiting = true;
             CreatureMetrics.Save();
             DebugConsole.NewMessage("Exiting...");
             Client?.Quit();
@@ -1216,19 +1270,23 @@ namespace Barotrauma
             base.OnExiting(sender, args);
         }
 
-        public static void ShowOpenUrlInWebBrowserPrompt(string url, string promptExtensionTag = null)
+        public static GUIMessageBox ShowOpenUriPrompt(string url, string promptTextTag = "openlinkinbrowserprompt", string promptExtensionTag = null)
         {
-            if (string.IsNullOrEmpty(url)) { return; }
-            if (GUIMessageBox.VisibleBox?.UserData as string == "verificationprompt") { return; }
-
-            LocalizedString text = TextManager.GetWithVariable("openlinkinbrowserprompt", "[link]", url);
+            LocalizedString text = TextManager.GetWithVariable(promptTextTag, "[link]", url);
             LocalizedString extensionText = TextManager.Get(promptExtensionTag);
             if (!extensionText.IsNullOrEmpty())
             {
                 text += $"\n\n{extensionText}";
             }
+            return ShowOpenUriPrompt(url, text);
+        }
 
-            var msgBox = new GUIMessageBox("", text, new LocalizedString[] { TextManager.Get("Yes"), TextManager.Get("No") })
+        public static GUIMessageBox ShowOpenUriPrompt(string url, LocalizedString promptText)
+        {
+            if (string.IsNullOrEmpty(url)) { return null; }
+            if (GUIMessageBox.VisibleBox?.UserData as string == "verificationprompt") { return null; }
+
+            var msgBox = new GUIMessageBox("", promptText, new LocalizedString[] { TextManager.Get("Yes"), TextManager.Get("No") })
             {
                 UserData = "verificationprompt"
             };
@@ -1246,6 +1304,7 @@ namespace Barotrauma
                 return true;
             };
             msgBox.Buttons[1].OnClicked = msgBox.Close;
+            return msgBox;
         }
 
         /*

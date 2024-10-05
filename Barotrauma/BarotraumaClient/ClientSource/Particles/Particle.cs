@@ -70,6 +70,8 @@ namespace Barotrauma.Particles
 
         public Vector4 ColorMultiplier;
 
+        public float VelocityChangeMultiplier;
+
         public bool DrawOnTop { get; private set; }
 
         public ParticlePrefab.DrawTargetType DrawTarget
@@ -85,7 +87,7 @@ namespace Barotrauma.Particles
         public float StartDelay
         {
             get { return startDelay; }
-            set { startDelay = MathHelper.Clamp(value, Prefab.StartDelayMin, prefab.StartDelayMax); }
+            set { startDelay = Math.Max(value, 0.0f); }
         }
         
         public Vector2 Size
@@ -121,8 +123,8 @@ namespace Barotrauma.Particles
 
             animState = 0;
             animFrame = 0;
-        
-            currentHull = Hull.FindHull(position, hullGuess);
+
+            currentHull = prefab.CanEnterSubs ? Hull.FindHull(position, hullGuess) : null;
 
             size = prefab.StartSizeMin + (prefab.StartSizeMax - prefab.StartSizeMin) * Rand.Range(0.0f, 1.0f);
 
@@ -177,6 +179,8 @@ namespace Barotrauma.Particles
             velocityChangeWater = prefab.VelocityChangeWaterDisplay;
 
             HighQualityCollisionDetection = false;
+
+            VelocityChangeMultiplier = 1.0f;
 
             OnChangeHull = null;
             OnCollision = null;
@@ -247,8 +251,8 @@ namespace Barotrauma.Particles
             bool inWater = (currentHull == null || (currentHull.Submarine != null && position.Y - currentHull.Submarine.DrawPosition.Y < currentHull.Surface));
             if (inWater)
             {
-                velocity.X += velocityChangeWater.X * deltaTime;
-                velocity.Y += velocityChangeWater.Y * deltaTime;
+                velocity.X += velocityChangeWater.X * VelocityChangeMultiplier * deltaTime;
+                velocity.Y += velocityChangeWater.Y * VelocityChangeMultiplier * deltaTime;
                 if (prefab.WaterDrag > 0.0f)
                 {
                     ApplyDrag(prefab.WaterDrag, deltaTime);
@@ -256,8 +260,8 @@ namespace Barotrauma.Particles
             }
             else
             {
-                velocity.X += velocityChange.X * deltaTime;
-                velocity.Y += velocityChange.Y * deltaTime; 
+                velocity.X += velocityChange.X * VelocityChangeMultiplier * deltaTime;
+                velocity.Y += velocityChange.Y * VelocityChangeMultiplier * deltaTime; 
                 if (prefab.Drag > 0.0f)
                 {
                     ApplyDrag(prefab.Drag, deltaTime);
@@ -311,7 +315,8 @@ namespace Barotrauma.Particles
             {
                 foreach (ParticleEmitter emitter in subEmitters)
                 {
-                    emitter.Emit(deltaTime, position, currentHull);
+                    emitter.Emit(deltaTime, position, currentHull, particleRotation: rotation, 
+                        sizeMultiplier: emitter.Prefab.Properties.CopyParentParticleScale ? Math.Max(size.X, size.Y) : 1.0f);
                 }
             }
 
@@ -566,11 +571,12 @@ namespace Barotrauma.Particles
             drawPosition = Timing.Interpolate(prevPosition, position);
             drawRotation = Timing.Interpolate(prevRotation, rotation);
         }
-        
+
         public void Draw(SpriteBatch spriteBatch)
         {
-            Vector2 drawSize = size;
+            if (startDelay > 0.0f) { return; }
 
+            Vector2 drawSize = size;
             if (prefab.GrowTime > 0.0f && totalLifeTime - lifeTime < prefab.GrowTime)
             {
                 drawSize *= MathUtils.SmoothStep((totalLifeTime - lifeTime) / prefab.GrowTime);

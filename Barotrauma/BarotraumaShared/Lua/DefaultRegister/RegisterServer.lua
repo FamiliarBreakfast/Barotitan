@@ -17,7 +17,4 @@ RegisterBarotrauma("Character+TeamChangeEventData")
 RegisterBarotrauma("Networking.GameServer")
 
 RegisterBarotrauma("Networking.ServerPeer")
-RegisterBarotrauma("Networking.ServerPeer+PendingClient")
-
-RegisterBarotrauma("Traitor")
-RegisterBarotrauma("Traitor+TraitorMission")
+RegisterBarotrauma("Networking.FileSender")

@@ -24,7 +24,7 @@ namespace Barotrauma.Items.Components
         /// </summary>
         Vector2 DrawSize { get; }
 
-        void Draw(SpriteBatch spriteBatch, bool editing, float itemDepth = -1);
+        void Draw(SpriteBatch spriteBatch, bool editing, float itemDepth = -1, Color? overrideColor = null);
 #endif
     }
 
@@ -50,10 +50,10 @@ namespace Barotrauma.Items.Components
 
         public readonly Dictionary<ActionType, List<StatusEffect>> statusEffectLists;
 
-        public Dictionary<RelatedItem.RelationType, List<RelatedItem>> requiredItems;
+        public Dictionary<RelatedItem.RelationType, List<RelatedItem>> RequiredItems;
         public readonly List<RelatedItem> DisabledRequiredItems = new List<RelatedItem>();
 
-        public List<Skill> requiredSkills;
+        public readonly List<Skill> RequiredSkills = new List<Skill>();
 
         private ItemComponent parent;
         public ItemComponent Parent
@@ -62,16 +62,35 @@ namespace Barotrauma.Items.Components
             set
             {
                 if (parent == value) { return; }
-                if (parent != null) { parent.OnActiveStateChanged -= SetActiveState; }
-                if (value != null) { value.OnActiveStateChanged += SetActiveState; }
+                if (InheritParentIsActive)
+                {
+                    if (parent != null) { parent.OnActiveStateChanged -= SetActiveState; }
+                    if (value != null) { value.OnActiveStateChanged += SetActiveState; }
+                }
                 parent = value;
             }
         }
+
+
+        [Serialize(true, IsPropertySaveable.No, description: "If this is a child component of another component, should this component inherit the IsActive state of the parent?")]
+        public bool InheritParentIsActive { get; set; }
 
         public readonly ContentXElement originalElement;
 
         protected const float CorrectionDelay = 1.0f;
         protected CoroutineHandle delayedCorrectionCoroutine;
+
+        /// <summary>
+        /// If enabled, the contents of the item are not transferred when the player transfers items between subs.
+        /// Use this if this component uses item containers in a way where removing the item from the container via external means would cause problems.
+        /// </summary>
+        public virtual bool DontTransferInventoryBetweenSubs => false;
+
+        /// <summary>
+        /// If enabled, the items inside any of the item containers on this item cannot be sold at an outpost.
+        /// Use in similar cases as <see cref="DontTransferInventoryBetweenSubs"/>.
+        /// </summary>
+        public virtual bool DisallowSellingItemsFromContainer => false;
 
         [Editable, Serialize(0.0f, IsPropertySaveable.No, description: "How long it takes to pick up the item (in seconds).")]
         public float PickingTime
@@ -113,8 +132,8 @@ namespace Barotrauma.Items.Components
 
         private bool drawable = true;
 
-        [Serialize(PropertyConditional.Comparison.And, IsPropertySaveable.No)]
-        public PropertyConditional.Comparison IsActiveConditionalComparison
+        [Serialize(PropertyConditional.LogicalOperatorType.And, IsPropertySaveable.No)]
+        public PropertyConditional.LogicalOperatorType IsActiveConditionalComparison
         {
             get;
             set;
@@ -159,6 +178,12 @@ namespace Barotrauma.Items.Components
             get;
             protected set;
         }
+
+        [Serialize(false, IsPropertySaveable.Yes), ConditionallyEditable(ConditionallyEditable.ConditionType.OnlyByStatusEffectsAndNetwork, onlyInEditors: false)]
+        public bool LockGuiFramePosition { get; set; }
+
+        [Serialize("0,0", IsPropertySaveable.Yes), ConditionallyEditable(ConditionallyEditable.ConditionType.OnlyByStatusEffectsAndNetwork, onlyInEditors: false)]
+        public Point GuiFrameOffset { get; set; }
 
         [Serialize(false, IsPropertySaveable.No, description: "Can the item be selected by interacting with it.")]
         public bool CanBeSelected
@@ -252,6 +277,9 @@ namespace Barotrauma.Items.Components
         /// </summary>
         public float Speed => item.Speed;
 
+        public readonly record struct ItemUseInfo(Item Item, Character User);
+        public readonly NamedEvent<ItemUseInfo> OnUsed = new();
+
         public readonly bool InheritStatusEffects;
 
         public ItemComponent(Item item, ContentXElement element)
@@ -260,9 +288,7 @@ namespace Barotrauma.Items.Components
             originalElement = element;
             name = element.Name.ToString();
             SerializableProperties = SerializableProperty.GetProperties(this);
-            requiredItems = new Dictionary<RelatedItem.RelationType, List<RelatedItem>>();
-            requiredSkills = new List<Skill>();
-
+            RequiredItems = new Dictionary<RelatedItem.RelationType, List<RelatedItem>>();
 #if CLIENT
             hasSoundsOfType = new bool[Enum.GetValues(typeof(ActionType)).Length];
             sounds = new Dictionary<ActionType, List<ItemSound>>();
@@ -278,7 +304,8 @@ namespace Barotrauma.Items.Components
             }
             catch (Exception e)
             {
-                DebugConsole.ThrowError("Invalid select key in " + element + "!", e);
+                DebugConsole.ThrowError("Invalid select key in " + element + "!", e,
+                    contentPackage: element.ContentPackage);
             }
 
             PickKey = InputType.Select;
@@ -291,7 +318,8 @@ namespace Barotrauma.Items.Components
             }
             catch (Exception e)
             {
-                DebugConsole.ThrowError("Invalid pick key in " + element + "!", e);
+                DebugConsole.ThrowError("Invalid pick key in " + element + "!", e,
+                    contentPackage: element.ContentPackage);
             }
 
             SerializableProperties = SerializableProperty.DeserializeProperties(this, element);
@@ -303,11 +331,12 @@ namespace Barotrauma.Items.Components
                 var component = item.Components.Find(ic => ic.Name.Equals(inheritRequiredSkillsFrom, StringComparison.OrdinalIgnoreCase));
                 if (component == null)
                 {
-                    DebugConsole.ThrowError($"Error in item \"{item.Name}\" - component \"{name}\" is set to inherit its required skills from \"{inheritRequiredSkillsFrom}\", but a component of that type couldn't be found.");
+                    DebugConsole.ThrowError($"Error in item \"{item.Name}\" - component \"{name}\" is set to inherit its required skills from \"{inheritRequiredSkillsFrom}\", but a component of that type couldn't be found.",
+                        contentPackage: element.ContentPackage);
                 }
                 else
                 {
-                    requiredSkills = component.requiredSkills;
+                    RequiredSkills = component.RequiredSkills;
                 }
             }
 
@@ -318,7 +347,8 @@ namespace Barotrauma.Items.Components
                 var component = item.Components.Find(ic => ic.Name.Equals(inheritStatusEffectsFrom, StringComparison.OrdinalIgnoreCase));
                 if (component == null)
                 {
-                    DebugConsole.ThrowError($"Error in item \"{item.Name}\" - component \"{name}\" is set to inherit its StatusEffects from \"{inheritStatusEffectsFrom}\", but a component of that type couldn't be found.");
+                    DebugConsole.ThrowError($"Error in item \"{item.Name}\" - component \"{name}\" is set to inherit its StatusEffects from \"{inheritStatusEffectsFrom}\", but a component of that type couldn't be found.", 
+                        contentPackage: element.ContentPackage);
                 }
                 else if (component.statusEffectLists != null)
                 {
@@ -340,15 +370,10 @@ namespace Barotrauma.Items.Components
                 switch (subElement.Name.ToString().ToLowerInvariant())
                 {
                     case "activeconditional":
+                    case "isactiveconditional":
                     case "isactive":
-                        IsActiveConditionals = IsActiveConditionals ?? new List<PropertyConditional>();
-                        foreach (XAttribute attribute in subElement.Attributes())
-                        {
-                            if (PropertyConditional.IsValid(attribute))
-                            {
-                                IsActiveConditionals.Add(new PropertyConditional(attribute));
-                            }
-                        }
+                        IsActiveConditionals ??= new List<PropertyConditional>();
+                        IsActiveConditionals.AddRange(PropertyConditional.FromXElement(subElement));
                         break;
                     case "requireditem":
                     case "requireditems":
@@ -358,12 +383,13 @@ namespace Barotrauma.Items.Components
                     case "requiredskills":
                         if (subElement.GetAttribute("name") != null)
                         {
-                            DebugConsole.ThrowError("Error in item config \"" + item.ConfigFilePath + "\" - skill requirement in component " + GetType().ToString() + " should use a skill identifier instead of the name of the skill.");
+                            DebugConsole.ThrowError("Error in item config \"" + item.ConfigFilePath + "\" - skill requirement in component " + GetType().ToString() + " should use a skill identifier instead of the name of the skill.",
+                                contentPackage: element.ContentPackage);
                             continue;
                         }
 
                         Identifier skillIdentifier = subElement.GetAttributeIdentifier("identifier", "");
-                        requiredSkills.Add(new Skill(skillIdentifier, subElement.GetAttributeInt("level", 0)));
+                        RequiredSkills.Add(new Skill(skillIdentifier, subElement.GetAttributeInt("level", 0)));
                         break;
                     case "statuseffect":
                         statusEffectLists ??= new Dictionary<ActionType, List<StatusEffect>>();
@@ -375,8 +401,11 @@ namespace Barotrauma.Items.Components
                         if (ic == null) { break; }
 
                         ic.Parent = this;
-                        ic.IsActive = isActive;
-                        OnActiveStateChanged += ic.SetActiveState;
+                        if (ic.InheritParentIsActive)
+                        {
+                            ic.IsActive = isActive;
+                            OnActiveStateChanged += ic.SetActiveState;
+                        }
 
                         item.AddComponent(ic);
                         break;
@@ -385,7 +414,7 @@ namespace Barotrauma.Items.Components
 
             void LoadStatusEffect(ContentXElement subElement)
             {
-                var statusEffect = StatusEffect.Load(subElement, item.Name);
+                var statusEffect = StatusEffect.Load(subElement, item.Name + ", " + GetType().Name);
                 if (!statusEffectLists.TryGetValue(statusEffect.type, out List<StatusEffect> effectList))
                 {
                     effectList = new List<StatusEffect>();
@@ -415,16 +444,17 @@ namespace Barotrauma.Items.Components
                 }
                 else
                 {
-                    if (!requiredItems.ContainsKey(ri.Type))
+                    if (!RequiredItems.ContainsKey(ri.Type))
                     {
-                        requiredItems.Add(ri.Type, new List<RelatedItem>());
+                        RequiredItems.Add(ri.Type, new List<RelatedItem>());
                     }
-                    requiredItems[ri.Type].Add(ri);
+                    RequiredItems[ri.Type].Add(ri);
                 }
             }
             else if (!allowEmpty)
             {
-                DebugConsole.ThrowError("Error in item config \"" + item.ConfigFilePath + "\" - component " + GetType().ToString() + " requires an item with no identifiers.");
+                DebugConsole.ThrowError("Error in item config \"" + item.ConfigFilePath + "\" - component " + GetType().ToString() + " requires an item with no identifiers.", 
+                    contentPackage: element.ContentPackage);
             }
         }
 
@@ -494,7 +524,7 @@ namespace Barotrauma.Items.Components
                 case "trigger_in":
                     if (signal.value != "0")
                     {
-                        item.Use(1.0f, signal.sender);
+                        item.Use(1.0f, user: signal.sender);
                     }
                     break;
                 case "toggle":
@@ -531,7 +561,7 @@ namespace Barotrauma.Items.Components
                             }
                             item.ParentInventory.RemoveItem(item);
                         }
-                        Entity.Spawner.AddItemToRemoveQueue(item);
+                        RemoveItem(item);
                     }
                     else
                     {
@@ -547,11 +577,22 @@ namespace Barotrauma.Items.Components
                             }
                             this.Item.ParentInventory.RemoveItem(this.Item);
                         }
-                        Entity.Spawner.AddItemToRemoveQueue(this.Item);
+                        RemoveItem(this.Item);
                     }
                     else
                     {
                         this.Item.Condition += transferAmount;
+                    }
+                    static void RemoveItem(Item item)
+                    {
+                        if (Screen.Selected is { IsEditor: true })
+                        {
+                            item?.Remove();
+                        }
+                        else
+                        {
+                            Entity.Spawner?.AddItemToRemoveQueue(item);
+                        }
                     }
                 }
                 else
@@ -634,7 +675,7 @@ namespace Barotrauma.Items.Components
 
         public bool HasRequiredSkills(Character character, out Skill insufficientSkill)
         {
-            foreach (Skill skill in requiredSkills)
+            foreach (Skill skill in RequiredSkills)
             {
                 float characterLevel = character.GetSkillLevel(skill.Identifier);
                 if (characterLevel < skill.Level * GetSkillMultiplier())
@@ -655,7 +696,7 @@ namespace Barotrauma.Items.Components
         /// <returns>0.5f if all the skills meet the skill requirements exactly, 1.0f if they're way above and 0.0f if way less</returns>
         public float DegreeOfSuccess(Character character)
         {
-            return DegreeOfSuccess(character, requiredSkills);
+            return DegreeOfSuccess(character, RequiredSkills);
         }
 
         /// <summary>
@@ -690,16 +731,18 @@ namespace Barotrauma.Items.Components
         public virtual void FlipY(bool relativeToSub) { }
 
         /// <summary>
-        /// Shorthand for !HasRequiredContainedItems()
+        /// Returns true if the item is lacking required contained items, or if there's nothing with a non-zero condition inside.
         /// </summary>
-        public bool IsEmpty(Character user) => !HasRequiredContainedItems(user, addMessage: false);
+        public bool IsEmpty(Character user) => 
+            !HasRequiredContainedItems(user, addMessage: false) ||
+            (Item.OwnInventory != null && !Item.OwnInventory.AllItems.Any(i => i.Condition > 0));
 
         public bool HasRequiredContainedItems(Character user, bool addMessage, LocalizedString msg = null)
         {
-            if (!requiredItems.ContainsKey(RelatedItem.RelationType.Contained)) { return true; }
+            if (!RequiredItems.ContainsKey(RelatedItem.RelationType.Contained)) { return true; }
             if (item.OwnInventory == null) { return false; }
 
-            foreach (RelatedItem ri in requiredItems[RelatedItem.RelationType.Contained])
+            foreach (RelatedItem ri in RequiredItems[RelatedItem.RelationType.Contained])
             {
                 if (!ri.CheckRequirements(user, item))
                 {
@@ -724,8 +767,8 @@ namespace Barotrauma.Items.Components
         {
             if (character.IsBot && item.IgnoreByAI(character)) { return false; }
             if (!item.IsInteractable(character)) { return false; }
-            if (requiredItems.Count == 0) { return true; }
-            if (character.Inventory != null && requiredItems.TryGetValue(RelatedItem.RelationType.Picked, out List<RelatedItem> relatedItems))
+            if (RequiredItems.Count == 0) { return true; }
+            if (character.Inventory != null && RequiredItems.TryGetValue(RelatedItem.RelationType.Picked, out List<RelatedItem> relatedItems))
             {
                 foreach (RelatedItem relatedItem in relatedItems)
                 {
@@ -753,7 +796,7 @@ namespace Barotrauma.Items.Components
         /// </summary>
         private bool CheckIdCardAccess(RelatedItem relatedItem, IdCard idCard)
         {
-            if (item.Submarine != null)
+            if (item.Submarine != null && item.Submarine != GameMain.NetworkMember?.RespawnManager?.RespawnShuttle)
             {
                 //id cards don't work in enemy subs (except on items that only require the default "idcard" tag)
                 if (idCard.TeamID != CharacterTeamType.None && idCard.TeamID != item.Submarine.TeamID && relatedItem.Identifiers.Any(id => id != "idcard"))
@@ -770,13 +813,13 @@ namespace Barotrauma.Items.Components
 
         public virtual bool HasRequiredItems(Character character, bool addMessage, LocalizedString msg = null)
         {
-            if (requiredItems.None()) { return true; }
+            if (RequiredItems.None()) { return true; }
             if (character.Inventory == null) { return false; }
             bool hasRequiredItems = false;
             bool canContinue = true;
-            if (requiredItems.ContainsKey(RelatedItem.RelationType.Equipped))
+            if (RequiredItems.ContainsKey(RelatedItem.RelationType.Equipped))
             {
-                foreach (RelatedItem ri in requiredItems[RelatedItem.RelationType.Equipped])
+                foreach (RelatedItem ri in RequiredItems[RelatedItem.RelationType.Equipped])
                 {
                     canContinue = CheckItems(ri, character.HeldItems);
                     if (!canContinue) { break; }
@@ -784,9 +827,9 @@ namespace Barotrauma.Items.Components
             }
             if (canContinue)
             {
-                if (requiredItems.ContainsKey(RelatedItem.RelationType.Picked))
+                if (RequiredItems.ContainsKey(RelatedItem.RelationType.Picked))
                 {
-                    foreach (RelatedItem ri in requiredItems[RelatedItem.RelationType.Picked])
+                    foreach (RelatedItem ri in RequiredItems[RelatedItem.RelationType.Picked])
                     {
                         if (!CheckItems(ri, character.Inventory.AllItems)) { break; }
                     }
@@ -898,14 +941,16 @@ namespace Barotrauma.Items.Components
 #endif
         }
 
-        public virtual void Load(ContentXElement componentElement, bool usePrefabValues, IdRemap idRemap)
+        public virtual void Load(ContentXElement componentElement, bool usePrefabValues, IdRemap idRemap, bool isItemSwap)
         {
             if (componentElement != null) 
             { 
                 foreach (XAttribute attribute in componentElement.Attributes())
                 {
                     if (!SerializableProperties.TryGetValue(attribute.NameAsIdentifier(), out SerializableProperty property)) { continue; }
-                    if (property.OverridePrefabValues || !usePrefabValues)
+                    if (property.OverridePrefabValues || 
+                        !usePrefabValues || 
+                        (isItemSwap && property.GetAttribute<Editable>() is { TransferToSwappedItem: true }))
                     {
                         property.TrySetValue(this, attribute.Value);
                     }
@@ -913,7 +958,16 @@ namespace Barotrauma.Items.Components
                 ParseMsg();
                 OverrideRequiredItems(componentElement);
             }
-
+#if CLIENT
+            if (GuiFrame != null)
+            {
+                GuiFrame.RectTransform.ScreenSpaceOffset = GuiFrameOffset;
+                if (guiFrameDragHandle != null)
+                { 
+                    guiFrameDragHandle.Enabled = !LockGuiFramePosition;
+                }
+            }
+#endif
             if (item.Submarine != null) { SerializableProperty.UpgradeGameVersion(this, originalElement, item.Submarine.Info.GameVersion); }
         }
 
@@ -929,6 +983,11 @@ namespace Barotrauma.Items.Components
 
         public virtual void OnScaleChanged() { }
 
+        /// <summary>
+        /// Called when the item has an ItemContainer and the contents inside of it changed.
+        /// </summary>
+        public virtual void OnInventoryChanged() { }
+
         public static ItemComponent Load(ContentXElement element, Item item, bool errorMessages = true)
         {
             Type type;
@@ -941,7 +1000,8 @@ namespace Barotrauma.Items.Components
                 {
                     if (errorMessages)
                     {
-                        DebugConsole.ThrowError($"Could not find the component \"{typeName}\" ({item.Prefab.ContentFile.Path})");
+                        DebugConsole.ThrowError($"Could not find the component \"{typeName}\" ({item.Prefab.ContentFile.Path})", 
+                            contentPackage: element.ContentPackage);
                     }
                     return null;
                 }
@@ -950,7 +1010,8 @@ namespace Barotrauma.Items.Components
             {
                 if (errorMessages)
                 {
-                    DebugConsole.ThrowError($"Could not find the component \"{typeName}\" ({item.Prefab.ContentFile.Path})", e);
+                    DebugConsole.ThrowError($"Could not find the component \"{typeName}\" ({item.Prefab.ContentFile.Path})", e,
+                        contentPackage: element.ContentPackage);
                 }
                 return null;
             }
@@ -963,14 +1024,16 @@ namespace Barotrauma.Items.Components
                 if (constructor == null)
                 {
                     DebugConsole.ThrowError(
-                        $"Could not find the constructor of the component \"{typeName}\" ({item.Prefab.ContentFile.Path})");
+                        $"Could not find the constructor of the component \"{typeName}\" ({item.Prefab.ContentFile.Path})", 
+                        contentPackage: element.ContentPackage);
                     return null;
                 }
             }
             catch (Exception e)
             {
                 DebugConsole.ThrowError(
-                    $"Could not find the constructor of the component \"{typeName}\" ({item.Prefab.ContentFile.Path})", e);
+                    $"Could not find the constructor of the component \"{typeName}\" ({item.Prefab.ContentFile.Path})", e,
+                    contentPackage: element.ContentPackage);
                 return null;
             }
             ItemComponent ic = null;
@@ -983,7 +1046,7 @@ namespace Barotrauma.Items.Components
             }
             catch (TargetInvocationException e)
             {
-                DebugConsole.ThrowError($"Error while loading component of the type {type}.", e.InnerException);
+                DebugConsole.ThrowError($"Error while loading component of the type {type}.", e.InnerException, contentPackage: element.ContentPackage);
                 GameAnalyticsManager.AddErrorEventOnce(
                     $"ItemComponent.Load:TargetInvocationException{item.Name}{element.Name}",
                     GameAnalyticsManager.ErrorSeverity.Error,
@@ -997,7 +1060,7 @@ namespace Barotrauma.Items.Components
         {
             XElement componentElement = new XElement(name);
 
-            foreach (var kvp in requiredItems)
+            foreach (var kvp in RequiredItems)
             {
                 foreach (RelatedItem ri in kvp.Value)
                 {
@@ -1030,8 +1093,8 @@ namespace Barotrauma.Items.Components
 
         private void OverrideRequiredItems(ContentXElement element)
         {
-            var prevRequiredItems = new Dictionary<RelatedItem.RelationType, List<RelatedItem>>(requiredItems);
-            requiredItems.Clear();
+            var prevRequiredItems = new Dictionary<RelatedItem.RelationType, List<RelatedItem>>(RequiredItems);
+            RequiredItems.Clear();
 
             bool returnEmptyRequirements = false;
 #if CLIENT
@@ -1056,11 +1119,11 @@ namespace Barotrauma.Items.Components
                             newRequiredItem.IgnoreInEditor = prevRequiredItem.IgnoreInEditor;
                         }
 
-                        if (!requiredItems.ContainsKey(newRequiredItem.Type))
+                        if (!RequiredItems.ContainsKey(newRequiredItem.Type))
                         {
-                            requiredItems[newRequiredItem.Type] = new List<RelatedItem>();
+                            RequiredItems[newRequiredItem.Type] = new List<RelatedItem>();
                         }
-                        requiredItems[newRequiredItem.Type].Add(newRequiredItem);
+                        RequiredItems[newRequiredItem.Type].Add(newRequiredItem);
                         break;
                 }
             }

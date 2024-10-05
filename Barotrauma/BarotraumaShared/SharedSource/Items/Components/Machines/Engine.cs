@@ -6,7 +6,7 @@ using Barotrauma.Networking;
 
 namespace Barotrauma.Items.Components
 {
-    partial class Engine : Powered, IServerSerializable, IClientSerializable
+    partial class Engine : Powered, IServerSerializable, IClientSerializable, IDeteriorateUnderStress
     {
         private float force;
 
@@ -23,6 +23,14 @@ namespace Barotrauma.Items.Components
         /// depending on the amount of power, the condition of the engine or boosts from talents)
         /// </summary>
         private float targetForce;
+
+        /// <summary>
+        /// Power demand of a marine engine is proportional with the cube of the square root of the thrusting force.
+        /// In practice meaning lower thrust is more effective at conserving power than it would be if the relationship between thrust and power consumption was linear.
+        /// Reverse exponent defined for use with overvoltage calculation: Supplying 2x power will result in 59% more force, 26% more speed, therefore 2x power.
+        /// </summary>
+        private const float ForceToPowerExponent = 3f / 2f;
+        private const float PowerToForceExponent = 1.0f / ForceToPowerExponent;
 
         private float maxForce;
         
@@ -68,10 +76,7 @@ namespace Barotrauma.Items.Components
             set { force = MathHelper.Clamp(value, -100.0f, 100.0f); }
         }
 
-        public float CurrentVolume
-        {
-            get { return Math.Abs((force / 100.0f) * (MinVoltage <= 0.0f ? 1.0f : Math.Min(prevVoltage, 1.0f))); }
-        }
+        public float CurrentVolume => CurrentStress;
 
         public float CurrentBrokenVolume
         {
@@ -82,6 +87,8 @@ namespace Barotrauma.Items.Components
             }
         }
 
+        public float CurrentStress => Math.Abs((force / 100.0f) * (MinVoltage <= 0.0f ? 1.0f : Math.Min(prevVoltage, 1.0f)));
+    
         private const float TinkeringForceIncrease = 1.5f;
 
         public Engine(Item item, ContentXElement element)
@@ -130,7 +137,7 @@ namespace Barotrauma.Items.Components
             if (Math.Abs(Force) > 1.0f)
             {
                 float voltageFactor = MinVoltage <= 0.0f ? 1.0f : Math.Min(Voltage, MaxOverVoltageFactor);
-                float currForce = force * voltageFactor;
+                float currForce = force * MathF.Pow(voltageFactor, PowerToForceExponent);
                 float condition = item.MaxCondition <= 0.0f ? 0.0f : item.Condition / item.MaxCondition;
                 // Broken engine makes more noise.
                 float noise = Math.Abs(currForce) * MathHelper.Lerp(1.5f, 1f, condition);
@@ -141,13 +148,13 @@ namespace Barotrauma.Items.Components
                 {
                     forceMultiplier *= MathHelper.Lerp(0.5f, 2.0f, (float)Math.Sqrt(User.GetSkillLevel("helm") / 100));
                 }
-                currForce *= item.StatManager.GetAdjustedValue(ItemTalentStats.EngineMaxSpeed, MaxForce) * forceMultiplier;
+                currForce *= item.StatManager.GetAdjustedValueMultiplicative(ItemTalentStats.EngineMaxSpeed, MaxForce) * forceMultiplier;
                 if (item.GetComponent<Repairable>() is { IsTinkering: true } repairable)
                 {
                     currForce *= 1f + repairable.TinkeringStrength * TinkeringForceIncrease;
                 }
 
-                currForce = item.StatManager.GetAdjustedValue(ItemTalentStats.EngineSpeed, currForce);
+                currForce = item.StatManager.GetAdjustedValueMultiplicative(ItemTalentStats.EngineSpeed, currForce);
 
                 //less effective when in a bad condition
                 currForce *= MathHelper.Lerp(0.5f, 2.0f, condition);
@@ -180,7 +187,7 @@ namespace Barotrauma.Items.Components
                 return 0;
             }
 
-            currPowerConsumption = Math.Abs(targetForce) / 100.0f * powerConsumption;
+            currPowerConsumption = MathF.Pow(Math.Abs(targetForce) / 100.0f, ForceToPowerExponent) * powerConsumption;
             //engines consume more power when in a bad condition
             item.GetComponent<Repairable>()?.AdjustPowerConsumption(ref currPowerConsumption);
             return currPowerConsumption;

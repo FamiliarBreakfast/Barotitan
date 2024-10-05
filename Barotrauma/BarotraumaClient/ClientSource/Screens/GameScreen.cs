@@ -1,4 +1,4 @@
-using Barotrauma.Extensions;
+﻿using Barotrauma.Extensions;
 using Barotrauma.Lights;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
@@ -178,10 +178,15 @@ namespace Barotrauma
             Stopwatch sw = new Stopwatch();
             sw.Start();
 
-            GameMain.LightManager.ObstructVision = 
-                Character.Controlled != null && 
-                Character.Controlled.ObstructVision && 
-                (Character.Controlled.ViewTarget == Character.Controlled || Character.Controlled.ViewTarget == null);
+            if (Character.Controlled != null && 
+                (Character.Controlled.ViewTarget == Character.Controlled || Character.Controlled.ViewTarget == null))
+            {
+                GameMain.LightManager.ObstructVisionAmount = Character.Controlled.ObstructVisionAmount;
+            }
+            else
+            {
+                GameMain.LightManager.ObstructVisionAmount = 0.0f;
+            }
 
             GameMain.LightManager.UpdateObstructVision(graphics, spriteBatch, cam, Character.Controlled?.CursorWorldPosition ?? Vector2.Zero);
 
@@ -259,8 +264,8 @@ namespace Barotrauma
 
             graphics.BlendState = BlendState.NonPremultiplied;
             graphics.SamplerStates[0] = SamplerState.LinearWrap;
-            Quad.UseBasicEffect(renderTargetBackground);
-            Quad.Render();
+            GraphicsQuad.UseBasicEffect(renderTargetBackground);
+            GraphicsQuad.Render();
 
             //Draw the rest of the structures, characters and front structures
             spriteBatch.Begin(SpriteSortMode.BackToFront, BlendState.NonPremultiplied, null, DepthStencilState.None, null, null, cam.Transform);
@@ -313,8 +318,8 @@ namespace Barotrauma
 
             graphics.BlendState = BlendState.Opaque;
             graphics.SamplerStates[0] = SamplerState.LinearWrap;
-            Quad.UseBasicEffect(renderTarget);
-            Quad.Render();
+            GraphicsQuad.UseBasicEffect(renderTarget);
+            GraphicsQuad.Render();
 
             //draw alpha blended particles that are inside a sub
             spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.NonPremultiplied, null, DepthStencilState.DepthRead, null, null, cam.Transform);
@@ -380,8 +385,8 @@ namespace Barotrauma
                 graphics.DepthStencilState = DepthStencilState.None;
                 graphics.SamplerStates[0] = SamplerState.LinearWrap;
                 graphics.BlendState = CustomBlendStates.Multiplicative;
-                Quad.UseBasicEffect(GameMain.LightManager.LightMap);
-                Quad.Render();
+                GraphicsQuad.UseBasicEffect(GameMain.LightManager.LightMap);
+                GraphicsQuad.Render();
             }
 
 			spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.NonPremultiplied, SamplerState.LinearWrap, DepthStencilState.None, null, null, cam.Transform);
@@ -390,10 +395,12 @@ namespace Barotrauma
                 c.DrawFront(spriteBatch, cam);
             }
 
+            GameMain.LightManager.DebugDrawVertices(spriteBatch);
+
             Level.Loaded?.DrawDebugOverlay(spriteBatch, cam);            
             if (GameMain.DebugDraw)
             {
-                MapEntity.mapEntityList.ForEach(me => me.AiTarget?.Draw(spriteBatch));
+                MapEntity.MapEntityList.ForEach(me => me.AiTarget?.Draw(spriteBatch));
                 Character.CharacterList.ForEach(c => c.AiTarget?.Draw(spriteBatch));
                 if (GameMain.GameSession?.EventManager != null)
                 {
@@ -438,7 +445,7 @@ namespace Barotrauma
                 graphics.SamplerStates[0] = SamplerState.PointClamp;
                 graphics.SamplerStates[1] = SamplerState.PointClamp;
                 GameMain.LightManager.LosEffect.CurrentTechnique.Passes[0].Apply();
-                Quad.Render();
+                GraphicsQuad.Render();
                 graphics.SamplerStates[0] = SamplerState.LinearWrap;
                 graphics.SamplerStates[1] = SamplerState.LinearWrap;
             }
@@ -506,7 +513,7 @@ namespace Barotrauma
             graphics.DepthStencilState = DepthStencilState.None;
             if (string.IsNullOrEmpty(postProcessTechnique))
             {
-                Quad.UseBasicEffect(renderTargetFinal);
+                GraphicsQuad.UseBasicEffect(renderTargetFinal);
             }
             else
             {
@@ -515,7 +522,9 @@ namespace Barotrauma
                 PostProcessEffect.CurrentTechnique = PostProcessEffect.Techniques[postProcessTechnique];
                 PostProcessEffect.CurrentTechnique.Passes[0].Apply();
             }
-            Quad.Render();
+            GraphicsQuad.Render();
+
+            Character.DrawSpeechBubbles(spriteBatch, cam);
 
             if (fadeToBlackState > 0.0f)
             {

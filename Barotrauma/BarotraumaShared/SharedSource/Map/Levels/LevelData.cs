@@ -43,6 +43,10 @@ namespace Barotrauma
 
         public OutpostGenerationParams ForceOutpostGenerationParams;
 
+        public SubmarineInfo ForceBeaconStation;
+
+        public SubmarineInfo ForceWreck;
+
         public bool AllowInvalidOutpost;
 
         public readonly Point Size;
@@ -95,6 +99,11 @@ namespace Barotrauma
                 return Math.Max(Size.Y * Physics.DisplayToRealWorldRatio, Level.DefaultRealWorldCrushDepth);
             }
         }
+        
+        /// <summary>
+        /// Inclusive (matching the min an max values is accepted).
+        /// </summary>
+        public bool IsAllowedDifficulty(float minDifficulty, float maxDifficulty) => Difficulty >= minDifficulty && Difficulty <= maxDifficulty;
 
         public LevelData(string seed, float difficulty, float sizeFactor, LevelGenerationParams generationParams, Biome biome)
         {
@@ -241,7 +250,7 @@ namespace Barotrauma
         /// </summary>
         public LevelData(Location location, Map map, float difficulty)
         {
-            Seed = location.BaseName + map.Locations.IndexOf(location);
+            Seed = location.NameIdentifier.Value + map.Locations.IndexOf(location);
             Biome = location.Biome;
             Type = LevelType.Outpost;
             Difficulty = difficulty;
@@ -365,7 +374,7 @@ namespace Barotrauma
                 if (FinishedEvents.Any())
                 {
                     var finishedEventsElement = new XElement(nameof(FinishedEvents));
-                    foreach (var (set, count) in FinishedEvents.DistinctBy(f => f.Key.Identifier))
+                    foreach (var (set, count) in FinishedEvents)
                     {
                         var element = new XElement(nameof(FinishedEvents),
                             new XAttribute("set", set.Identifier),

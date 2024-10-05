@@ -409,7 +409,7 @@ namespace Barotrauma
         private List<DebugConsole.Command> luaAddedCommand = new List<DebugConsole.Command>();
         public IEnumerable<DebugConsole.Command> LuaAddedCommand { get { return luaAddedCommand; } }
 
-        public bool IsCustomCommandPermitted(string command)
+        public bool IsCustomCommandPermitted(Identifier command)
         {
             DebugConsole.Command[] permitted = new DebugConsole.Command[] 
             { 
@@ -420,7 +420,7 @@ namespace Barotrauma
 
             foreach (var consoleCommand in LuaAddedCommand.Concat(permitted.AsEnumerable())) 
             { 
-                if (consoleCommand.names.Contains(command))
+                if (consoleCommand.Names.Contains(command))
                 {
                     return true;
                 }
@@ -433,7 +433,7 @@ namespace Barotrauma
         {
             for (var i = 0; i < DebugConsole.Commands.Count; i++)
             {
-                foreach (var cmdname in DebugConsole.Commands[i].names)
+                foreach (var cmdname in DebugConsole.Commands[i].Names)
                 {
                     if (cmdname == name)
                     {
@@ -479,9 +479,9 @@ namespace Barotrauma
         }
 
 #if SERVER
-        public void LoadCampaign(string path)
+        public void LoadCampaign(string path, Client client = null)
         {
-            MultiPlayerCampaign.LoadCampaign(path);
+            MultiPlayerCampaign.LoadCampaign(path, client);
         }
 
         public static void SendMessage(string msg, ChatMessageType? messageType = null, Client sender = null, Character character = null)
@@ -489,9 +489,9 @@ namespace Barotrauma
             GameMain.Server.SendChatMessage(msg, messageType, sender, character);
         }
 
-        public static void SendTraitorMessage(Client client, string msg, Identifier missionid, TraitorMessageType type)
+        public static void SendTraitorMessage(WriteOnlyMessage message, Client client)
         {
-            GameMain.Server.SendTraitorMessage(client, msg, missionid, type);
+            GameMain.Server.SendTraitorMessage(message, client);
         }
 
         public static void SendDirectChatMessage(string sendername, string text, Character sender, ChatMessageType messageType = ChatMessageType.Private, Client client = null, string iconStyle = "")

@@ -152,6 +152,7 @@ namespace Barotrauma
         OnAllyGainMissionExperience,
         OnGainMissionExperience,
         OnGainMissionMoney,
+        OnCrewGainMissionReputation,
         OnLocationDiscovered,
         OnItemDeconstructed,
         OnItemDeconstructedByAlly,
@@ -159,11 +160,13 @@ namespace Barotrauma
         OnItemDeconstructedInventory,
         OnStopTinkering,
         OnItemPicked,
+        OnItemSelected,
         OnGeneticMaterialCombinedOrRefined,
         OnCrewGeneticMaterialCombinedOrRefined,
         AfterSubmarineAttacked,
         OnApplyTreatment,
         OnStatusEffectIdentifier,
+        OnRepairedOutsideLeak
     }
 
     /// <summary>
@@ -251,6 +254,11 @@ namespace Barotrauma
         SwimmingSpeed,
 
         /// <summary>
+        /// Increases the character's speed by a percentage when using an item that propels the character forwards (such as a diving scooter).
+        /// </summary>
+        PropulsionSpeed,
+
+        /// <summary>
         /// Decreases how long it takes for buffs applied to the character decay over time by a percentage.
         /// Buffs are afflictions that have isBuff set to true.
         /// </summary>
@@ -327,6 +335,11 @@ namespace Barotrauma
         /// Increases the repair speed of the character when repairing mechanical items by a percentage.
         /// </summary>
         MechanicalRepairSpeed,
+        
+        /// <summary>
+        /// Increases the repair speed of the character when repairing electrical items by a percentage.
+        /// </summary>
+        ElectricalRepairSpeed,
 
         /// <summary>
         /// Increase deconstruction speed of deconstructor operated by the character by a percentage.
@@ -550,7 +563,32 @@ namespace Barotrauma
         /// <summary>
         /// Can be used to prevent certain talents from being unlocked by specifying the talent's identifier via CharacterAbilityGivePermanentStat.
         /// </summary>
-        LockedTalents
+        LockedTalents,
+
+        /// <summary>
+        /// Used to reduce or increase the cost of hiring certain jobs by a percentage.
+        /// </summary>
+        HireCostMultiplier,
+
+        /// <summary>
+        /// Used to increase how much items can stack in the characters inventory.
+        /// </summary>
+        InventoryExtraStackSize,
+
+        /// <summary>
+        /// Modifies the range of the sounds emitted by the character (can be used to make the character easier or more difficult for monsters to hear)
+        /// </summary>
+        SoundRangeMultiplier,
+
+        /// <summary>
+        /// Modifies how far the character can be seen from (can be used to make the character easier or more difficult for monsters to see)
+        /// </summary>
+        SightRangeMultiplier,
+        
+        /// <summary>
+        /// Reduces the dual wielding penalty by a percentage.
+        /// </summary>
+        DualWieldingPenaltyReduction
     }
 
     internal enum ItemTalentStats
@@ -565,7 +603,8 @@ namespace Barotrauma
         ReactorMaxOutput,
         ReactorFuelConsumption,
         DeconstructorSpeed,
-        FabricationSpeed
+        FabricationSpeed,
+        ExtraStackSize
     }
 
     /// <summary>
@@ -649,18 +688,26 @@ namespace Barotrauma
         Both = Bot | Player
     }
 
-    public enum StartingBalanceAmount
+    public enum StartingBalanceAmountOption
     {
         Low,
         Medium,
         High,
     }
 
-    public enum GameDifficulty
+    public enum PatdownProbabilityOption
     {
-        Easy,
+        Off,
+        Low,
         Medium,
-        Hard,
+        High,
+    }
+
+    public enum WorldHostilityOption
+    {
+        Low,
+        Medium,
+        High,
         Hellish
     }
 
