@@ -31,6 +31,14 @@ namespace Barotrauma.Networking
         SomethingDifferent = 4
     }
 
+    public enum RespawnMode
+    {
+        MidRound,
+        BetweenRounds,
+        Permadeath,
+    }
+
+
     internal enum LootedMoneyDestination
     {
         Bank,
@@ -50,8 +58,6 @@ namespace Barotrauma.Networking
         public enum NetFlags : byte
         {
             None = 0x0,
-            Name = 0x1,
-            Message = 0x2,
             Properties = 0x4,
             Misc = 0x8,
             LevelSeed = 0x10,
@@ -322,24 +328,26 @@ namespace Barotrauma.Networking
             }
         }
 
-        private string serverName;
+        private string serverName = string.Empty;
+
+        [Serialize("", IsPropertySaveable.Yes)]
         public string ServerName
         {
             get { return serverName; }
             set
             {
-                string val = value;
-                if (val.Length > NetConfig.ServerNameMaxLength) { val = val.Substring(0, NetConfig.ServerNameMaxLength); }
-                if (serverName == val) { return; }
-                serverName = val;
+                string newName = value;
+                if (newName.Length > NetConfig.ServerNameMaxLength) { newName = newName.Substring(0, NetConfig.ServerNameMaxLength); }
+                if (serverName == newName) { return; }
+                if (newName.IsNullOrWhiteSpace()) { return; }
+                serverName = newName;
                 ServerDetailsChanged = true;
-#if SERVER
-                UpdateFlag(NetFlags.Name);
-#endif
             }
         }
 
         private string serverMessageText;
+
+        [Serialize("", IsPropertySaveable.Yes)]
         public string ServerMessageText
         {
             get { return serverMessageText; }
@@ -348,11 +356,17 @@ namespace Barotrauma.Networking
                 string val = value;
                 if (val.Length > NetConfig.ServerMessageMaxLength) { val = val.Substring(0, NetConfig.ServerMessageMaxLength); }
                 if (serverMessageText == val) { return; }
+#if SERVER
+                GameMain.Server?.SendChatMessage(TextManager.AddPunctuation(':', TextManager.Get("servermotd"), val).Value, ChatMessageType.Server);
+#elif CLIENT
+                if (GameMain.NetLobbyScreen.ServerMessageButton is { } serverMessageButton)
+                {
+                    serverMessageButton.Flash(GUIStyle.Green);
+                    serverMessageButton.Pulsate(Vector2.One, Vector2.One * 1.2f, 1.0f);
+                }
+#endif
                 serverMessageText = val;
                 ServerDetailsChanged = true;
-#if SERVER
-                UpdateFlag(NetFlags.Message);
-#endif
             }
         }
 
@@ -402,6 +416,13 @@ namespace Barotrauma.Networking
             set { tickRate = MathHelper.Clamp(value, 1, 60); }
         }
 
+        [Serialize(true, IsPropertySaveable.Yes, description: "Do clients need to be authenticated (e.g. based on Steam ID or an EGS ownership token). Can be disabled if you for example want to play the game in a local network without a connection to external services.")]
+        public bool RequireAuthentication
+        {
+            get;
+            set;
+        }
+
         [Serialize(true, IsPropertySaveable.Yes)]
         public bool RandomizeSeed
         {
@@ -437,11 +458,54 @@ namespace Barotrauma.Networking
             private set;
         }
 
-        [Serialize(50f, IsPropertySaveable.Yes)]
+        [Serialize(20f, IsPropertySaveable.Yes)]
         /// <summary>
         /// How much skills drop towards the job's default skill levels when dying
         /// </summary>
         public float SkillLossPercentageOnDeath
+        {
+            get;
+            private set;
+        }
+
+        [Serialize(10f, IsPropertySaveable.Yes)]
+        /// <summary>
+        /// How much more the skills drop towards the job's default skill levels
+        /// when dying, in addition to SkillLossPercentageOnDeath, if the player
+        /// chooses to respawn in the middle of the round
+        /// </summary>
+        public float SkillLossPercentageOnImmediateRespawn
+        {
+            get;
+            private set;
+        }
+        
+        [Serialize(100f, IsPropertySaveable.Yes)]
+        /// <summary>
+        /// Percentage modifier for the cost of hiring a new character to replace a permanently killed one.
+        /// </summary>
+        public float ReplaceCostPercentage
+        {
+            get;
+            private set;
+        }
+
+        [Serialize(true, IsPropertySaveable.Yes)]
+        /// <summary>
+        /// Are players allowed to take over bots when permadeath is enabled?
+        /// </summary>
+        public bool AllowBotTakeoverOnPermadeath
+        {
+            get;
+            private set;
+        }
+        
+        [Serialize(false, IsPropertySaveable.Yes)]
+        /// <summary>
+        /// This is an optional setting for permadeath mode. When it's enabled, a player client whose character dies cannot
+        /// respawn or get a new character in any way in that game (unlike in normal permadeath mode), and can only spectate.
+        /// </summary>
+        public bool IronmanMode
         {
             get;
             private set;
@@ -554,6 +618,7 @@ namespace Barotrauma.Networking
             }
         }
 
+        [Serialize(false, IsPropertySaveable.Yes)]
         public bool AutoRestart
         {
             get { return autoRestart; }
@@ -588,15 +653,17 @@ namespace Barotrauma.Networking
             get; set;
         }
 
-        private bool allowRespawn;
-        [Serialize(true, IsPropertySaveable.Yes)]
-        public bool AllowRespawn
+        private RespawnMode respawnMode;
+        [Serialize(RespawnMode.MidRound, IsPropertySaveable.Yes)]
+        public RespawnMode RespawnMode
         {
-            get { return allowRespawn; }
+            get { return respawnMode; }
             set
             {
-                if (allowRespawn == value) { return; }
-                allowRespawn = value;
+                if (respawnMode == value) { return; }
+                //can't change this when a round is running (but clients can, if the server says so, e.g. when a client joins and needs to know what it's set to despite a round being running)
+                if (GameMain.NetworkMember is { GameStarted: true, IsServer: true }) { return; }
+                respawnMode = value;
                 ServerDetailsChanged = true;
             }
         }
@@ -629,6 +696,7 @@ namespace Barotrauma.Networking
             set;
         }
 
+        [Serialize(0.0f, IsPropertySaveable.Yes)]
         public float SelectedLevelDifficulty
         {
             get { return selectedLevelDifficulty; }
@@ -672,6 +740,13 @@ namespace Barotrauma.Networking
 
         [Serialize(true, IsPropertySaveable.Yes)]
         public bool AllowFriendlyFire
+        {
+            get;
+            set;
+        }
+        
+        [Serialize(true, IsPropertySaveable.Yes)]
+        public bool AllowDragAndDropGive
         {
             get;
             set;
@@ -757,13 +832,18 @@ namespace Barotrauma.Networking
                 if (traitorDangerLevel == clampedValue) { return; }
                 traitorDangerLevel = clampedValue;
                 ServerDetailsChanged = true;
+#if CLIENT
+                GameMain.NetLobbyScreen?.SetTraitorDangerLevel(traitorDangerLevel);
+#endif
             }
         }
+
+        private int traitorsMinPlayerCount;
         [Serialize(defaultValue: 1, isSaveable: IsPropertySaveable.Yes)]
         public int TraitorsMinPlayerCount
         {
-            get;
-            set;
+            get { return traitorsMinPlayerCount; }
+            set { traitorsMinPlayerCount = MathHelper.Clamp(value, 1, NetConfig.MaxPlayers); }
         }
 
         [Serialize(defaultValue: 50.0f, isSaveable: IsPropertySaveable.Yes)]
@@ -838,9 +918,24 @@ namespace Barotrauma.Networking
             get;
             private set;
         }
-
+        
+        /// <summary>
+        /// The number of seconds a disconnected player's Character remains in the world until despawned (via "braindeath").
+        /// </summary>
         [Serialize(300.0f, IsPropertySaveable.Yes)]
         public float KillDisconnectedTime
+        {
+            get;
+            private set;
+        }
+        
+        /// <summary>
+        /// The number of seconds a disconnected player's Character remains in the world until despawned, in permadeath mode.
+        /// The Character is helpless and vulnerable, this should be short enough to avoid unintended permadeath, but
+        /// also long enough to discourage disconnecting just to avoid a potential incoming permadeath.
+        /// </summary>
+        [Serialize(10.0f, IsPropertySaveable.Yes)]
+        public float DespawnDisconnectedPermadeathTime
         {
             get;
             private set;
@@ -869,7 +964,11 @@ namespace Barotrauma.Networking
             {
                 karmaEnabled = value;
 #if CLIENT
-                if (karmaSettingsBlocker != null) { karmaSettingsBlocker.Visible = !karmaEnabled || karmaPresetDD.SelectedData as string != "custom"; }
+                if (karmaSettingsList != null)
+                {
+                    SetElementInteractability(karmaSettingsList.Content, !karmaEnabled || KarmaPreset != "custom");
+                }
+                karmaElements.ForEach(e => e.Visible = karmaEnabled);
 #endif
             }
         }
@@ -936,6 +1035,9 @@ namespace Barotrauma.Networking
 
         [Serialize(999999, IsPropertySaveable.Yes)]
         public int MaximumMoneyTransferRequest { get; set; }
+
+        [Serialize(0f, IsPropertySaveable.Yes)]
+        public float NewCampaignDefaultSalary { get; set; }
 
         public CampaignSettings CampaignSettings { get; set; } = CampaignSettings.Empty;
 
@@ -1039,8 +1141,9 @@ namespace Barotrauma.Networking
                 .OrderBy(k => CharacterPrefab.Prefabs[k].UintIdentifier)
                 .ToImmutableArray();
         
-        public void ReadMonsterEnabled(IReadMessage inc)
+        public bool ReadMonsterEnabled(IReadMessage inc)
         {
+            bool changed = false;
             InitMonstersEnabled();
             var monsterNames = ExtractAndSortKeys(MonsterEnabled);
             uint receivedMonsterCount = inc.ReadVariableUInt32();
@@ -1053,10 +1156,13 @@ namespace Barotrauma.Networking
             {
                 foreach (Identifier s in monsterNames)
                 {
+                    MonsterEnabled.TryGetValue(s, out bool prevEnabled);
                     MonsterEnabled[s] = inc.ReadBoolean();
+                    changed |= prevEnabled != MonsterEnabled[s];
                 }
             }
             inc.ReadPadBits();
+            return changed;
         }
 
         public void WriteMonsterEnabled(IWriteMessage msg, Dictionary<Identifier, bool> monsterEnabled = null)
@@ -1157,7 +1263,7 @@ namespace Barotrauma.Networking
             set("subselectionmode", SubSelectionMode);
             set("voicechatenabled", VoiceChatEnabled);
             set("allowspectating", AllowSpectating);
-            set("allowrespawn", AllowRespawn);
+            set("allowrespawn", RespawnMode is RespawnMode.MidRound or RespawnMode.BetweenRounds);
             set("traitors", TraitorProbability.ToString(CultureInfo.InvariantCulture));
             set("friendlyfireenabled", AllowFriendlyFire);
             set("karmaenabled", KarmaEnabled);

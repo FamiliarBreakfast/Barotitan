@@ -44,6 +44,13 @@ namespace Barotrauma
         /// </summary>
         public static IReadOnlyCollection<Item> CleanableItems => cleanableItems;
 
+        private static readonly HashSet<Item> deconstructItems = new HashSet<Item>();
+
+        /// <summary>
+        /// Items that have been marked for deconstruction
+        /// </summary>
+        public static HashSet<Item> DeconstructItems => deconstructItems;
+
         private static readonly List<Item> sonarVisibleItems = new List<Item>();
 
         /// <summary>
@@ -184,6 +191,11 @@ namespace Barotrauma
         private readonly bool[] hasStatusEffectsOfType = new bool[Enum.GetValues(typeof(ActionType)).Length];
         private readonly Dictionary<ActionType, List<StatusEffect>> statusEffectLists;
 
+        /// <summary>
+        /// Helper variable for handling max condition multipliers from campaign settings
+        /// </summary>
+        private readonly float conditionMultiplierCampaign = 1.0f;
+
         public Action OnInteract;
 
         public Dictionary<Identifier, SerializableProperty> SerializableProperties { get; protected set; }
@@ -219,6 +231,12 @@ namespace Barotrauma
         }
 
         public bool EditableWhenEquipped { get; set; } = false;
+
+        /// <summary>
+        /// Which character equipped this item? 
+        /// May not be the same character as the one who it's equipped on (you can e.g. equip diving masks on another character).
+        /// </summary>
+        public Character Equipper;
 
         //the inventory in which the item is contained in
         public Inventory ParentInventory
@@ -275,6 +293,11 @@ namespace Barotrauma
             }
         }
                 
+        /// <summary>
+        /// Note that this is not a <see cref="LocalizedString"/> instance, just the current name of the item as a string.
+        /// If you e.g. set this as the text in a textbox, it will not update automatically when the language is changed.
+        /// If you want that to happen, use <see cref="Prefab.Name"/> instead.
+        /// </summary>
         public override string Name
         {
             get { return base.Prefab.Name.Value; }
@@ -371,7 +394,7 @@ namespace Barotrauma
                 return true;
             }
 #endif
-            if (HiddenInGame) { return false; }
+            if (IsHidden) { return false; }
             if (character != null && character.IsOnPlayerTeam)
             {
                 return IsPlayerTeamInteractable;
@@ -558,11 +581,10 @@ namespace Barotrauma
 
         public Color? HighlightColor;
 
-        [Serialize("", IsPropertySaveable.Yes)]
-
         /// <summary>
         /// Can be used to modify the AITarget's label using status effects
         /// </summary>
+        [Serialize("", IsPropertySaveable.Yes)]
         public string SonarLabel
         {
             get { return AiTarget?.SonarLabel?.Value ?? ""; }
@@ -587,20 +609,20 @@ namespace Barotrauma
             }
         }
 
-        [Serialize(0.0f, IsPropertySaveable.No)]
         /// <summary>
         /// Can be used by status effects or conditionals to modify the sound range
         /// </summary>
+        [Serialize(0.0f, IsPropertySaveable.No)]
         public new float SoundRange
         {
             get { return aiTarget == null ? 0.0f : aiTarget.SoundRange; }
             set { if (aiTarget != null) { aiTarget.SoundRange = Math.Max(0.0f, value); } }
         }
 
-        [Serialize(0.0f, IsPropertySaveable.No)]
         /// <summary>
         /// Can be used by status effects or conditionals to modify the sight range
         /// </summary>
+        [Serialize(0.0f, IsPropertySaveable.No)]
         public new float SightRange
         {
             get { return aiTarget == null ? 0.0f : aiTarget.SightRange; }
@@ -631,6 +653,14 @@ namespace Barotrauma
             get; set;
         }
 
+        /// <summary>
+        /// Can be set by status effects to prevent bots from cleaning up the item
+        /// </summary>
+        public bool DontCleanUp
+        {
+            get; set;
+        }
+
         public Color Color
         {
             get { return spriteColor; }
@@ -639,6 +669,18 @@ namespace Barotrauma
         public bool IsFullCondition { get; private set; }
         public float MaxCondition { get; private set; }
         public float ConditionPercentage { get; private set; }
+
+        /// <summary>
+        /// Condition percentage disregarding MaxRepairConditionMultiplier (i.e. this can go above 100% if the item is repaired beyond the normal maximum)
+        /// </summary>
+        public float ConditionPercentageRelativeToDefaultMaxCondition
+        {
+            get
+            {
+                float defaultMaxCondition = MaxCondition / MaxRepairConditionMultiplier;
+                return MathUtils.Percentage(Condition, defaultMaxCondition);
+            }
+        }
 
         private float offsetOnSelectedMultiplier = 1.0f;
 
@@ -677,6 +719,9 @@ namespace Barotrauma
                 RecalculateConditionValues();
             }
         }
+
+        [Serialize(false, IsPropertySaveable.Yes)]
+        private bool HasBeenInstantiatedOnce { get; set; }
         
         //the default value should be Prefab.Health, but because we can't use it in the attribute, 
         //we'll just use NaN (which does nothing) and set the default value in the constructor/load
@@ -721,7 +766,16 @@ namespace Barotrauma
         [Editable, Serialize(false, isSaveable: IsPropertySaveable.Yes, "When enabled will prevent the item from taking damage from all sources")]
         public bool InvulnerableToDamage { get; set; }
 
+        /// <summary>
+        /// Was the item stolen during the current round. Note that it's possible for the items to be found in the player's inventory even though they weren't actually stolen.
+        /// For example, a guard can place handcuffs there. So use <see cref="Illegitimate"/> for checking if the item is illegitimately held.
+        /// </summary>
         public bool StolenDuringRound;
+        
+        /// <summary>
+        /// Item shouldn't be in the player's inventory. If the guards find it, they will consider it as a theft.
+        /// </summary>
+        public bool Illegitimate => !AllowStealing && SpawnedInCurrentOutpost;
 
         private bool spawnedInCurrentOutpost;
         public bool SpawnedInCurrentOutpost
@@ -1078,8 +1132,8 @@ namespace Barotrauma
                         string collisionCategoryStr = subElement.GetAttributeString("collisioncategory", null);
 
                         Category collisionCategory = Physics.CollisionItem;
-                        Category collidesWith = Physics.CollisionWall | Physics.CollisionLevel | Physics.CollisionPlatform;
-                        if ((Prefab.DamagedByProjectiles || Prefab.DamagedByMeleeWeapons) && Condition > 0)
+                        Category collidesWith = Physics.DefaultItemCollidesWith;
+                        if ((Prefab.DamagedByProjectiles || Prefab.DamagedByMeleeWeapons || Prefab.DamagedByRepairTools) && Condition > 0)
                         {
                             //force collision category to Character to allow projectiles and weapons to hit
                             //(we could also do this by making the projectiles and weapons hit CollisionItem
@@ -1267,6 +1321,27 @@ namespace Barotrauma
             GameMain.LuaCs.Hook.Call("item.created", this);
 
             ApplyStatusEffects(ActionType.OnSpawn, 1.0f);
+
+            // Set max condition multipliers from campaign settings for RecalculateConditionValues()
+            if (GameMain.GameSession?.Campaign is CampaignMode campaign)
+            {
+                if (HasTag(Barotrauma.Tags.OxygenSource))
+                {
+                    conditionMultiplierCampaign *= campaign.Settings.OxygenMultiplier;
+                }
+                if (HasTag(Barotrauma.Tags.Fuel))
+                {
+                    conditionMultiplierCampaign *= campaign.Settings.FuelMultiplier;
+                }
+            }
+            if (!HasBeenInstantiatedOnce)
+            {
+                // This only needs to be done on the very first instantiation.
+                // MaxCondition will be multiplied in RecalculateConditionValues(), ensuring
+                // that Condition will stay in line with the multiplier from then on.
+                condition *= conditionMultiplierCampaign;
+            }
+
             RecalculateConditionValues();
 
             if (callOnItemLoaded)
@@ -1276,6 +1351,7 @@ namespace Barotrauma
 #if CLIENT
             Submarine.ForceVisibilityRecheck();
 #endif
+            HasBeenInstantiatedOnce = true; // Enable executing certain things only once
         }
 
         partial void InitProjSpecific();
@@ -1314,17 +1390,17 @@ namespace Barotrauma
                 }
 
                 //clone requireditem identifiers
-                foreach (var kvp in components[i].requiredItems)
+                foreach (var kvp in components[i].RequiredItems)
                 {
                     for (int j = 0; j < kvp.Value.Count; j++)
                     {
-                        if (!clone.components[i].requiredItems.ContainsKey(kvp.Key) ||
-                            clone.components[i].requiredItems[kvp.Key].Count <= j)
+                        if (!clone.components[i].RequiredItems.ContainsKey(kvp.Key) ||
+                            clone.components[i].RequiredItems[kvp.Key].Count <= j)
                         {
                             continue;
                         }
 
-                        clone.components[i].requiredItems[kvp.Key][j].JoinedIdentifiers = 
+                        clone.components[i].RequiredItems[kvp.Key][j].JoinedIdentifiers = 
                             kvp.Value[j].JoinedIdentifiers;
                     }
                 }
@@ -1363,20 +1439,17 @@ namespace Barotrauma
                 }
             }
 
-            if (clonedContainedItems.Any())
+            for (int i = 0; i < components.Count && i < clone.components.Count; i++)
             {
-                for (int i = 0; i < components.Count && i < clone.components.Count; i++)
+                ItemComponent component = components[i],
+                              cloneComp = clone.components[i];
+
+                if (component is not CircuitBox origBox || cloneComp is not CircuitBox cloneBox)
                 {
-                    ItemComponent component = components[i],
-                                  cloneComp = clone.components[i];
-
-                    if (component is not CircuitBox origBox || cloneComp is not CircuitBox cloneBox)
-                    {
-                        continue;
-                    }
-
-                    cloneBox.CloneFrom(origBox, clonedContainedItems);
+                    continue;
                 }
+
+                cloneBox.CloneFrom(origBox, clonedContainedItems);
             }
 
             clone.FullyInitialized = true;
@@ -1795,6 +1868,12 @@ namespace Barotrauma
             if (tags.Contains(tag)) { return; }
             tags.Add(tag);
         }
+        
+        public void RemoveTag(Identifier tag)
+        {
+            if (!tags.Contains(tag)) { return; }
+            tags.Remove(tag);
+        }
 
         public bool HasTag(Identifier tag)
         {
@@ -1842,6 +1921,22 @@ namespace Barotrauma
 
         public bool ConditionalMatches(PropertyConditional conditional)
         {
+            return ConditionalMatches(conditional, checkContainer: true);
+        }
+
+        public bool ConditionalMatches(PropertyConditional conditional, bool checkContainer)
+        {
+            if (checkContainer)
+            {
+                if (conditional.TargetContainer)
+                {
+                    if (conditional.TargetGrandParent)
+                    {
+                        return container?.container != null && container.container.ConditionalMatches(conditional, checkContainer: false);
+                    }
+                    return container != null && container.ConditionalMatches(conditional, checkContainer: false);
+                }
+            }
             if (string.IsNullOrEmpty(conditional.TargetItemComponent))
             {
                 if (!conditional.Matches(this)) { return false; }
@@ -1857,13 +1952,16 @@ namespace Barotrauma
             return true;
         }
 
+        /// <summary>
+        /// Executes all StatusEffects of the specified type. Note that condition checks are ignored here: that should be handled by the code calling the method.
+        /// </summary>
         public void ApplyStatusEffects(ActionType type, float deltaTime, Character character = null, Limb limb = null, Entity useTarget = null, bool isNetworkEvent = false, Vector2? worldPosition = null)
         {
             if (!hasStatusEffectsOfType[(int)type]) { return; }
 
             foreach (StatusEffect effect in statusEffectLists[type])
             {
-                ApplyStatusEffect(effect, type, deltaTime, character, limb, useTarget, isNetworkEvent, false, worldPosition);
+                ApplyStatusEffect(effect, type, deltaTime, character, limb, useTarget, isNetworkEvent, checkCondition: false, worldPosition);
             }
         }
         
@@ -2102,7 +2200,7 @@ namespace Barotrauma
         /// </summary>
         public void RecalculateConditionValues()
         {
-            MaxCondition = Prefab.Health * healthMultiplier * maxRepairConditionMultiplier * (1.0f + GetQualityModifier(Items.Components.Quality.StatType.Condition));
+            MaxCondition = Prefab.Health * healthMultiplier * conditionMultiplierCampaign * maxRepairConditionMultiplier * (1.0f + GetQualityModifier(Items.Components.Quality.StatType.Condition));
             IsFullCondition = MathUtils.NearlyEqual(Condition, MaxCondition);
             ConditionPercentage = MathUtils.Percentage(Condition, MaxCondition);
         }
@@ -2161,7 +2259,7 @@ namespace Barotrauma
 
         public override void Update(float deltaTime, Camera cam)
         {
-            if (!isActive) { return; }
+            if (!isActive || IsLayerHidden) { return; }
 
             if (impactQueue != null)
             {
@@ -2196,7 +2294,9 @@ namespace Barotrauma
             {
                 ItemComponent ic = updateableComponents[i];
 
-                if (ic.IsActiveConditionals != null)
+                bool isParentInActive = ic.InheritParentIsActive && ic.Parent is { IsActive: false };
+
+                if (ic.IsActiveConditionals != null && !isParentInActive)
                 {
                     if (ic.IsActiveConditionalComparison == PropertyConditional.LogicalOperatorType.And)
                     {
@@ -2291,7 +2391,7 @@ namespace Barotrauma
             if (needsWaterCheck)
             {
                 bool wasInWater = inWater;
-                inWater = !inWaterProofContainer && IsInWater() && !WaterProof;
+                inWater = !inWaterProofContainer && IsInWater();
                 if (inWater)
                 {
                     //the item has gone through the surface of the water
@@ -2496,9 +2596,12 @@ namespace Barotrauma
             OnCollisionProjSpecific(impact);
             if (GameMain.NetworkMember is { IsClient: true }) { return; }
 
-            if (ImpactTolerance > 0.0f && condition > 0.0f && Math.Abs(impact) > ImpactTolerance)
+            if (ImpactTolerance > 0.0f && Math.Abs(impact) > ImpactTolerance && hasStatusEffectsOfType[(int)ActionType.OnImpact])
             {
-                ApplyStatusEffects(ActionType.OnImpact, 1.0f);
+                foreach (StatusEffect effect in statusEffectLists[ActionType.OnImpact])
+                {
+                    ApplyStatusEffect(effect, ActionType.OnImpact, deltaTime: 1.0f);
+                }
 #if SERVER
                 GameMain.Server?.CreateEntityEvent(this, new ApplyStatusEffectEventData(ActionType.OnImpact));
 #endif
@@ -2983,6 +3086,13 @@ namespace Barotrauma
                     if (ic.CanBeSelected && ic is not Door) { selected = true; }
                 }
             }
+            if (ParentInventory?.Owner == user && 
+                GetComponent<ItemContainer>() != null)
+            {
+                //can't select ItemContainers in the character's inventory
+                //(the inventory is drawn by hovering the cursor over the inventory slot, not as a hovering interface on the screen)
+                selected = false;
+            }
 
             if (!picked) { return false; }
 
@@ -3141,7 +3251,12 @@ namespace Barotrauma
             if (character.IsDead) { return; }
             if (!UseInHealthInterface) { return; }
 
-            GameAnalyticsManager.AddDesignEvent("ApplyTreatment:" + Prefab.Identifier);
+            if (Prefab.ContentPackage == ContentPackageManager.VanillaCorePackage &&
+                /* we don't need info of every item, we can get a good sample size just by logging 5% */
+                Rand.Range(0.0f, 1.0f) < 0.05f)
+            {
+                GameAnalyticsManager.AddDesignEvent("ApplyTreatment:" + Prefab.Identifier);
+            }
 #if CLIENT
             if (user == Character.Controlled)
             {
@@ -3371,6 +3486,30 @@ namespace Barotrauma
             }
         }
 
+
+        /// <summary>
+        /// Returns this item and all the other items in the stack (either in the same inventory slot, or the same dropped stack).
+        /// </summary>
+        /// <returns></returns>
+        public IEnumerable<Item> GetStackedItems()
+        {
+            yield return this;
+            foreach (var stackedItem in DroppedStack)
+            {
+                if (stackedItem == this) { continue; }
+                yield return stackedItem;
+            }
+            if (ParentInventory != null)
+            {
+                int slotIndex = ParentInventory.FindIndex(this);
+                foreach (var stackedItem in ParentInventory.GetItemsAt(slotIndex))
+                {
+                    if (stackedItem == this) { continue; }
+                    yield return stackedItem;
+                }
+            }
+        }
+
         public void Equip(Character character)
         {
             if (Removed)
@@ -3559,12 +3698,12 @@ namespace Barotrauma
                 }
 
                 bool canAccess = false;
-                if (Container?.GetComponent<CircuitBox>() != null &&
+                if (Container?.GetComponent<CircuitBox>() is { } cb &&
                     Container.CanClientAccess(sender))
                 {
                     //items inside circuit boxes are inaccessible by "normal" means,
                     //but the properties can still be edited through the circuit box UI
-                    canAccess = true;
+                    canAccess = !cb.Locked;
                 }
                 else
                 {
@@ -3826,7 +3965,8 @@ namespace Barotrauma
 
             //if we're overriding a non-overridden item in a sub/assembly xml or vice versa, 
             //use the values from the prefab instead of loading them from the sub/assembly xml
-            bool usePrefabValues = thisIsOverride != ItemPrefab.Prefabs.IsOverride(prefab) || appliedSwap != null;
+            bool isItemSwap = appliedSwap != null;
+            bool usePrefabValues = thisIsOverride != ItemPrefab.Prefabs.IsOverride(prefab) || isItemSwap;
             List<ItemComponent> unloadedComponents = new List<ItemComponent>(item.components);
             foreach (var subElement in element.Elements())
             {
@@ -3839,7 +3979,7 @@ namespace Barotrauma
                             int level = subElement.GetAttributeInt("level", 1);
                             if (upgradePrefab != null)
                             {
-                                item.AddUpgrade(new Upgrade(item, upgradePrefab, level, appliedSwap != null ? null : subElement));
+                                item.AddUpgrade(new Upgrade(item, upgradePrefab, level, isItemSwap ? null : subElement));
                             }
                             else
                             {
@@ -3857,13 +3997,13 @@ namespace Barotrauma
                         {
                             ItemComponent component = unloadedComponents.Find(x => x.Name == subElement.Name.ToString());
                             if (component == null) { continue; }
-                            component.Load(subElement, usePrefabValues, idRemap);
+                            component.Load(subElement, usePrefabValues, idRemap, isItemSwap);
                             unloadedComponents.Remove(component);
                             break;
                         }
                 }
             }
-            if (usePrefabValues && appliedSwap == null)
+            if (usePrefabValues && !isItemSwap)
             {
                 //use prefab scale when overriding a non-overridden item or vice versa
                 item.Scale = prefab.ConfigElement.GetAttributeFloat(item.scale, "scale", "Scale");
@@ -3880,6 +4020,8 @@ namespace Barotrauma
                     item.AvailableSwaps.Add(swapPrefab);
                 }
             }
+
+            if (element.GetAttributeBool("markedfordeconstruction", false)) { deconstructItems.Add(item); }
 
             float prevRotation = item.Rotation;
             if (element.GetAttributeBool("flippedx", false)) { item.FlipX(false); }
@@ -3994,7 +4136,8 @@ namespace Barotrauma
             element.Add(
                 new XAttribute("name", Prefab.OriginalName),
                 new XAttribute("identifier", Prefab.Identifier),
-                new XAttribute("ID", ID));
+                new XAttribute("ID", ID),
+                new XAttribute("markedfordeconstruction", deconstructItems.Contains(this)));
 
             if (PendingItemSwap != null)
             {
@@ -4202,6 +4345,7 @@ namespace Barotrauma
             repairableItems.Remove(this);
             sonarVisibleItems.Remove(this);
             cleanableItems.Remove(this);
+            deconstructItems.Remove(this);
             RemoveFromDroppedStack(allowClientExecute: true);
         }
 
