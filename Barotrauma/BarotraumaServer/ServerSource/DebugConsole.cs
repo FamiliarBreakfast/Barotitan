@@ -2725,7 +2725,24 @@ namespace Barotrauma
 
             commands.Add(new Command("fluids", "list create", (string[] args) =>
             {
-                NewMessage("Can't execute as server.", Color.Red);
+                if (args.Length == 0)
+                {
+                    NewMessage("Missing arguments. Expected at least 1 but got 0 (list)", Color.Red);
+                    return;
+                }
+
+                if (args[0].Equals("list", StringComparison.OrdinalIgnoreCase))
+                {
+                    foreach (Hull hull in Hull.HullList)
+                    {
+                        NewMessage($"Current Hull: {hull.ID.ToString()}, Hull Volume: {hull.Volume}", Color.Yellow);
+                        NewMessage($"Oxygen: Moles: {hull.oxygenVolume.Moles}, GasMoles: {hull.oxygenVolume.GasMoles}, Percentage: {hull.OxygenPercentage}, Temperature: {hull.oxygenVolume.Temperature}, Plasma: {hull.oxygenVolume.plasma}", Color.Blue);
+                        foreach (FluidVolume volume in hull.FluidVolumes)
+                        {
+                            NewMessage($"{volume._fluidPrefab.name}({volume._fluidPrefab.identifier}): Moles: {volume.Moles}, GasMoles: {volume.GasMoles}, Temperature: {volume.Temperature}, Plasma: {volume.plasma}", Color.White);
+                        }
+                    }
+                }
             }));
 
             AssignOnClientRequestExecute(
@@ -2739,24 +2756,21 @@ namespace Barotrauma
                 }
                 if (args[0].Equals("list", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (Convert.ToBoolean(args[1]))
-                    {
-                        NewMessage("not implemented", Color.Red);
-                    }
-                    else
-                    {
-                        //NewMessage($"Pressure: {senderClient.Character.CurrentHull.Pressure}, Oxygen: {senderClient.Character.CurrentHull.OxygenPercentage}, Water: {senderClient.Character.CurrentHull.WaterPercentage}, Temperature: {senderClient.Character.CurrentHull.Temperature}", Color.Yellow);
-                        foreach (FluidVolume volume in senderClient.Character.CurrentHull.FluidVolumes)
+                        //NewMessage($"Pressure: {senderClient.Character.CurrentHull.Pressure}, Oxygen: {senderClient.Character.CurrentHull.OxygenPercentage}, Water: {senderClient.Character.CurrentHull.WaterPercentage}, Temperature: {senderClient.Character.CurrentHull.Temperature}", Color.Yellow)
+                        Hull hull = senderClient.Character.CurrentHull;
+                        
+                        NewMessage($"Current Hull: {hull.ID.ToString()}, Hull Volume: {hull.Volume}", Color.Yellow);
+                        NewMessage($"Oxygen: Moles: {hull.oxygenVolume.Moles}, GasMoles: {hull.oxygenVolume.GasMoles}, Percentage: {hull.OxygenPercentage}, Temperature: {hull.oxygenVolume.Temperature}, Plasma: {hull.oxygenVolume.plasma}", Color.Blue);
+                        foreach (FluidVolume volume in hull.FluidVolumes)
                         {
-                            NewMessage($"Fluid: nil, Moles: {volume.Moles}, GasMoles: {volume.GasMoles}, Temperature: {volume.Temperature}, Plasma: {volume.plasma}", Color.Yellow); //todo: fix name
+                            NewMessage($"{volume._fluidPrefab.name}({volume._fluidPrefab.identifier}): Moles: {volume.Moles}, GasMoles: {volume.GasMoles}, Temperature: {volume.Temperature}, Plasma: {volume.plasma}", Color.White);
                         }
-                    }
                 }
                 else if (args[0].Equals("create", StringComparison.OrdinalIgnoreCase))
                 {
                     if (args.Length < 2)
                     {
-                        NewMessage("Missing arguments. Expected at least 2 but got 1 (create, fluid, hull[optional])", Color.Red);
+                        NewMessage("Missing arguments. Expected 2 but got 1 (create, fluid)", Color.Red);
                         return;
                     }
                     NewMessage("not implemented", Color.Red);

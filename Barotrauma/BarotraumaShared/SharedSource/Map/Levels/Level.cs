@@ -2261,7 +2261,7 @@ namespace Barotrauma
                     }
                 }
 
-                //cornerWaypoint[i, 1] = wayPoints[wayPoints.Count - 1];
+                cornerWaypoint[i, 1] = wayPoints[wayPoints.Count - 1];
                 // i dont know what this does but when i uncomment it the game crashes
             }
 

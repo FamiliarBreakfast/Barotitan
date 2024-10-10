@@ -8,6 +8,9 @@ internal class FluidPrefab : Prefab
 {
     public static readonly PrefabCollection<FluidPrefab> Prefabs = new PrefabCollection<FluidPrefab>();
 
+    public readonly string identifier;
+    public readonly string name;
+    
     //public readonly float MolarMass;
     //public readonly float MolarVolume;
     public readonly float CriticalTemperature;
@@ -22,6 +25,8 @@ internal class FluidPrefab : Prefab
     //private float _specificVolume; //m^3/kg
     public FluidPrefab(FluidsFile file, ContentXElement element) : base(file, element)
     {
+        identifier = element.GetAttributeString("identifier", "");
+        name = element.GetAttributeString("name", identifier);
         //MolarMass = element.GetAttributeFloat("molarMass", 18); //g/mol
         //MolarVolume = element.GetAttributeFloat("molarVolume", 0.0224f); //m^3/mol
         CriticalTemperature = element.GetAttributeFloat("criticalTemperature", 647); //Kelvins
@@ -41,23 +46,24 @@ internal class FluidPrefab : Prefab
 }
 internal class FluidVolume
 {
-    
-    private readonly FluidPrefab _fluidPrefab;
+    public readonly FluidPrefab _fluidPrefab;
 
     public float Moles;
     public float GasMoles;
     public float Temperature;
     //calculate pressure in hull.cs
-    //public bool plasma;
+    public bool plasma;
 
     private List<Solid> _solids = new List<Solid>();
     private const int MaximumSolidCount = 5;
 
     public FluidVolume(Hull hull, FluidPrefab fluidPrefab, float moles, float gasPercentage = 100)
     {
-        Moles = moles;
         _fluidPrefab = fluidPrefab;
+        
         GasMoles = moles * gasPercentage / 100;
+        Moles = moles - GasMoles;
+        
         Temperature = 293;
     }
     

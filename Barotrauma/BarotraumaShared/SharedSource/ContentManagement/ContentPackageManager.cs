@@ -301,9 +301,9 @@ namespace Barotrauma
                 foreach (string subDir in subDirs)
                 {
                     var fileListPath = Path.Combine(subDir, ContentPackage.FileListFileName).CleanUpPathCrossPlatform();
-                    #if SERVER
+                    // #if SERVER // always server?
                     var serverFileListPath = Path.Combine(subDir, "filelist.server.xml").CleanUpPathCrossPlatform();
-                    #endif
+                    // #endif
                     if (this.Any(p => p.Path.Equals(fileListPath, StringComparison.OrdinalIgnoreCase))) { continue; }
 
                     if (!File.Exists(fileListPath)) { continue; }
@@ -329,13 +329,18 @@ namespace Barotrauma
                     }
 
                     Debug.WriteLine($"Loaded \"{newPackage.Name}\"");
-                    #if SERVER
+                    // #if SERVER
+                    if (this.Any(p => p.Path.Equals(serverFileListPath, StringComparison.OrdinalIgnoreCase))) { continue; }
+
+                    if (!File.Exists(serverFileListPath)) { continue; }
+                    if (skipPredicate?.Invoke(serverFileListPath) is true) { continue; }
+
                     result = ContentPackage.TryLoad(serverFileListPath);
                     if (!result.TryUnwrapSuccess(out newPackage))
                     {
                         onLoadFail?.Invoke(
-                            fileListPath,
-                            result.TryUnwrapFailure(out var exception) ? exception : throw new Exception("unreachable"));
+                            serverFileListPath,
+                            result.TryUnwrapFailure(out var exception) ? exception : throw new UnreachableCodeException());
                         continue;
                     }
                     
@@ -350,7 +355,7 @@ namespace Barotrauma
                     }
 
                     Debug.WriteLine($"Loaded \"{newPackage.Name}\"");
-#endif
+// #endif
                 }
             }
 
@@ -532,7 +537,7 @@ namespace Barotrauma
             #warning TODO: implement Workshop updates for servers at some point
 #endif
 
-            var contentPackagesElement = XMLExtensions.TryLoadXml(GameSettings.PlayerConfigPath)?.Root
+            var contentPackagesElement = XMLExtensions.TryLoadXml(GameSettings.PlayerConfigPath)?.Root //todo:force enable server packages
                 ?.GetChildElement("ContentPackages");
             if (contentPackagesElement != null)
             {

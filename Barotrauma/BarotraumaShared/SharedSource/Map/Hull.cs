@@ -116,7 +116,6 @@ namespace Barotrauma
     {
         public readonly static List<Hull> HullList = new List<Hull>();
         public readonly static List<EntityGrid> EntityGrids = new List<EntityGrid>();
-        public readonly static List<FluidVolume> FluidList = new List<FluidVolume>();
 
         public static bool ShowHulls = true;
 
@@ -164,7 +163,7 @@ namespace Barotrauma
 
         private float oxygen;
         [NonSerialized()] //must be seperate variables else bt shits itself
-        private FluidVolume oxygenVolume;
+        internal FluidVolume oxygenVolume;
 
         private bool update;
 
@@ -329,7 +328,7 @@ namespace Barotrauma
             set
             {
                 if (!MathUtils.IsValid(value)) return;
-                if (oxygenVolume != null) oxygenVolume.GasMoles = MathHelper.Clamp(value, 0.0f, oxygenVolume.GasMoles);
+                if (oxygenVolume != null) oxygenVolume.GasMoles = MathHelper.Max(value, 0.0f);
             }
         }
 
@@ -394,10 +393,11 @@ namespace Barotrauma
             //get { return pressure; }
             get
             {
-                float n = FluidList.Sum(fluidvolume => fluidvolume.Moles);
+                float n = FluidVolumes.Sum(fluidvolume => fluidvolume.Moles);
 
                 float p = n*8.314f*temperature/Volume; //ideal gas law //todo: volume should be the volume of the hull minus the volume of the fluids
                 return p; //todo: add water pressure
+                //todo add air pressure
             }
             set { pressure = value; }
         }
@@ -526,9 +526,11 @@ namespace Barotrauma
             {
                 if (fluidPrefab.Identifier == "oxygen")
                 {
-                    oxygenVolume = new FluidVolume(this, fluidPrefab, Volume, Volume);
+                    oxygenVolume = new FluidVolume(this, fluidPrefab, Volume, 100);
+                    DebugConsole.NewMessage("Created oxygen volume (" + fluidPrefab.Identifier + ") in hull (" + ID + ")");
+                    break;
                 }
-                FluidList.Add(new FluidVolume(this, fluidPrefab, 0, Volume));
+                FluidVolumes.Add(new FluidVolume(this, fluidPrefab, 0, 0));
                 DebugConsole.NewMessage("Created fluid volume (" + fluidPrefab.Identifier + ") in hull (" + ID + ")");
             }
             

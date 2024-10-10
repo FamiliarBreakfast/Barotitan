@@ -201,7 +201,7 @@ namespace Barotrauma
             WriteOnlyMessage msg = new WriteOnlyMessage();
             
             msg.WriteUInt16(ID); //hull id
-            msg.WriteDouble(); //temperature
+            //msg.WriteDouble(); //temperature
             msg.WriteInt32(FluidVolumes.Count); //fluid count
             
             //pseudo-code
