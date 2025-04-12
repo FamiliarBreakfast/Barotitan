@@ -8,6 +8,8 @@
     meltingPoint="273.15" in kelvins
     boilingPoint="373.15" in kelvins
     latentHeat="2264.705" latent heat of vaporization in joules/grams
+    specificHeat="4.186" in joules/grams/kelvin
+    molarMass="18" in grams/mole
     color="#0000FF50"
   />
   -->
@@ -19,6 +21,8 @@
     meltingPoint="54.36"
     boilingPoint="90.18"
     latentHeat="213"
+    specificHeat="0.918"
+    molarMass="32"
     color="#00001950"
   />
   <Fluid 
@@ -28,6 +32,8 @@
     meltingPoint="273.15"
     boilingPoint="373.15"
     latentHeat="2264.705"
+    specificHeat="4.186"
+    molarMass="18"
     color="#0000FF50"
   />
   <!-- The rest are optional -->
@@ -38,6 +44,8 @@
     meltingPoint="90.7"
     boilingPoint="111.7"
     latentHeat="511"
+    specificHeat="2.2"
+    molarMass="16"
     color="#00FF19FF"
   />
   <Fluid
@@ -47,6 +55,8 @@
     meltingPoint="216.6"
     boilingPoint="194.7"
     latentHeat="574"
+    specificHeat="0.846"
+    molarMass="44"
     color="#14141450"
   />
   <Fluid
@@ -56,6 +66,8 @@
     meltingPoint="273.15"
     boilingPoint="353.15"
     latentHeat="2000"
+    specificHeat="3.5"
+    molarMass="65"
     color="#FF0F0FFF"
   />
 </Fluids>

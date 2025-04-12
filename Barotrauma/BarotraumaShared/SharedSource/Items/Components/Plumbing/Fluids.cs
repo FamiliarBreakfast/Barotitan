@@ -17,8 +17,10 @@ internal class FluidPrefab : Prefab
     public readonly float CriticalPressure;
     public readonly float LatentHeat;
     public readonly float BoilingTemperature;
+    public readonly float MolarMass; //g/mol
+    public readonly float SpecificHeat;
     
-    const int GasConstant = 8314; //J/(kmol*K)
+    const double GasConstant = 8.314; //J/(kmol*K)
     const int StandardPressure = 100000; //Pascals
 
     //private float _enthalpy; //Joules
@@ -27,8 +29,8 @@ internal class FluidPrefab : Prefab
     {
         identifier = element.GetAttributeString("identifier", "");
         name = element.GetAttributeString("name", identifier);
-        //MolarMass = element.GetAttributeFloat("molarMass", 18); //g/mol
-        //MolarVolume = element.GetAttributeFloat("molarVolume", 0.0224f); //m^3/mol
+        MolarMass = element.GetAttributeFloat("molarMass", 18); //g/mol
+        SpecificHeat = element.GetAttributeFloat("specificHeat", (float)4.18); //J/(g*K)
         CriticalTemperature = element.GetAttributeFloat("criticalTemperature", 647); //Kelvins
         CriticalPressure = element.GetAttributeFloat("criticalPressure", 22064000); //Pascals
         LatentHeat = element.GetAttributeFloat("latentHeat", 2257); //Joules
@@ -37,20 +39,34 @@ internal class FluidPrefab : Prefab
         //_specificVolume = MolarVolume / MolarMass;
     }
     
-    public float BoilingPoint(float pressure)
+    public double BoilingPoint(double pressure)
     {
         //Clausius-Clapeyron equation
-        return (float)(1 / ((GasConstant / LatentHeat) * -Math.Log(pressure / StandardPressure) + 1 / BoilingTemperature));
+        return 1 / (((Math.Log(StandardPressure / pressure) * GasConstant) / LatentHeat) + (1 / BoilingTemperature));
+    }
+    
+    public double BoilingRate(double pressure, double temperature)
+    {
+        return ((temperature - BoilingPoint(pressure)) * 0.59) / LatentHeat; //returns grams/second
+        
+        //as density is not (yet) implemented, we assume one gram equals one mole
+        //this function is very janky and should be replaced with a proper implementation
+    }
+    
+    public double DeltaHeat(double pressure, double temperature, double mol)
+    {
+        return ((temperature - BoilingPoint(pressure)) * 0.59)/SpecificHeat*mol*MolarMass; //delta heat in joules over one second
     }
     public override void Dispose() { }
 }
 internal class FluidVolume
 {
     public readonly FluidPrefab _fluidPrefab;
+    public readonly Hull hull;
 
-    public float Moles;
-    public float GasMoles;
-    public float Temperature;
+    public double Moles;
+    public double GasMoles;
+    public double Temperature;
     //calculate pressure in hull.cs
     public bool plasma;
 
@@ -63,13 +79,28 @@ internal class FluidVolume
         
         GasMoles = moles * gasPercentage / 100;
         Moles = moles - GasMoles;
+        this.hull = hull;
         
         Temperature = 293;
     }
     
     public void Update(float deltaTime)
     {
+        double boilingRate = _fluidPrefab.BoilingRate(hull.Pressure, hull.Temperature)/_fluidPrefab.MolarMass;
+        if (boilingRate > 0 && Moles > 10)
+        {
+            GasMoles -= boilingRate * deltaTime;
+            Moles += boilingRate * deltaTime;
+            hull.Temperature -= (float)_fluidPrefab.DeltaHeat(hull.Pressure, hull.Temperature, boilingRate * deltaTime);
+        }
+        if (boilingRate < 0 && GasMoles > 0)
+        {
+            GasMoles += boilingRate * deltaTime;
+            Moles -= boilingRate * deltaTime;
+            hull.Temperature -= (float)_fluidPrefab.DeltaHeat(hull.Pressure, hull.Temperature, boilingRate * deltaTime);
+        }
         
+        //never do thermodynamics; you'll regret it
     }
 }
 

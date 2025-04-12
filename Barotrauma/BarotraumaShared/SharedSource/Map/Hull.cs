@@ -322,7 +322,7 @@ namespace Barotrauma
         {
             get
             {
-                if (oxygenVolume != null) return oxygenVolume.GasMoles;
+                if (oxygenVolume != null) return (float)oxygenVolume.GasMoles;
                 return 100000.0f;
             }
             set
@@ -393,11 +393,12 @@ namespace Barotrauma
             //get { return pressure; }
             get
             {
-                float n = FluidVolumes.Sum(fluidvolume => fluidvolume.Moles);
-
-                float p = n*8.314f*temperature/Volume; //ideal gas law //todo: volume should be the volume of the hull minus the volume of the fluids
-                return p; //todo: add water pressure
-                //todo add air pressure
+                // float n = FluidVolumes.Sum(fluidvolume => fluidvolume.Moles);
+                //
+                // float p = n*8.314f*temperature/Volume; //ideal gas law //todo: volume should be the volume of the hull minus the volume of the fluids
+                // return p; //todo: add water pressure
+                // //todo add air pressure
+                return 100000.0f;
             }
             set { pressure = value; }
         }
@@ -470,6 +471,8 @@ namespace Barotrauma
         public int FireCount => FireSources?.Count ?? 0;
 
         public BallastFloraBehavior BallastFlora { get; set; }
+        
+        public float Temperature { get; set; }
 
         public Hull(Rectangle rectangle)
             : this (rectangle, Submarine.MainSub)
@@ -533,6 +536,8 @@ namespace Barotrauma
                 FluidVolumes.Add(new FluidVolume(this, fluidPrefab, 0, 0));
                 DebugConsole.NewMessage("Created fluid volume (" + fluidPrefab.Identifier + ") in hull (" + ID + ")");
             }
+            
+            Temperature = 293;
             
             OxygenPercentage = 100.0f;
             
@@ -904,6 +909,12 @@ namespace Barotrauma
             UpdateProjSpecific(deltaTime, cam);
 
             Oxygen -= OxygenDeteriorationSpeed * deltaTime;
+
+            oxygenVolume.Update(deltaTime);
+            foreach (FluidVolume volume in FluidVolumes)
+            {
+                volume.Update(deltaTime);
+            }
             
             if (FakeFireSources.Count > 0)
             {
