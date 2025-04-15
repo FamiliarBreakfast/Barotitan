@@ -7,7 +7,9 @@
     density="1.000" in grams/milliliter at stp
     meltingPoint="273.15" in kelvins
     boilingPoint="373.15" in kelvins
-    latentHeat="2264.705" latent heat of vaporization in joules/grams
+    criticalTemperature="647" in kelvins
+    criticalPressure="22060000" in pascals
+    latentHeat="2264.705" latent heat of vaporization in joules/mole
     specificHeat="4.186" in joules/grams/kelvin
     molarMass="18" in grams/mole
     color="#0000FF50"
@@ -20,7 +22,9 @@
     density="1.429"
     meltingPoint="54.36"
     boilingPoint="90.18"
-    latentHeat="213"
+    criticalTemperature="154.58"
+    criticalPressure="5043000"
+    latentHeat="6816"
     specificHeat="0.918"
     molarMass="32"
     color="#00001950"
@@ -31,7 +35,9 @@
     density="1.000"
     meltingPoint="273.15"
     boilingPoint="373.15"
-    latentHeat="2264.705"
+    criticalTemperature="647"
+    criticalPressure="22060000"
+    latentHeat="40802"
     specificHeat="4.186"
     molarMass="18"
     color="#0000FF50"
@@ -43,7 +49,9 @@
     density="0.656"
     meltingPoint="90.7"
     boilingPoint="111.7"
-    latentHeat="511"
+    criticalTemperature="190.8"
+    criticalPressure="4640000"
+    latentHeat="8200"
     specificHeat="2.2"
     molarMass="16"
     color="#00FF19FF"
@@ -54,7 +62,9 @@
     density="1.977"
     meltingPoint="216.6"
     boilingPoint="194.7"
-    latentHeat="574"
+    criticalTemperature="304.19"
+    criticalPressure="7380000"
+    latentHeat="25257"
     specificHeat="0.846"
     molarMass="44"
     color="#14141450"
@@ -65,7 +75,9 @@
     density="1.060"
     meltingPoint="273.15"
     boilingPoint="353.15"
-    latentHeat="2000"
+    criticalTemperature="647"
+    criticalPressure="22060000"
+    latentHeat="40000"
     specificHeat="3.5"
     molarMass="65"
     color="#FF0F0FFF"

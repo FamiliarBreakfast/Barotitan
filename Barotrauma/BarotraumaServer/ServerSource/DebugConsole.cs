@@ -2741,6 +2741,28 @@ namespace Barotrauma
                 }
             );
 
+            void listFluids(Hull hull)
+            {
+                NewMessage($"Current Hull: {hull.ID.ToString()}, " +
+                           $"Hull Volume: {hull.Volume}, " +
+                           $"Hull Pressure: {hull.Pressure}, " +
+                           $"Hull Energy: {hull.ThermalEnergy}, " +
+                           $"Hull Temperature: {hull.Temperature}", Color.Yellow);
+                foreach (FluidVolume volume in hull.FluidVolumes) printFluidData(volume, hull);
+            }
+
+            void printFluidData(FluidVolume volume, Hull hull)
+            {
+                Color color = volume.FluidPrefab.Identifier == "oxygen" ? Color.Blue : Color.White;
+                NewMessage($"{volume.FluidPrefab.Name}({volume.FluidPrefab.Identifier})" +
+                           $"LiquidMoles: {volume.LiquidMoles}, " +
+                           $"GasMoles: {volume.GasMoles}, " +
+                           $"BoilingPoint: {volume.FluidPrefab.CalculateBoilingPointAtPressure(hull.Pressure)}, " +
+                           $"MeltingPoint: {volume.FluidPrefab.CalculateMeltingPointAtPressure(hull.Pressure)}, " +
+                           $"BoilingRate: {volume._lastNetPhaseChangeRate}",
+                    color);
+            }
+
             commands.Add(new Command("fluids", "list create", (string[] args) =>
             {
                 if (args.Length == 0)
@@ -2753,12 +2775,7 @@ namespace Barotrauma
                 {
                     foreach (Hull hull in Hull.HullList)
                     {
-                        NewMessage($"Current Hull: {hull.ID.ToString()}, Hull Volume: {hull.Volume}", Color.Yellow);
-                        NewMessage($"Oxygen: Moles: {hull.oxygenVolume.Moles}, GasMoles: {hull.oxygenVolume.GasMoles}, Percentage: {hull.OxygenPercentage}, Temperature: {hull.oxygenVolume.Temperature}, Plasma: {hull.oxygenVolume.plasma}", Color.Blue);
-                        foreach (FluidVolume volume in hull.FluidVolumes)
-                        {
-                            NewMessage($"{volume._fluidPrefab.name}({volume._fluidPrefab.identifier}): Moles: {volume.Moles}, GasMoles: {volume.GasMoles}, Temperature: {volume.Temperature}, Plasma: {volume.plasma}", Color.White);
-                        }
+                        listFluids(hull);
                     }
                 }
                 else if (args[0].Equals("add", StringComparison.OrdinalIgnoreCase))
@@ -2773,12 +2790,12 @@ namespace Barotrauma
                     {
                         foreach (FluidVolume volume in hull.FluidVolumes)
                         {
-                            if (volume._fluidPrefab.identifier == args[1])
+                            if (volume.FluidPrefab.Identifier == args[1])
                             {
                                 if (float.TryParse(args[2], out float amount))
                                 {
-                                    volume.Moles += amount;
-                                    NewMessage($"Added {amount} moles of {volume._fluidPrefab.name} to all hulls.",
+                                    volume.LiquidMoles += amount;
+                                    NewMessage($"Added {amount} moles of {volume.FluidPrefab.Name} to all hulls.",
                                         Color.White);
                                 }
                                 else
@@ -2803,15 +2820,8 @@ namespace Barotrauma
                 }
                 if (args[0].Equals("list", StringComparison.OrdinalIgnoreCase))
                 {
-                        //NewMessage($"Pressure: {senderClient.Character.CurrentHull.Pressure}, Oxygen: {senderClient.Character.CurrentHull.OxygenPercentage}, Water: {senderClient.Character.CurrentHull.WaterPercentage}, Temperature: {senderClient.Character.CurrentHull.Temperature}", Color.Yellow)
                         Hull hull = senderClient.Character.CurrentHull;
-                        
-                        NewMessage($"Current Hull: {hull.ID.ToString()}, Hull Volume: {hull.Volume}", Color.Yellow);
-                        NewMessage($"Oxygen: Moles: {hull.oxygenVolume.Moles}, GasMoles: {hull.oxygenVolume.GasMoles}, Percentage: {hull.OxygenPercentage}, BoilingRate: {hull.oxygenVolume._fluidPrefab.BoilingRate(hull.Pressure, hull.Temperature)}, Temperature: {hull.oxygenVolume.Temperature}, Plasma: {hull.oxygenVolume.plasma}", Color.Blue);
-                        foreach (FluidVolume volume in hull.FluidVolumes)
-                        {
-                            NewMessage($"{volume._fluidPrefab.name}({volume._fluidPrefab.identifier}): Moles: {volume.Moles}, GasMoles: {volume.GasMoles}, Temperature: {volume.Temperature}, Plasma: {volume.plasma}", Color.White);
-                        }
+                        listFluids(hull);
                 }
                 else if (args[0].Equals("add", StringComparison.OrdinalIgnoreCase))
                 {
@@ -2823,12 +2833,12 @@ namespace Barotrauma
 
                     foreach (FluidVolume volume in senderClient.Character.CurrentHull.FluidVolumes)
                     {
-                        if (volume._fluidPrefab.identifier == args[1])
+                        if (volume.FluidPrefab.Identifier == args[1])
                         {
                             if (float.TryParse(args[2], out float amount))
                             {
-                                volume.Moles += amount;
-                                NewMessage($"Added {amount} moles of {volume._fluidPrefab.name} to the hull.", Color.White);
+                                volume.LiquidMoles += amount;
+                                NewMessage($"Added {amount} moles of {volume.FluidPrefab.Name} to the hull.", Color.White);
                             }
                             else
                             {
@@ -2857,7 +2867,7 @@ namespace Barotrauma
                         {
                             hull.Temperature = temperature;
                         }
-                        NewMessage($"Set temperature to {temperature}", Color.White);
+                        NewMessage($"Set thermal energy to {temperature}", Color.White);
                     }
                     else
                     {
@@ -2881,7 +2891,7 @@ namespace Barotrauma
                         {
                             Hull hull = senderClient.Character.CurrentHull;
                             hull.Temperature = temperature;
-                            NewMessage($"Set temperature to {temperature}", Color.White);
+                            NewMessage($"Set thermal energy to {temperature}", Color.White);
                         }
                         else
                         {

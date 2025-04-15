@@ -142,8 +142,6 @@ namespace Barotrauma
         {
             get { return properties; }
         }
-
-        private float temperature;
         
         /// <summary>
         /// How fast the pressure in the hull builds up when there's a gap leading outside
@@ -397,14 +395,21 @@ namespace Barotrauma
             //get { return pressure; }
             get
             {
-                // float n = FluidVolumes.Sum(fluidvolume => fluidvolume.Moles);
+                // double molarVolumeLiquid = 2.8e-5; // m³/mol for liquid O2
                 //
-                // float p = n*8.314f*temperature/Volume; //ideal gas law //todo: volume should be the volume of the hull minus the volume of the fluids
-                // return p; //todo: add water pressure
-                // //todo add air pressure
-                return 100000.0f;
+                // double liquidVolume = oxygenVolume.LiquidMoles * molarVolumeLiquid;
+                // double effectiveGasVolume = Volume - liquidVolume;
+                //
+                // if (effectiveGasVolume <= 0.0 || oxygenVolume.GasMoles <= 0.0)
+                // {
+                //     return (float)0.0; // no gas or no space for it → no pressure
+                // }
+                //
+                // return (float)(FluidPrefab.StandardPressure * (oxygenVolume.GasMoles / effectiveGasVolume));
+                return 100000;
             }
-            set { pressure = value; }
+            set { //pressure = value;
+                  }
         }
 
         public float[] WaveY
@@ -476,7 +481,44 @@ namespace Barotrauma
 
         public BallastFloraBehavior BallastFlora { get; set; }
         
-        public float Temperature { get; set; }
+        public double ThermalEnergy { get; set; }
+
+        public double CalculateTotalHeatCapacity()
+        {
+            double totalHeatCapacity = 0.0;
+
+            foreach (FluidVolume fluidVolume in FluidVolumes)
+            {
+                double molesOfFluid = fluidVolume.TotalMoles;
+                double specificHeatPerMole = fluidVolume.FluidPrefab.SpecificHeat;
+                totalHeatCapacity += molesOfFluid * specificHeatPerMole;
+            }
+
+            return totalHeatCapacity;
+        }
+        
+        /// <summary>
+        /// Computes the hull temperature by dividing the total thermal energy
+        /// by the combined heat capacity of all fluids in the hull.
+        /// </summary>
+        public double Temperature
+        {
+            get
+            {
+                double totalHeatCapacity = CalculateTotalHeatCapacity();
+                if (totalHeatCapacity <= 0.0) return 0.0;
+
+                return ThermalEnergy / totalHeatCapacity;
+            }
+            set
+            {
+                double totalHeatCapacity = CalculateTotalHeatCapacity();
+                if (totalHeatCapacity <= 0.0) return;
+
+                // Sets thermal energy such that resulting temperature is the target
+                ThermalEnergy = value * totalHeatCapacity;
+            }
+        }
 
         public Hull(Rectangle rectangle)
             : this (rectangle, Submarine.MainSub)
@@ -534,13 +576,14 @@ namespace Barotrauma
                 if (fluidPrefab.Identifier == "oxygen")
                 {
                     oxygenVolume = new FluidVolume(this, fluidPrefab, Volume, 100);
+                    FluidVolumes.Add(oxygenVolume);
                     DebugConsole.NewMessage("Created oxygen volume (" + fluidPrefab.Identifier + ") in hull (" + ID + ")");
                     break;
                 }
                 FluidVolumes.Add(new FluidVolume(this, fluidPrefab, 0, 0));
                 DebugConsole.NewMessage("Created fluid volume (" + fluidPrefab.Identifier + ") in hull (" + ID + ")");
             }
-            
+
             Temperature = 293;
             
             OxygenPercentage = 100.0f;
