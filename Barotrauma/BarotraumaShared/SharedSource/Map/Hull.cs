@@ -322,15 +322,11 @@ namespace Barotrauma
         [Serialize(100000.0f, IsPropertySaveable.Yes)]
         public float Oxygen
         {
-            get
-            {
-                if (oxygenVolume != null) return (float)oxygenVolume.GasMoles;
-                return 100000.0f;
-            }
+            get => (float)oxygenVolume.GasMoles;
             set
             {
-                if (!MathUtils.IsValid(value)) return;
-                if (oxygenVolume != null) oxygenVolume.GasMoles = MathHelper.Max(value, 0.0f);
+                // if (!MathUtils.IsValid(value)) return;
+                // if (oxygenVolume != null) AddFluid(oxygenVolume, MathHelper.Max(value-Oxygen, 0.0f), 293);
             }
         }
 
@@ -377,12 +373,9 @@ namespace Barotrauma
 
         public float OxygenPercentage
         {
-            get
-            {
-                if (oxygenVolume != null) return MathUtils.Percentage(Oxygen, Volume);
-                return 0.0f;
-            }
-            set { Oxygen = (value / 100.0f) * Volume; }
+            get => MathUtils.Percentage(Oxygen, Volume);
+            set { //Oxygen = (value / 100.0f) * Volume;
+                  }
         }
 
         public float Volume
@@ -517,6 +510,57 @@ namespace Barotrauma
 
                 // Sets thermal energy such that resulting temperature is the target
                 ThermalEnergy = value * totalHeatCapacity;
+            }
+        }
+        
+        /// <summary>
+        /// Retrieves the FluidVolume for the given fluid prefab in this hull.
+        /// Returns null if it doesn't exist.
+        /// </summary>
+        public FluidVolume GetFluidVolume(FluidPrefab prefab)
+        {
+            return FluidVolumes.FirstOrDefault(fv => fv.FluidPrefab == prefab);
+        }
+        /// <summary>
+        /// Retrieves the FluidVolume in this hull that matches the given fluid identifier.
+        /// Returns null if no match is found.
+        /// </summary>
+        public FluidVolume GetFluidVolume(string fluidIdentifier)
+        {
+            return FluidVolumes.FirstOrDefault(fv =>
+                string.Equals(fv.FluidPrefab.Identifier.ToString(), fluidIdentifier, StringComparison.OrdinalIgnoreCase));
+        }
+        
+        /// <summary>
+        /// Adds a specific number of moles of fluid to a FluidVolume,
+        /// transferring energy based on the temperature difference.
+        /// </summary>
+        public void AddFluid(FluidVolume fluidVolume, double moles, double temperatureK)
+        {
+            if (moles <= 0.0 || fluidVolume == null) return;
+
+            Hull hull = fluidVolume.Hull;
+            if (hull == null) return;
+
+            double currentHullTemperature = hull.Temperature;
+            double specificHeat = fluidVolume.FluidPrefab.SpecificHeat;
+
+            // Adjust the hull's thermal energy to account for the new fluid's heat content
+            double energyDelta = moles * specificHeat * (temperatureK - currentHullTemperature);
+            hull.ThermalEnergy += energyDelta;
+
+            // Determine the boiling point at the current hull pressure
+            double hullPressure = hull.Pressure;
+            double boilingPointAtPressure = fluidVolume.FluidPrefab.CalculateBoilingPointAtPressure(hullPressure);
+
+            // Add as gas or liquid based on the actual temperature vs dynamic boiling point
+            if (temperatureK > boilingPointAtPressure)
+            {
+                fluidVolume.GasMoles += moles;
+            }
+            else
+            {
+                fluidVolume.LiquidMoles += moles;
             }
         }
 

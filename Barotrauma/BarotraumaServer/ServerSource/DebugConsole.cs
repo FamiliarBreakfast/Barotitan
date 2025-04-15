@@ -2794,7 +2794,7 @@ namespace Barotrauma
                             {
                                 if (float.TryParse(args[2], out float amount))
                                 {
-                                    volume.LiquidMoles += amount;
+                                    hull.AddFluid(volume, amount, 293);
                                     NewMessage($"Added {amount} moles of {volume.FluidPrefab.Name} to all hulls.",
                                         Color.White);
                                 }
@@ -2837,7 +2837,7 @@ namespace Barotrauma
                         {
                             if (float.TryParse(args[2], out float amount))
                             {
-                                volume.LiquidMoles += amount;
+                                senderClient.Character.CurrentHull.AddFluid(volume, amount, 293);
                                 NewMessage($"Added {amount} moles of {volume.FluidPrefab.Name} to the hull.", Color.White);
                             }
                             else
