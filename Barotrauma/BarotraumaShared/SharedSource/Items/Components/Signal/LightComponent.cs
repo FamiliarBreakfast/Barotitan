@@ -94,9 +94,9 @@ namespace Barotrauma.Items.Components
             set
             {
                 if (isOn == value && IsActive == value) { return; }
-
                 IsActive = isOn = value;
-                SetLightSourceState(value, value ? lightBrightness : 0.0f);
+                bool isLightOn = isOn && item.Condition > 0;
+                SetLightSourceState(isLightOn, isLightOn ? lightBrightness : 0.0f);
                 OnStateChanged();
             }
         }
@@ -198,6 +198,13 @@ namespace Barotrauma.Items.Components
             set;
         }
 
+        [Serialize("0,0", IsPropertySaveable.No, description: "Offset of the light from the position of the item (in pixels).")]
+        public Vector2 LightOffset
+        {
+            get;
+            set;
+        }
+
         /// <summary>
         /// Returns true if the red component of the light is twice as bright as the blue and green. Can be used by StatusEffects.
         /// </summary>
@@ -259,7 +266,6 @@ namespace Barotrauma.Items.Components
 #endif
 
             IsActive = IsOn;
-            item.AddTag("light");
         }
 
         public override void OnItemLoaded()
@@ -284,7 +290,7 @@ namespace Barotrauma.Items.Components
         public override void OnMapLoaded()
         {
 #if CLIENT
-            if (item.HiddenInGame)
+            if (item.IsHidden)
             {
                 Light.Enabled = false;
             }
@@ -305,7 +311,9 @@ namespace Barotrauma.Items.Components
                 (statusEffectLists == null || !statusEffectLists.ContainsKey(ActionType.OnActive)) &&
                 (IsActiveConditionals == null || IsActiveConditionals.Count == 0))
             {
-                if (item.body != null && !item.body.Enabled)
+                PhysicsBody body = ParentBody ?? item.body;
+                if ((body == null || !body.Enabled) &&
+                    (item.FindParentInventory(static it => it is ItemInventory { Container.HideItems: true }) != null))
                 {
                     lightBrightness = 0.0f;
                     SetLightSourceState(false, 0.0f);
@@ -341,8 +349,22 @@ namespace Barotrauma.Items.Components
 #if CLIENT
             Light.ParentSub = item.Submarine;
 #endif
+
+
+            bool visibleInContainer;
             var ownerCharacter = item.GetRootInventoryOwner() as Character;
-            if ((item.Container != null && ownerCharacter == null) || 
+            if (ownerCharacter != null && item.RootContainer?.GetComponent<Holdable>() is not { IsActive: true })
+            {
+                //if the item is in a character inventory, the light should only be visible if the character is holding the item
+                //(not if it's e.q. inside a wearable item, or in a rifle worn on the back)
+                visibleInContainer = false;
+            }
+            else
+            {
+                visibleInContainer = item.FindParentInventory(static it => it is ItemInventory { Container.HideItems: true }) == null;
+            }
+
+            if ((item.Container != null && !visibleInContainer && ownerCharacter == null) || 
                 (ownerCharacter != null && ownerCharacter.InvisibleTimer > 0.0f))
             {
                 lightBrightness = 0.0f;
@@ -352,7 +374,7 @@ namespace Barotrauma.Items.Components
             SetLightSourceTransformProjSpecific();
 
             PhysicsBody body = ParentBody ?? item.body;
-            if (body != null && !body.Enabled)
+            if ((body == null || !body.Enabled) && !visibleInContainer)
             {
                 lightBrightness = 0.0f;
                 SetLightSourceState(false, 0.0f);
@@ -430,6 +452,11 @@ namespace Barotrauma.Items.Components
                 target.MaxSightRange = Range * 5;
             }
             target.SightRange = Math.Max(target.SightRange, target.MaxSightRange * lightBrightness);
+        }
+
+        public override void Drop(Character dropper, bool setTransform = true)
+        {
+            SetLightSourceTransform();
         }
 
         partial void SetLightSourceState(bool enabled, float brightness);

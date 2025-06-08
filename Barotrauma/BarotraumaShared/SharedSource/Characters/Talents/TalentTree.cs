@@ -37,7 +37,8 @@ namespace Barotrauma
 
             if (Identifier.IsEmpty)
             {
-                DebugConsole.ThrowError($"No job defined for talent tree in \"{file.Path}\"!");
+                DebugConsole.ThrowError($"No job defined for talent tree in \"{file.Path}\"!",
+                    contentPackage: element.ContentPackage);
                 return;
             }
 
@@ -81,16 +82,15 @@ namespace Barotrauma
             TalentSubTree subTree = talentTree!.TalentSubTrees.FirstOrDefault(tst => tst.Identifier == subTreeIdentifier);
             if (subTree is null) { return TalentStages.Invalid; }
 
-            if (!TalentTreeMeetsRequirements(talentTree, subTree, selectedTalents))
-            {
-                return TalentStages.Locked;
-            }
-
             TalentOption targetTalentOption = subTree.TalentOptionStages[index];
-
             if (targetTalentOption.HasEnoughTalents(character.Info))
             {
                 return TalentStages.Unlocked;
+            }
+
+            if (!TalentTreeMeetsRequirements(talentTree, subTree, selectedTalents))
+            {
+                return TalentStages.Locked;
             }
 
             if (targetTalentOption.HasSelectedTalent(selectedTalents))
@@ -131,7 +131,7 @@ namespace Barotrauma
             if (character.Info.GetTotalTalentPoints() - selectedTalents.Count <= 0) { return false; }
             if (!JobTalentTrees.TryGet(character.Info.Job.Prefab.Identifier, out TalentTree talentTree)) { return false; }
 
-            if (IsTalentLocked(talentIdentifier)) { return false; }
+            if (IsTalentLocked(talentIdentifier, Character.GetFriendlyCrew(character))) { return false; }
 
             if (character.Info.GetUnlockedTalentsInTree().Contains(talentIdentifier))
             {
@@ -163,10 +163,8 @@ namespace Barotrauma
             return false;
         }
 
-        public static bool IsTalentLocked(Identifier talentIdentifier, ImmutableHashSet<Character> characterList = null)
+        public static bool IsTalentLocked(Identifier talentIdentifier, IEnumerable<Character> characterList)
         {
-            characterList ??= GameSession.GetSessionCrewCharacters(CharacterType.Both);
-
             foreach (Character c in characterList)
             {
                 if (c.Info.GetSavedStatValue(StatTypes.LockedTalents, talentIdentifier) >= 1) { return true; }
@@ -304,7 +302,8 @@ namespace Barotrauma
 
             if (RequiredTalents > MaxChosenTalents)
             {
-                DebugConsole.ThrowError($"Error in talent tree {debugIdentifier} - MaxChosenTalents is larger than RequiredTalents.");
+                DebugConsole.ThrowError($"Error in talent tree {debugIdentifier} - MaxChosenTalents is larger than RequiredTalents.",
+                    contentPackage: talentOptionsElement.ContentPackage);
             }
 
             HashSet<Identifier> identifiers = new HashSet<Identifier>();
@@ -333,11 +332,13 @@ namespace Barotrauma
 
             if (RequiredTalents > talentIdentifiers.Count)
             {
-                DebugConsole.ThrowError($"Error in talent tree {debugIdentifier} - completing a stage of the tree requires more talents than there are in the stage.");
+                DebugConsole.ThrowError($"Error in talent tree {debugIdentifier} - completing a stage of the tree requires more talents than there are in the stage.",
+                    contentPackage: talentOptionsElement.ContentPackage);
             }
             if (MaxChosenTalents > talentIdentifiers.Count)
             {
-                DebugConsole.ThrowError($"Error in talent tree {debugIdentifier} - maximum number of talents to choose is larger than the number of talents.");
+                DebugConsole.ThrowError($"Error in talent tree {debugIdentifier} - maximum number of talents to choose is larger than the number of talents.",
+                    contentPackage: talentOptionsElement.ContentPackage);
             }
         }
     }

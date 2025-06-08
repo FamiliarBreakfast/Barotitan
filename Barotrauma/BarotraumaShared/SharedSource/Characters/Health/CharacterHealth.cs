@@ -54,7 +54,8 @@ namespace Barotrauma
                         case "vitalitymultiplier":
                             if (subElement.GetAttribute("name") != null)
                             {
-                                DebugConsole.ThrowError("Error in character health config (" + characterHealth.Character.Name + ") - define vitality multipliers using affliction identifiers or types instead of names.");
+                                DebugConsole.ThrowError("Error in character health config (" + characterHealth.Character.Name + ") - define vitality multipliers using affliction identifiers or types instead of names.",
+                                    contentPackage: element.ContentPackage);
                                 continue;
                             }
                             var vitalityMultipliers = subElement.GetAttributeIdentifierArray("identifier", null) ?? subElement.GetAttributeIdentifierArray("identifiers", null);
@@ -66,7 +67,8 @@ namespace Barotrauma
                                     VitalityMultipliers.Add(vitalityMultiplier, multiplier);
                                     if (AfflictionPrefab.Prefabs.None(p => p.Identifier == vitalityMultiplier))
                                     {
-                                        DebugConsole.AddWarning($"Potentially incorrectly defined vitality multiplier in \"{characterHealth.Character.Name}\". Could not find any afflictions with the identifier \"{vitalityMultiplier}\". Did you mean to define the afflictions by type instead?");
+                                        DebugConsole.AddWarning($"Potentially incorrectly defined vitality multiplier in \"{characterHealth.Character.Name}\". Could not find any afflictions with the identifier \"{vitalityMultiplier}\". Did you mean to define the afflictions by type instead?",
+                                            contentPackage: element.ContentPackage);
                                     }
                                 }
                             }
@@ -79,13 +81,15 @@ namespace Barotrauma
                                     VitalityTypeMultipliers.Add(vitalityTypeMultiplier, multiplier);
                                     if (AfflictionPrefab.Prefabs.None(p => p.AfflictionType == vitalityTypeMultiplier))
                                     {
-                                        DebugConsole.AddWarning($"Potentially incorrectly defined vitality multiplier in \"{characterHealth.Character.Name}\". Could not find any afflictions of the type \"{vitalityTypeMultiplier}\". Did you mean to define the afflictions by identifier instead?");
+                                        DebugConsole.AddWarning($"Potentially incorrectly defined vitality multiplier in \"{characterHealth.Character.Name}\". Could not find any afflictions of the type \"{vitalityTypeMultiplier}\". Did you mean to define the afflictions by identifier instead?",
+                                            contentPackage: element.ContentPackage);
                                     }
                                 }
                             }
                             if (vitalityMultipliers == null && VitalityTypeMultipliers == null)
                             {
-                                DebugConsole.ThrowError($"Error in character health config {characterHealth.Character.Name}: affliction identifier(s) or type(s) not defined in the \"VitalityMultiplier\" elements!");
+                                DebugConsole.ThrowError($"Error in character health config {characterHealth.Character.Name}: affliction identifier(s) or type(s) not defined in the \"VitalityMultiplier\" elements!",
+                                    contentPackage: element.ContentPackage);
                             }
                             break;
                     }
@@ -174,6 +178,12 @@ namespace Barotrauma
                     max += Character.Info.Job.Prefab.VitalityModifier;
                 }
                 max *= Character.HumanPrefabHealthMultiplier;
+                if (GameMain.GameSession?.Campaign is CampaignMode campaign)
+                {
+                    max *= Character.IsOnPlayerTeam
+                        ? campaign.Settings.CrewVitalityMultiplier
+                        : campaign.Settings.NonCrewVitalityMultiplier;
+                }
                 max *= 1f + Character.GetStatValue(StatTypes.MaximumHealthMultiplier);
                 return max * Character.HealthMultiplier;
             }
@@ -243,6 +253,12 @@ namespace Barotrauma
         /// Was the character in full health at the beginning of the frame?
         /// </summary>
         public bool WasInFullHealth { get; private set; }
+        
+        /// <summary>
+        /// Show the blood overlay screen space effect when the character takes damage.
+        /// Enabled normally, but can be disabled for some special cases.
+        /// </summary>
+        public bool ShowDamageOverlay = true;
 
         public Affliction PressureAffliction
         {
@@ -271,9 +287,9 @@ namespace Barotrauma
             this.Character = character;
             InitIrremovableAfflictions();
 
-            vitality    = UnmodifiedMaxVitality;
+            vitality = UnmodifiedMaxVitality;
 
-            minVitality = character.IsHuman ? -100.0f : 0.0f;
+            minVitality = element.GetAttributeFloat(nameof(MinVitality), character.IsHuman ? -100.0f : 0.0f);
 
             limbHealths.Clear();
             limbHealthElement ??= element;
@@ -370,7 +386,7 @@ namespace Barotrauma
 
         public Limb GetAfflictionLimb(Affliction affliction)
         {
-            if (afflictions.TryGetValue(affliction, out LimbHealth limbHealth))
+            if (affliction != null && afflictions.TryGetValue(affliction, out LimbHealth limbHealth))
             {
                 if (limbHealth == null) { return null; }
                 int limbHealthIndex = limbHealths.IndexOf(limbHealth);
@@ -437,7 +453,7 @@ namespace Barotrauma
             return strength;
         }
 
-        public void ApplyAffliction(Limb targetLimb, Affliction affliction, bool allowStacking = true, bool ignoreUnkillability = false)
+        public void ApplyAffliction(Limb targetLimb, Affliction affliction, bool allowStacking = true, bool ignoreUnkillability = false, bool recalculateVitality = true)
         {
             if (Character.GodMode) { return; }
             if (!ignoreUnkillability)
@@ -451,13 +467,13 @@ namespace Barotrauma
                     //if a limb-specific affliction is applied to no specific limb, apply to all limbs
                     foreach (LimbHealth limbHealth in limbHealths)
                     {
-                        AddLimbAffliction(limbHealth, affliction, allowStacking: allowStacking);
+                        AddLimbAffliction(limbHealth, limb: null, affliction, allowStacking: allowStacking, recalculateVitality: recalculateVitality);
                     }
 
                 }
                 else
                 {
-                    AddLimbAffliction(targetLimb, affliction, allowStacking: allowStacking);
+                    AddLimbAffliction(targetLimb, affliction, allowStacking: allowStacking, recalculateVitality: recalculateVitality);
                 }
             }
             else
@@ -466,15 +482,22 @@ namespace Barotrauma
             }
         }
 
-        public float GetResistance(AfflictionPrefab afflictionPrefab)
+        /// <summary>
+        /// How much resistance all the afflictions the character has give to the specified affliction?
+        /// </summary>
+        public float GetResistance(AfflictionPrefab afflictionPrefab, LimbType limbType)
         {
+            // This is a % resistance (0 to 1.0)
             float resistance = 0.0f;
             foreach (KeyValuePair<Affliction, LimbHealth> kvp in afflictions)
             {
                 var affliction = kvp.Key;
-                resistance += affliction.GetResistance(afflictionPrefab.Identifier);
+                resistance += affliction.GetResistance(afflictionPrefab.Identifier, limbType);
             }
-            return 1 - ((1 - resistance) * Character.GetAbilityResistance(afflictionPrefab));
+            // This is a multiplier, ie. 0.0 = 100% resistance and 1.0 = 0% resistance
+            float abilityResistanceMultiplier = Character.GetAbilityResistance(afflictionPrefab);
+            // The returned value is calculated to be a % resistance again
+            return 1 - ((1 - resistance) * abilityResistanceMultiplier);
         }
 
         public float GetStatValue(StatTypes statType)
@@ -508,7 +531,7 @@ namespace Barotrauma
             ReduceMatchingAfflictions(amount, treatmentAction);
         }
         
-        public void ReduceAfflictionOnAllLimbs(Identifier afflictionIdOrType, float amount, ActionType? treatmentAction = null)
+        public void ReduceAfflictionOnAllLimbs(Identifier afflictionIdOrType, float amount, ActionType? treatmentAction = null, Character attacker = null)
         {
             if (afflictionIdOrType.IsEmpty) { throw new ArgumentException($"{nameof(afflictionIdOrType)} is empty"); }
 
@@ -521,7 +544,7 @@ namespace Barotrauma
                 }
             }
 
-            ReduceMatchingAfflictions(amount, treatmentAction);
+            ReduceMatchingAfflictions(amount, treatmentAction, attacker);
         }
 
         private IEnumerable<Affliction> GetAfflictionsForLimb(Limb targetLimb)
@@ -533,11 +556,11 @@ namespace Barotrauma
 
             matchingAfflictions.Clear();
             matchingAfflictions.AddRange(GetAfflictionsForLimb(targetLimb));
-            
+
             ReduceMatchingAfflictions(amount, treatmentAction);
         }
-        
-        public void ReduceAfflictionOnLimb(Limb targetLimb, Identifier afflictionIdOrType, float amount, ActionType? treatmentAction = null)
+
+        public void ReduceAfflictionOnLimb(Limb targetLimb, Identifier afflictionIdOrType, float amount, ActionType? treatmentAction = null, Character attacker = null)
         {
             if (afflictionIdOrType.IsEmpty) { throw new ArgumentException($"{nameof(afflictionIdOrType)} is empty"); }
             if (targetLimb is null) { throw new ArgumentNullException(nameof(targetLimb)); }
@@ -552,14 +575,22 @@ namespace Barotrauma
                     matchingAfflictions.Add(affliction.Key);
                 }
             }
-            ReduceMatchingAfflictions(amount, treatmentAction);
+            ReduceMatchingAfflictions(amount, treatmentAction, attacker);
         }
 
-        private void ReduceMatchingAfflictions(float amount, ActionType? treatmentAction)
+        private void ReduceMatchingAfflictions(float amount, ActionType? treatmentAction, Character attacker = null)
         {
             if (matchingAfflictions.Count == 0) { return; }
 
             float reduceAmount = amount / matchingAfflictions.Count;
+
+            if (reduceAmount > 0f)
+            {
+                var abilityReduceAffliction = new AbilityReduceAffliction(Character, reduceAmount);
+                attacker?.CheckTalents(AbilityEffectType.OnReduceAffliction, abilityReduceAffliction);
+                reduceAmount = abilityReduceAffliction.Value;
+            }
+
             for (int i = matchingAfflictions.Count - 1; i >= 0; i--)
             {
                 var matchingAffliction = matchingAfflictions[i];
@@ -572,7 +603,7 @@ namespace Barotrauma
                     matchingAfflictions.RemoveAt(i);
                     if (i == 0) { i = matchingAfflictions.Count; }
                     if (i > 0) { reduceAmount += surplus / i; }
-                    SteamAchievementManager.OnAfflictionRemoved(matchingAffliction, Character);
+                    AchievementManager.OnAfflictionRemoved(matchingAffliction, Character);
                 }
                 else
                 {
@@ -594,7 +625,11 @@ namespace Barotrauma
             CalculateVitality();
         }
 
-        public void ApplyDamage(Limb hitLimb, AttackResult attackResult, bool allowStacking = true)
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="recalculateVitality">Set false only as an optimization when you manually call <see cref="RecalculateVitality"/>. Only applies to limb specific afflictions.</param>
+        public void ApplyDamage(Limb hitLimb, AttackResult attackResult, bool allowStacking = true, bool recalculateVitality = true)
         {
             if (Unkillable || Character.GodMode) { return; }
             if (hitLimb.HealthIndex < 0 || hitLimb.HealthIndex >= limbHealths.Count)
@@ -605,21 +640,20 @@ namespace Barotrauma
             }
 
             var should = GameMain.LuaCs.Hook.Call<bool?>("character.applyDamage", this, attackResult, hitLimb, allowStacking);
-
-            if (should != null && should.Value)
-                return;
-
+            if (should != null && should.Value) { return; }
+            
             foreach (Affliction newAffliction in attackResult.Afflictions)
             {
                 if (newAffliction.Prefab.LimbSpecific)
                 {
-                    AddLimbAffliction(hitLimb, newAffliction, allowStacking);
+                    AddLimbAffliction(hitLimb, newAffliction, allowStacking, recalculateVitality: recalculateVitality);
                 }
                 else
                 {
+                    // Always recalculate vitality for non-limb specific afflictions.
                     AddAffliction(newAffliction, allowStacking);
                 }
-            }            
+            }
         }
 
         private void KillIfOutOfVitality()
@@ -653,9 +687,8 @@ namespace Barotrauma
                 if (bleedingDamageAmount > 0.0f && DoesBleed) { afflictions.Add(AfflictionPrefab.Bleeding.Instantiate(bleedingDamageAmount), limbHealth); }
                 if (burnDamageAmount > 0.0f) { afflictions.Add(AfflictionPrefab.Burn.Instantiate(burnDamageAmount), limbHealth); }
             }
-
-            CalculateVitality();
-            KillIfOutOfVitality();
+            
+            RecalculateVitality();
         }
 
         public float GetLimbDamage(Limb limb, Identifier afflictionType)
@@ -686,12 +719,25 @@ namespace Barotrauma
             }
         }
 
+        public void RemoveAfflictions(Func<Affliction, bool> predicate)
+        {
+            afflictionsToRemove.Clear();
+            afflictionsToRemove.AddRange(afflictions.Keys.Where(affliction => predicate(affliction)));
+            foreach (var affliction in afflictionsToRemove)
+            {
+                afflictions.Remove(affliction);
+            }
+            CalculateVitality();
+        }
+
         public void RemoveAllAfflictions()
         {
             afflictionsToRemove.Clear();
             afflictionsToRemove.AddRange(afflictions.Keys.Where(a => !irremovableAfflictions.Contains(a))); 
             foreach (var affliction in afflictionsToRemove)
             {
+                //set strength to 0 in case the affliction needs to react to becoming inactive
+                affliction.Strength = 0.0f;
                 afflictions.Remove(affliction);
             }
             foreach (Affliction affliction in irremovableAfflictions)
@@ -720,7 +766,11 @@ namespace Barotrauma
             CalculateVitality();
         }
 
-        private void AddLimbAffliction(Limb limb, Affliction newAffliction, bool allowStacking = true)
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="recalculateVitality">Set false only as an optimization when you manually call <see cref="RecalculateVitality"/></param>
+        private void AddLimbAffliction(Limb limb, Affliction newAffliction, bool allowStacking = true, bool recalculateVitality = true)
         {
             if (!newAffliction.Prefab.LimbSpecific || limb == null) { return; }
             if (limb.HealthIndex < 0 || limb.HealthIndex >= limbHealths.Count)
@@ -729,11 +779,16 @@ namespace Barotrauma
                     "\" only has health configured for" + limbHealths.Count + " limbs but the limb " + limb.type + " is targeting index " + limb.HealthIndex);
                 return;
             }
-            AddLimbAffliction(limbHealths[limb.HealthIndex], newAffliction, allowStacking);
+            AddLimbAffliction(limbHealths[limb.HealthIndex], limb, newAffliction, allowStacking, recalculateVitality);
         }
 
-        private void AddLimbAffliction(LimbHealth limbHealth, Affliction newAffliction, bool allowStacking = true)
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="recalculateVitality">Set false only as an optimization when you manually call <see cref="RecalculateVitality"/></param>
+        private void AddLimbAffliction(LimbHealth limbHealth, Limb limb, Affliction newAffliction, bool allowStacking = true, bool recalculateVitality = true)
         {
+            LimbType limbType = limb?.type ?? LimbType.None;
             if (Character.Params.IsMachine && !newAffliction.Prefab.AffectMachines) { return; }
             if (!DoesBleed && newAffliction is AfflictionBleeding) { return; }
             if (!Character.NeedsOxygen && newAffliction.Prefab == AfflictionPrefab.OxygenLow) { return; }
@@ -744,10 +799,16 @@ namespace Barotrauma
                     return;
                 }
             }
-            if (Character.Params.Health.PoisonImmunity && 
-                (newAffliction.Prefab.AfflictionType == AfflictionPrefab.PoisonType || newAffliction.Prefab.AfflictionType == AfflictionPrefab.ParalysisType)) { return; }
+            if (Character.Params.Health.PoisonImmunity)
+            {
+                if (newAffliction.Prefab.AfflictionType == AfflictionPrefab.PoisonType || newAffliction.Prefab.AfflictionType == AfflictionPrefab.ParalysisType)
+                {
+                    return;
+                }
+            }
             if (Character.EmpVulnerability <= 0 && newAffliction.Prefab.AfflictionType == AfflictionPrefab.EMPType) { return; }
             if (newAffliction.Prefab.TargetSpecies.Any() && newAffliction.Prefab.TargetSpecies.None(s => s == Character.SpeciesName)) { return; }
+            if (Character.Params.Health.ImmunityIdentifiers.Contains(newAffliction.Identifier)) { return; }
 
             var should = GameMain.LuaCs.Hook.Call<bool?>("character.applyAffliction", this, limbHealth, newAffliction, allowStacking);
 
@@ -755,47 +816,51 @@ namespace Barotrauma
                 return;
 
             Affliction existingAffliction = null;
-            foreach (KeyValuePair<Affliction, LimbHealth> kvp in afflictions)
+            foreach ((Affliction affliction, LimbHealth value) in afflictions)
             {
-                var affliction = kvp.Key;
-                if (kvp.Value == limbHealth && kvp.Key.Prefab == newAffliction.Prefab)
+                if (value == limbHealth && affliction.Prefab == newAffliction.Prefab)
                 {
-                    existingAffliction = kvp.Key;
+                    existingAffliction = affliction;
                     break;
                 }
             }
 
             if (existingAffliction != null)
             {
-                float newStrength = newAffliction.Strength * (100.0f / MaxVitality) * (1f - GetResistance(existingAffliction.Prefab));
+                float newStrength = newAffliction.Strength * (100.0f / MaxVitality) * (1f - GetResistance(existingAffliction.Prefab, limbType));
                 if (allowStacking)
                 {
                     // Add the existing strength
                     newStrength += existingAffliction.Strength;
                 }
                 newStrength = Math.Min(existingAffliction.Prefab.MaxStrength, newStrength);
-                if (existingAffliction == stunAffliction) { Character.SetStun(newStrength, true, true); }
                 existingAffliction.Strength = newStrength;
+                //set stun after setting the strength, because stun multipliers might want to set the strength to something else
+                if (existingAffliction == stunAffliction) { Character.SetStun(newStrength, allowStunDecrease: true, isNetworkMessage: true); }
                 existingAffliction.Duration = existingAffliction.Prefab.Duration;
                 if (newAffliction.Source != null) { existingAffliction.Source = newAffliction.Source; }
-                CalculateVitality();
-                KillIfOutOfVitality();
+                if (recalculateVitality)
+                {
+                    RecalculateVitality();
+                }
                 return;
             }            
 
             //create a new instance of the affliction to make sure we don't use the same instance for multiple characters
             //or modify the affliction instance of an Attack or a StatusEffect
             var copyAffliction = newAffliction.Prefab.Instantiate(
-                Math.Min(newAffliction.Prefab.MaxStrength, newAffliction.Strength * (100.0f / MaxVitality) * (1f - GetResistance(newAffliction.Prefab))),
+                Math.Min(newAffliction.Prefab.MaxStrength, newAffliction.Strength * (100.0f / MaxVitality) * (1f - GetResistance(newAffliction.Prefab, limbType))),
                 newAffliction.Source);
             afflictions.Add(copyAffliction, limbHealth);
-            SteamAchievementManager.OnAfflictionReceived(copyAffliction, Character);
+            AchievementManager.OnAfflictionReceived(copyAffliction, Character);
             MedicalClinic.OnAfflictionCountChanged(Character);
 
             Character.HealthUpdateInterval = 0.0f;
 
-            CalculateVitality();
-            KillIfOutOfVitality();
+            if (recalculateVitality)
+            {
+                RecalculateVitality();
+            }
 #if CLIENT
             if (OpenHealthWindow != this && limbHealth != null)
             {
@@ -806,7 +871,7 @@ namespace Barotrauma
 
         private void AddAffliction(Affliction newAffliction, bool allowStacking = true)
         {
-            AddLimbAffliction(limbHealth: null, newAffliction, allowStacking);
+            AddLimbAffliction(limbHealth: null, limb: null, newAffliction, allowStacking);
         }
 
         partial void UpdateSkinTint();
@@ -830,7 +895,7 @@ namespace Barotrauma
                     var affliction = kvp.Key;
                     if (affliction.Strength <= 0.0f)
                     {
-                        SteamAchievementManager.OnAfflictionRemoved(affliction, Character);
+                        AchievementManager.OnAfflictionRemoved(affliction, Character);
                         if (!irremovableAfflictions.Contains(affliction)) { afflictionsToRemove.Add(affliction); }
                         continue;
                     }
@@ -839,6 +904,8 @@ namespace Barotrauma
                         affliction.Duration -= deltaTime;
                         if (affliction.Duration <= 0.0f)
                         {
+                            //set strength to 0 in case the affliction needs to react to becoming inactive
+                            affliction.Strength = 0.0f;
                             afflictionsToRemove.Add(affliction);
                             continue;
                         }
@@ -891,14 +958,15 @@ namespace Barotrauma
             if (!Character.GodMode)
             {
 #if CLIENT
-                if (Character.IsVisible)
+                updateVisualsTimer -= deltaTime;
+                if (Character.IsVisible && updateVisualsTimer <= 0.0f)
                 {
                     UpdateLimbAfflictionOverlays();
                     UpdateSkinTint();
+                    updateVisualsTimer = UpdateVisualsInterval;
                 }
 #endif
-                CalculateVitality();
-                KillIfOutOfVitality();
+                RecalculateVitality();
             }
         }
 
@@ -930,7 +998,7 @@ namespace Barotrauma
         /// <summary>
         /// 0-1.
         /// </summary>
-        public float OxygenLowResistance => !Character.NeedsOxygen ? 1 : GetResistance(oxygenLowAffliction.Prefab);
+        public float OxygenLowResistance => !Character.NeedsOxygen ? 1 : GetResistance(oxygenLowAffliction.Prefab, LimbType.None);
 
         private void UpdateOxygen(float deltaTime)
         {
@@ -940,7 +1008,7 @@ namespace Barotrauma
                 return; 
             }
 
-            float oxygenlowResistance = GetResistance(oxygenLowAffliction.Prefab);
+            float oxygenlowResistance = GetResistance(oxygenLowAffliction.Prefab, LimbType.None);
             float prevOxygen = OxygenAmount;
             if (IsUnconscious)
             {
@@ -980,16 +1048,14 @@ namespace Barotrauma
             CalculateVitality();
         }
 
-        public void CalculateVitality()
+        private void CalculateVitality()
         {
             vitality = MaxVitality;
             IsParalyzed = false;
             if (Unkillable || Character.GodMode) { return; }
 
-            foreach (KeyValuePair<Affliction, LimbHealth> kvp in afflictions)
+            foreach ((Affliction affliction, LimbHealth limbHealth) in afflictions)
             {
-                var affliction = kvp.Key;
-                var limbHealth = kvp.Value;
                 float vitalityDecrease = affliction.GetVitalityDecrease(this);
                 if (limbHealth != null)
                 {
@@ -1010,6 +1076,12 @@ namespace Barotrauma
                 HintManager.OnCharacterUnconscious(Character);
             }
 #endif
+        }
+        
+        public void RecalculateVitality()
+        {
+            CalculateVitality();
+            KillIfOutOfVitality();
         }
 
         private static float GetVitalityMultiplier(Affliction affliction, LimbHealth limbHealth)
@@ -1129,9 +1201,12 @@ namespace Barotrauma
         /// and negative treatment suitabilities (e.g. a medicine that causes oxygen loss may not be suitable if the character is already suffocating)
         /// </summary>
         /// <param name="treatmentSuitability">A dictionary where the key is the identifier of the item and the value the suitability</param>
-        /// <param name="normalize">If true, the suitability values are normalized between 0 and 1. If not, they're arbitrary values defined in the medical item XML, where negative values are unsuitable, and positive ones suitable.</param>   
         /// <param name="predictFutureDuration">If above 0, the method will take into account how much currently active status effects while affect the afflictions in the next x seconds.</param>   
-        public void GetSuitableTreatments(Dictionary<Identifier, float> treatmentSuitability, bool normalize, Character user, Limb limb = null, bool ignoreHiddenAfflictions = false, float predictFutureDuration = 0.0f)
+        /// <param name="checkTreatmentThreshold">Should the method check whether the afflictions are above <see cref="AfflictionPrefab.TreatmentThreshold"/> (whether they're severe enough for AI to treat)?</param>
+        /// <param name="checkTreatmentSuggestionThreshold">Should the method check whether the afflictions are above <see cref="AfflictionPrefab.TreatmentSuggestionThreshold"/> (whether treatment suggestions are shown in the health interface)?</param>
+        public void GetSuitableTreatments(Dictionary<Identifier, float> treatmentSuitability, Character user, Limb limb = null, bool ignoreHiddenAfflictions = false,
+            bool checkTreatmentThreshold = true, bool checkTreatmentSuggestionThreshold = true, 
+            float predictFutureDuration = 0.0f)
         {
             //key = item identifier
             //float = suitability
@@ -1141,7 +1216,9 @@ namespace Barotrauma
             {
                 var affliction = kvp.Key;
                 var limbHealth = kvp.Value;
-                if (limb != null && affliction.Prefab.IndicatorLimb != limb.type)
+                if (limb != null && 
+                    affliction.Prefab.LimbSpecific && 
+                    GetMatchingLimbHealth(affliction) != GetMatchingLimbHealth(limb))
                 {
                     if (limbHealth == null) { continue; }
                     int healthIndex = limbHealths.IndexOf(limbHealth);
@@ -1157,8 +1234,7 @@ namespace Barotrauma
                 //other afflictions of the same type increase the "treatability"
                 // e.g. we might want to ignore burns below 5%, but not if the character has them on all limbs
                 float totalAfflictionStrength = strength + GetTotalAdjustedAfflictionStrength(affliction, includeSameAffliction: false);
-                if (totalAfflictionStrength < affliction.Prefab.TreatmentThreshold) { continue; }
-
+                
                 if (afflictions.Any(otherAffliction => affliction.Prefab.IgnoreTreatmentIfAfflictedBy.Contains(otherAffliction.Key.Identifier))) { continue; }
 
                 if (ignoreHiddenAfflictions)
@@ -1176,6 +1252,20 @@ namespace Barotrauma
                 foreach (KeyValuePair<Identifier, float> treatment in affliction.Prefab.TreatmentSuitabilities)
                 {
                     float suitability = treatment.Value * strength;
+                    if (suitability > 0)
+                    {
+                        //if this a suitable treatment, ignore it if the affliction isn't severe enough to treat
+                        //if the suitability is negative though, we need to take it into account!
+                        //otherwise we may end up e.g. giving too much opiates to someone already close to overdosing
+                        if (checkTreatmentThreshold)
+                        {
+                            if (totalAfflictionStrength < affliction.Prefab.TreatmentThreshold) { continue; }
+                        }
+                        if (checkTreatmentSuggestionThreshold)
+                        {
+                            if (totalAfflictionStrength < affliction.Prefab.TreatmentSuggestionThreshold) { continue; }
+                        }
+                    }
                     if (treatment.Value > strength)
                     {
                         //avoid using very effective meds on small injuries
@@ -1192,14 +1282,6 @@ namespace Barotrauma
                     }
                     minSuitability = Math.Min(treatmentSuitability[treatment.Key], minSuitability);
                     maxSuitability = Math.Max(treatmentSuitability[treatment.Key], maxSuitability);
-                }
-            }
-            //normalize the suitabilities to a range of 0 to 1
-            if (normalize)
-            {
-                foreach (Identifier treatment in treatmentSuitability.Keys.ToList())
-                {
-                    treatmentSuitability[treatment] = (treatmentSuitability[treatment] - minSuitability) / (maxSuitability - minSuitability);
                 }
             }
         }
@@ -1325,6 +1407,8 @@ namespace Barotrauma
         public void Remove()
         {
             RemoveProjSpecific();
+            afflictionsToRemove.Clear();
+            afflictionsToUpdate.Clear();
         }
 
         partial void RemoveProjSpecific();

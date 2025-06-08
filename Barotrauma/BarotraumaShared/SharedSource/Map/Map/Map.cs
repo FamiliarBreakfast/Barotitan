@@ -261,10 +261,9 @@ namespace Barotrauma
 
             foreach (var endLocation in EndLocations)
             {
-                if (endLocation.Type?.ForceLocationName != null &&
-                    !endLocation.Type.ForceLocationName.IsNullOrEmpty())
+                if (endLocation.Type?.ForceLocationName is { IsEmpty: false })
                 {
-                    endLocation.ForceName(endLocation.Type.ForceLocationName.Value);
+                    endLocation.ForceName(endLocation.Type.ForceLocationName);
                 }
             }
 
@@ -298,7 +297,7 @@ namespace Barotrauma
             //if no outpost was found (using a mod that replaces the outpost location type?), find any type of outpost
             if (CurrentLocation == null)
             {
-                FindStartLocation(l => l.Type.HasOutpost);
+                FindStartLocation(l => l.Type.HasOutpost && l.Type.OutpostTeam == CharacterTeamType.FriendlyNPC);
             }
 
             void FindStartLocation(Func<Location, bool> predicate)
@@ -313,25 +312,38 @@ namespace Barotrauma
                 }
             }
 
-            StartLocation.SecondaryFaction = null;             
+            StartLocation.SecondaryFaction = null;
             var startOutpostFaction = campaign?.Factions.FirstOrDefault(f => f.Prefab.StartOutpost);
             if (startOutpostFaction != null)
             {
                 StartLocation.Faction = startOutpostFaction;
-                foreach (var connection in StartLocation.Connections)
+            }
+            foreach (var connection in StartLocation.Connections)
+            {
+                //force locations adjacent to the start location to have an outpost
+                //non-inhabited locations seem to be confusing to new players, particularly
+                //on the first round/mission when they still don't know how transitions between levels work
+                var otherLocation = connection.OtherLocation(StartLocation);
+                if (!otherLocation.HasOutpost())
                 {
-                    var otherLocation = connection.OtherLocation(StartLocation);
-                    if (otherLocation.HasOutpost() && otherLocation.Type.OutpostTeam == CharacterTeamType.FriendlyNPC)
+                    if (LocationType.Prefabs.TryGet("outpost".ToIdentifier(), out LocationType outpostLocationType))
                     {
-                        otherLocation.Faction = startOutpostFaction;
+                        otherLocation.ChangeType(campaign, outpostLocationType, createStores: false);
                     }
+                }
+
+                if (otherLocation.HasOutpost() &&
+                    otherLocation.Type.OutpostTeam == CharacterTeamType.FriendlyNPC &&
+                    otherLocation.Type.Faction.IsEmpty)
+                {
+                    otherLocation.Faction = startOutpostFaction;
                 }
             }
 
             System.Diagnostics.Debug.Assert(StartLocation != null, "Start location not assigned after level generation.");
 
             int loops = campaign.CampaignMetadata.GetInt("campaign.endings".ToIdentifier(), 0);
-            if (loops == 0 && (campaign.Settings.Difficulty == GameDifficulty.Easy || campaign.Settings.Difficulty == GameDifficulty.Medium))
+            if (loops == 0 && (campaign.Settings.WorldHostility == WorldHostilityOption.Low || campaign.Settings.WorldHostility == WorldHostilityOption.Medium))
             {
                 if (StartLocation != null)
                 {
@@ -437,17 +449,6 @@ namespace Barotrauma
                     }
 
                     LocationType forceLocationType = null;
-                    if (!possibleStartOutpostCreated)
-                    {
-                        float zoneWidth = Width / generationParams.DifficultyZones;
-                        float threshold = zoneWidth * 0.1f;
-                        if (position.X < threshold)
-                        {
-                            LocationType.Prefabs.TryGet("outpost", out forceLocationType);
-                            possibleStartOutpostCreated = true;
-                        }
-                    }
-
                     if (forceLocationType == null)
                     {
                         foreach (LocationType locationType in LocationType.Prefabs.OrderBy(lt => lt.Identifier))
@@ -592,6 +593,10 @@ namespace Barotrauma
                 {
                     connectionsBetweenZones[zone1].Add(connection);
                 }
+                if (connectionsBetweenZones[zone1].None())
+                {
+                    DebugConsole.ThrowError($"Potential error during map generation: no connections between zones {zone1} and {zone2} found. Traversing through to the end of the map may be impossible.");
+                }
             }
 
             var gateFactions = campaign.Factions.Where(f => f.Prefab.ControlledOutpostPercentage > 0).OrderBy(f => f.Prefab.Identifier).ToList();
@@ -661,8 +666,9 @@ namespace Barotrauma
                     connection.Locations[0] :
                     connection.Locations[1];
 
-                //if there's only one connection (= the connection between biomes), create a new connection to the closest location to the right
-                if (rightMostLocation.Connections.Count == 1)
+                //if all of the other connected locations are to the left (= if there's no path forwards from the outpost),
+                //create a new connection to the closest location to the right 
+                if (rightMostLocation.Connections.All(c => c.OtherLocation(rightMostLocation).MapPosition.X < rightMostLocation.MapPosition.X))
                 {
                     Location closestLocation = null;
                     float closestDist = float.PositiveInfinity;
@@ -702,15 +708,30 @@ namespace Barotrauma
                 }
             }
 
+            //ensure there's an outpost (a valid starting location) at the very left side of the map
+            Location startLocation = Locations.MinBy(l => l.MapPosition.X);
+            if (LocationType.Prefabs.TryGet("outpost", out LocationType startLocationType))
+            {
+                startLocation.ChangeType(campaign, startLocationType, createStores: false);
+            }
+
             foreach (Location location in Locations)
             {
                 location.LevelData = new LevelData(location, this, CalculateDifficulty(location.MapPosition.X, location.Biome));
+                location.TryAssignFactionBasedOnLocationType(campaign);
                 if (location.Type.HasOutpost && campaign != null && location.Type.OutpostTeam == CharacterTeamType.FriendlyNPC)
                 {
-                    location.Faction ??= campaign.GetRandomFaction(Rand.RandSync.ServerAndClient);
-                    location.SecondaryFaction ??= campaign.GetRandomSecondaryFaction(Rand.RandSync.ServerAndClient);
+                    if (location.Type.Faction.IsEmpty)
+                    {
+                        //no faction defined in the location type, assign a random one
+                        location.Faction ??= campaign.GetRandomFaction(Rand.RandSync.ServerAndClient);
+                    }
+                    if (location.Type.SecondaryFaction.IsEmpty)
+                    {
+                        //no secondary faction defined in the location type, assign a random one
+                        location.SecondaryFaction ??= campaign.GetRandomSecondaryFaction(Rand.RandSync.ServerAndClient);
+                    }
                 }
-                location.CreateStores(force: true);
             }
 
             foreach (LocationConnection connection in Connections) 
@@ -742,7 +763,7 @@ namespace Barotrauma
 
         partial void GenerateLocationConnectionVisuals(LocationConnection connection);
 
-        private int GetZoneIndex(float xPos)
+        public int GetZoneIndex(float xPos)
         {
             float zoneWidth = Width / generationParams.DifficultyZones;
             return MathHelper.Clamp((int)Math.Floor(xPos / zoneWidth) + 1, 1, generationParams.DifficultyZones);
@@ -998,17 +1019,17 @@ namespace Barotrauma
             }
 
             CurrentLocation = SelectedLocation;
+            CurrentLocation.CreateStores();
             Discover(CurrentLocation);
             Visit(CurrentLocation);
             SelectedLocation = null;
 
-            CurrentLocation.CreateStores();
             OnLocationChanged?.Invoke(new LocationChangeInfo(prevLocation, CurrentLocation));
 
-            if (GameMain.GameSession is { Campaign: { CampaignMetadata: { } metadata } })
+            if (GameMain.GameSession is { Campaign.CampaignMetadata: { } metadata })
             {
                 metadata.SetValue("campaign.location.id".ToIdentifier(), CurrentLocationIndex);
-                metadata.SetValue("campaign.location.name".ToIdentifier(), CurrentLocation.Name);
+                metadata.SetValue("campaign.location.name".ToIdentifier(), CurrentLocation.NameIdentifier.Value);
                 metadata.SetValue("campaign.location.biome".ToIdentifier(), CurrentLocation.Biome?.Identifier ?? "null".ToIdentifier());
                 metadata.SetValue("campaign.location.type".ToIdentifier(), CurrentLocation.Type?.Identifier ?? "null".ToIdentifier());
             }
@@ -1077,7 +1098,7 @@ namespace Barotrauma
             if (SelectedConnection?.Locked ?? false)
             {
                 string errorMsg =
-                    $"A locked connection was selected ({SelectedConnection.Locations[0].Name} -> {SelectedConnection.Locations[1].Name}." +
+                    $"A locked connection was selected ({SelectedConnection.Locations[0].DisplayName} -> {SelectedConnection.Locations[1].DisplayName}." +
                     $" Current location: {CurrentLocation}, current display location: {currentDisplayLocation}).\n"
                     + Environment.StackTrace.CleanupStackTrace();
                 GameAnalyticsManager.AddErrorEventOnce("MapSelectLocation:LockedConnectionSelected", GameAnalyticsManager.ErrorSeverity.Error, errorMsg);
@@ -1093,7 +1114,7 @@ namespace Barotrauma
         {
             if (!Locations.Contains(location))
             {
-                string errorMsg = "Failed to select a location. " + (location?.Name ?? "null") + " not found in the map.";
+                string errorMsg = $"Failed to select a location. {location?.DisplayName ?? "null"} not found in the map.";
                 DebugConsole.ThrowError(errorMsg);
                 GameAnalyticsManager.AddErrorEventOnce("Map.SelectLocation:LocationNotFound", GameAnalyticsManager.ErrorSeverity.Error, errorMsg);
                 return;
@@ -1190,7 +1211,19 @@ namespace Barotrauma
         {
             foreach (Location location in Locations)
             {
-                location.LevelData.EventsExhausted = false;
+                if (location.Visited)
+                {
+                    location.WorldStepsSinceVisited++;
+                    if (location.WorldStepsSinceVisited > Location.ClearStoresDelay)
+                    {
+                        location.ClearStores();
+                    }
+                }
+                else
+                {
+                    location.ClearStores();
+                }
+                location.LevelData.ResetExhaustedEventSets();
                 if (location.Discovered)
                 {
                     if (furthestDiscoveredLocation == null ||
@@ -1202,7 +1235,7 @@ namespace Barotrauma
             }
             foreach (LocationConnection connection in Connections)
             {
-                connection.LevelData.EventsExhausted = false;
+                connection.LevelData.ResetExhaustedEventSets();
             }
 
             foreach (Location location in Locations)
@@ -1212,12 +1245,27 @@ namespace Barotrauma
                     continue;
                 }
 
-                if (location == CurrentLocation || location == SelectedLocation || location.IsGateBetweenBiomes) { continue; }
-
-                if (!ProgressLocationTypeChanges(campaign, location) && location.Discovered)
+                bool shouldUpdateStores = location.Discovered;
+                //don't allow the type of the current location or the destination to change (it'd be weird to arrive at a different type of location than the one you were travelling to)
+                //biome gates should also remain unchanged
+                bool shouldProcessLocationTypeChanges = location != CurrentLocation && location != SelectedLocation && !location.IsGateBetweenBiomes;
+                if (shouldProcessLocationTypeChanges &&
+                    ProgressLocationTypeChanges(campaign, location)) 
                 {
-                    location.UpdateStores();
+                    //don't update stores if the location type changed (that recreates the stores anyway)
+                    shouldUpdateStores = false;
                 }
+
+                if (shouldUpdateStores)
+                {
+                    location.UpdateStores(createStoresIfNotCreated: false);
+                }
+            }
+
+            if (CurrentLocation != null)
+            {
+                CurrentLocation.UpdateStores(createStoresIfNotCreated: true);
+                CurrentLocation.WorldStepsSinceVisited = 0;
             }
         }
 
@@ -1301,11 +1349,11 @@ namespace Barotrauma
 
         private bool ChangeLocationType(CampaignMode campaign, Location location, LocationTypeChange change)
         {
-            string prevName = location.Name;
+            LocalizedString prevName = location.DisplayName;
 
             if (!LocationType.Prefabs.TryGet(change.ChangeToType, out var newType))
             {
-                DebugConsole.ThrowError($"Failed to change the type of the location \"{location.Name}\". Location type \"{change.ChangeToType}\" not found.");
+                DebugConsole.ThrowError($"Failed to change the type of the location \"{location.DisplayName}\". Location type \"{change.ChangeToType}\" not found.");
                 return false;
             }
 
@@ -1316,7 +1364,7 @@ namespace Barotrauma
             {
                 location.ClearMissions();
             }
-            location.ChangeType(campaign, newType);
+            location.ChangeType(campaign, newType, createStores: false);
             ChangeLocationTypeProjSpecific(location, prevName, change);
             foreach (var requirement in change.Requirements)
             {
@@ -1372,7 +1420,7 @@ namespace Barotrauma
         }
 
 
-        partial void ChangeLocationTypeProjSpecific(Location location, string prevName, LocationTypeChange change);
+        partial void ChangeLocationTypeProjSpecific(Location location, LocalizedString prevName, LocationTypeChange change);
 
         partial void ClearAnimQueue();
 
@@ -1387,9 +1435,13 @@ namespace Barotrauma
             }
         }
 
-        public void Visit(Location location)
+        public void Visit(Location location, bool resetTimeSinceVisited = true)
         {
             if (location is null) { return; }
+            if (resetTimeSinceVisited)
+            {
+                location.WorldStepsSinceVisited = 0;
+            }
             if (locationsVisited.Contains(location)) { return; }
             locationsVisited.Add(location);
             RemoveFogOfWarProjSpecific(location);
@@ -1488,20 +1540,23 @@ namespace Barotrauma
                         }
                         location.LoadLocationTypeChange(subElement);
 
+                        location.LoadChangingProperties(subElement, campaign);
+
                         // Backwards compatibility: if the discovery status is defined in the location element,
                         // the game was saved using when the discovery order still wasn't being tracked
                         if (subElement.GetAttributeBool("discovered", false))
                         {
                             Discover(location);
-                            Visit(location);
+                            Visit(location, resetTimeSinceVisited: false);
                             trackedLocationDiscoveryAndVisitOrder = false;
                         }
 
                         Identifier locationType = subElement.GetAttributeIdentifier("type", Identifier.Empty);
-                        string prevLocationName = location.Name;
+                        LocalizedString prevLocationName = location.DisplayName;
                         LocationType prevLocationType = location.Type;
                         LocationType newLocationType = LocationType.Prefabs.Find(lt => lt.Identifier == locationType) ?? LocationType.Prefabs.First();
                         location.ChangeType(campaign, newLocationType);
+
                         if (showNotifications && prevLocationType != location.Type)
                         {
                             var change = prevLocationType.CanChangeTo.Find(c => c.ChangeToType == location.Type.Identifier);
@@ -1511,12 +1566,6 @@ namespace Barotrauma
                                 location.TimeSinceLastTypeChange = 0;
                             }
                         }
-
-                        var factionIdentifier = subElement.GetAttributeIdentifier("faction", Identifier.Empty);
-                        location.Faction = factionIdentifier.IsEmpty ? null : campaign.Factions.Find(f => f.Prefab.Identifier == factionIdentifier);
-
-                        var secondaryFactionIdentifier = subElement.GetAttributeIdentifier("secondaryfaction", Identifier.Empty);
-                        location.SecondaryFaction = secondaryFactionIdentifier.IsEmpty ? null : campaign.Factions.Find(f => f.Prefab.Identifier == secondaryFactionIdentifier);
 
                         location.LoadStores(subElement);
                         location.LoadMissions(subElement);
@@ -1540,16 +1589,24 @@ namespace Barotrauma
                         break;
                     case "discovered":
                         bool trackedVisitedEmptyLocations = subElement.GetAttributeBool("trackedvisitedemptylocations", false);
+                        int[] discoveredIndices = subElement.GetAttributeIntArray("indices", Array.Empty<int>());
+                        foreach (int discoveredIndex in discoveredIndices)
+                        {
+                            Discover(Locations[discoveredIndex]);
+                        }
+                        //backwards compatibility
                         foreach (var childElement in subElement.GetChildElements("location"))
                         {
                             if (GetLocation(childElement) is Location l)
                             {
                                 Discover(l);
+                                //even older backwards compatibility: previously we didn't track whether you've "visited" empty locations,
+                                //nor the order in which locations are visited - we need to handle that here
                                 if (!trackedVisitedEmptyLocations)
                                 {
                                     if (!l.HasOutpost())
                                     {
-                                        Visit(l);
+                                        Visit(l, resetTimeSinceVisited: false);
                                     }
                                     trackedLocationDiscoveryAndVisitOrder = false;
                                 }
@@ -1557,11 +1614,17 @@ namespace Barotrauma
                         }
                         break;
                     case "visited":
+                        int[] visitedIndices = subElement.GetAttributeIntArray("indices", Array.Empty<int>());
+                        foreach (int visitedIndex in visitedIndices)
+                        {
+                            Visit(Locations[visitedIndex], resetTimeSinceVisited: false);
+                        }
+                        //backwards compatibility
                         foreach (var childElement in subElement.GetChildElements("location"))
                         {
                             if (GetLocation(childElement) is Location l)
                             {
-                                Visit(l);
+                                Visit(l, resetTimeSinceVisited: false);
                             }
                         }
                         break;
@@ -1619,7 +1682,7 @@ namespace Barotrauma
                 //this should not be possible, you can't enter non-outpost locations (= natural formations)
                 if (CurrentLocation != null && !CurrentLocation.Type.HasOutpost && SelectedConnection == null)
                 {
-                    DebugConsole.AddWarning($"Error while loading campaign map state. Submarine in a location with no outpost ({CurrentLocation.Name}). Loading the first adjacent connection...");
+                    DebugConsole.AddWarning($"Error while loading campaign map state. Submarine in a location with no outpost ({CurrentLocation.DisplayName}). Loading the first adjacent connection...");
                     SelectLocation(CurrentLocation.Connections[0].OtherLocation(CurrentLocation));
                 }
             }
@@ -1685,25 +1748,15 @@ namespace Barotrauma
             if (locationsDiscovered.Any())
             {
                 var discoveryElement = new XElement("discovered",
-                    new XAttribute("trackedvisitedemptylocations", true));
-                foreach (Location location in locationsDiscovered)
-                {
-                    int index = Locations.IndexOf(location);
-                    var locationElement = new XElement("location", new XAttribute("i", index));
-                    discoveryElement.Add(locationElement);
-                }
+                    new XAttribute("trackedvisitedemptylocations", true),
+                    new XAttribute("indices", string.Join(',', locationsDiscovered.Select(l => Locations.IndexOf(l)))));
                 mapElement.Add(discoveryElement);
             }
 
             if (locationsVisited.Any())
             {
-                var visitElement = new XElement("visited");
-                foreach (Location location in locationsVisited)
-                {
-                    int index = Locations.IndexOf(location);
-                    var locationElement = new XElement("location", new XAttribute("i", index));
-                    visitElement.Add(locationElement);
-                }
+                var visitElement = new XElement("visited",
+                    new XAttribute("indices", string.Join(',', locationsVisited.Select(l => Locations.IndexOf(l)))));
                 mapElement.Add(visitElement);
             }
 

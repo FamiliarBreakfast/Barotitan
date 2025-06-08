@@ -13,10 +13,9 @@ namespace Barotrauma
         public override Identifier Identifier { get; set; } = "rescue".ToIdentifier();
         public override bool ForceRun => true;
         public override bool KeepDivingGearOn => true;
-
-        public override bool AllowOutsideSubmarine => true;
-        public override bool AllowInAnySub => true;
-        public override bool AllowWhileHandcuffed => false;
+        protected override bool AllowOutsideSubmarine => true;
+        protected override bool AllowInAnySub => true;
+        protected override bool AllowWhileHandcuffed => false;
 
         const float TreatmentDelay = 0.5f;
 
@@ -71,7 +70,7 @@ namespace Barotrauma
             if (otherRescuer != null && otherRescuer != character)
             {
                 // Someone else is rescuing/holding the target.
-                Abandon = otherRescuer.IsPlayer || character.GetSkillLevel("medical") < otherRescuer.GetSkillLevel("medical");
+                Abandon = otherRescuer.IsPlayer || character.GetSkillLevel(Tags.MedicalSkill) < otherRescuer.GetSkillLevel(Tags.MedicalSkill);
                 return;
             }
             if (Target != character)
@@ -150,7 +149,7 @@ namespace Barotrauma
                                 if (HumanAIController.VisibleHulls.Contains(Target.CurrentHull) && Target.CurrentHull.DisplayName != null)
                                 {
                                     character.Speak(TextManager.GetWithVariables("DialogFoundUnconsciousTarget",
-                                        ("[targetname]", Target.Name, FormatCapitals.No),
+                                        ("[targetname]", Target.DisplayName, FormatCapitals.No),
                                         ("[roomname]", Target.CurrentHull.DisplayName, FormatCapitals.Yes)).Value,
                                         null, 1.0f, $"foundunconscioustarget{Target.Name}".ToIdentifier(), 60.0f);
                                 }
@@ -162,7 +161,7 @@ namespace Barotrauma
                                     TryAddSubObjective(ref goToObjective, () => new AIObjectiveGoTo(Target, character, objectiveManager)
                                     {
                                         CloseEnough = CloseEnoughToTreat,
-                                        DialogueIdentifier = "dialogcannotreachpatient".ToIdentifier(),
+                                        DialogueIdentifier = AIObjectiveGoTo.DialogCannotReachPatient,
                                         TargetName = Target.DisplayName
                                     },
                                     onCompleted: () => RemoveSubObjective(ref goToObjective),
@@ -198,13 +197,16 @@ namespace Barotrauma
                                 {
                                     RemoveSubObjective(ref replaceOxygenObjective);
                                     RemoveSubObjective(ref goToObjective);
-                                    TryAddSubObjective(ref goToObjective, () => new AIObjectiveGoTo(safeHull, character, objectiveManager),
-                                        onCompleted: () => RemoveSubObjective(ref goToObjective),
-                                        onAbandon: () =>
-                                        {
-                                            RemoveSubObjective(ref goToObjective);
-                                            safeHull = character.CurrentHull;
-                                        });
+                                    TryAddSubObjective(ref goToObjective, () => new AIObjectiveGoTo(safeHull, character, objectiveManager)                                    
+                                    { 
+                                        DialogueIdentifier = AIObjectiveGoTo.DialogCannotReachPlace
+                                    },                                       
+                                    onCompleted: () => RemoveSubObjective(ref goToObjective),
+                                    onAbandon: () =>
+                                    {
+                                        RemoveSubObjective(ref goToObjective);
+                                        safeHull = character.CurrentHull;
+                                    });
                                 }
                             }
                         }
@@ -222,7 +224,7 @@ namespace Barotrauma
                 TryAddSubObjective(ref goToObjective, () => new AIObjectiveGoTo(Target, character, objectiveManager)
                 {
                     CloseEnough = CloseEnoughToTreat,
-                    DialogueIdentifier = "dialogcannotreachpatient".ToIdentifier(),
+                    DialogueIdentifier = AIObjectiveGoTo.DialogCannotReachPatient,
                     TargetName = Target.DisplayName
                 },
                 onCompleted: () => RemoveSubObjective(ref goToObjective),
@@ -240,7 +242,7 @@ namespace Barotrauma
                     if (Target.CurrentHull?.DisplayName != null)
                     {
                         character.Speak(TextManager.GetWithVariables("DialogFoundWoundedTarget",
-                            ("[targetname]", Target.Name, FormatCapitals.No),
+                            ("[targetname]", Target.DisplayName, FormatCapitals.No),
                             ("[roomname]", Target.CurrentHull.DisplayName, FormatCapitals.Yes)).Value,
                             null, 1.0f, $"foundwoundedtarget{Target.Name}".ToIdentifier(), 60.0f);
                     }
@@ -278,52 +280,71 @@ namespace Barotrauma
 
             float cprSuitability = Target.Oxygen < 0.0f ? -Target.Oxygen * 100.0f : 0.0f;
 
-            //find which treatments are the most suitable to treat the character's current condition
-            Target.CharacterHealth.GetSuitableTreatments(currentTreatmentSuitabilities, user: character, normalize: false, predictFutureDuration: 10.0f);
-
-            //check if we already have a suitable treatment for any of the afflictions
+            float bestSuitability = 0.0f;
+            Item bestItem = null;
+            Affliction afflictionToTreat = null;
             foreach (Affliction affliction in GetSortedAfflictions(Target))
             {
-                if (affliction == null) { throw new Exception("Affliction was null"); }
-                if (affliction.Prefab == null) { throw new Exception("Affliction prefab was null"); }
-                float bestSuitability = 0.0f;
-                Item bestItem = null;
-                foreach (KeyValuePair<Identifier, float> treatmentSuitability in affliction.Prefab.TreatmentSuitabilities)
+                //find which treatments are the most suitable to treat the character's current condition
+                Target.CharacterHealth.GetSuitableTreatments(
+                    currentTreatmentSuitabilities, 
+                    limb: Target.CharacterHealth.GetAfflictionLimb(affliction), 
+                    user: character,
+                    checkTreatmentThreshold: true,
+                    checkTreatmentSuggestionThreshold: false,
+                    predictFutureDuration: 10.0f);
+
+                foreach (KeyValuePair<Identifier, float> treatmentSuitability in currentTreatmentSuitabilities)
                 {
-                    if (currentTreatmentSuitabilities.ContainsKey(treatmentSuitability.Key) && 
-                        currentTreatmentSuitabilities[treatmentSuitability.Key] > bestSuitability)
+                    float thisSuitability = currentTreatmentSuitabilities[treatmentSuitability.Key];
+                    if (thisSuitability <= 0) { continue; }
+                    
+                    Item matchingItem = FindMedicalItem(character.Inventory, treatmentSuitability.Key);
+                    //allow taking items from the target's inventory too if the target is unconscious
+                    if (matchingItem == null && Target.IsIncapacitated)
                     {
-                        Item matchingItem = character.Inventory.FindItemByIdentifier(treatmentSuitability.Key, true);
-                        //allow taking items from the target's inventory too if the target is unconscious
-                        if (matchingItem == null && Target.IsIncapacitated)
-                        {
-                            matchingItem ??= Target.Inventory?.FindItemByIdentifier(treatmentSuitability.Key, true);
-                        }
-                        if (matchingItem != null) 
-                        {
-                            bestItem = matchingItem;
-                            bestSuitability = currentTreatmentSuitabilities[treatmentSuitability.Key];
-                        }
+                        matchingItem = FindMedicalItem(Target.Inventory, treatmentSuitability.Key);
                     }
-                }
-                if (bestItem != null)
-                {
-                    if (Target != character) { character.SelectCharacter(Target); }
-                    ApplyTreatment(affliction, bestItem);
-                    //wait a bit longer after applying a treatment to wait for potential side-effects to manifest
-                    treatmentTimer = TreatmentDelay * 4;
-                    return;
+                    if (matchingItem == null) { continue; }
+
+                    //also check how suitable the treatment is for the specific affliction we're now checking
+                    //we don't want to e.g. give fentanyl for oxygen low just because the character has burns on other limbs
+                    //that would also be healed by it!
+                    float suitabilityForThisAffliction = affliction.Prefab.GetTreatmentSuitability(matchingItem);
+                    float totalSuitability = thisSuitability * suitabilityForThisAffliction;
+                    if (matchingItem != null && totalSuitability > bestSuitability)
+                    {
+                        bestItem = matchingItem;
+                        afflictionToTreat = affliction;
+                        bestSuitability = totalSuitability;
+                    }                    
                 }
             }
+
+            if (bestItem != null && bestSuitability > cprSuitability)
+            {
+                if (Target != character) { character.SelectCharacter(Target); }
+                ApplyTreatment(afflictionToTreat, bestItem);
+                //wait a bit longer after applying a treatment to wait for potential side-effects to manifest
+                treatmentTimer = TreatmentDelay * 4;
+                return;
+            }
+
             // Find treatments outside of own inventory only if inside the own sub.
             if (character.Submarine != null && character.Submarine.TeamID == character.TeamID)
             {
+                //get "overall" suitability for no specific limb at this point
+                Target.CharacterHealth.GetSuitableTreatments(
+                    currentTreatmentSuitabilities, user: character,
+                    checkTreatmentThreshold: true,
+                    checkTreatmentSuggestionThreshold: false,
+                    predictFutureDuration: 10.0f);
                 //didn't have any suitable treatments available, try to find some medical items
                 if (currentTreatmentSuitabilities.Any(s => s.Value > cprSuitability))
                 {
                     itemNameList.Clear();
                     suitableItemIdentifiers.Clear();
-                    foreach (KeyValuePair<Identifier, float> treatmentSuitability in currentTreatmentSuitabilities)
+                    foreach (KeyValuePair<Identifier, float> treatmentSuitability in currentTreatmentSuitabilities.OrderByDescending(s => s.Value))
                     {
                         if (treatmentSuitability.Value <= cprSuitability) { continue; }
                         if (ItemPrefab.Prefabs.TryGet(treatmentSuitability.Key, out ItemPrefab itemPrefab))
@@ -374,13 +395,22 @@ namespace Barotrauma
                         if (Target != character && character.IsOnPlayerTeam)
                         {
                             character.Speak(TextManager.GetWithVariables("DialogListRequiredTreatments",
-                                ("[targetname]", Target.Name, FormatCapitals.No),
+                                ("[targetname]", Target.DisplayName, FormatCapitals.No),
                                 ("[treatmentlist]", itemListStr, FormatCapitals.Yes)).Value,
                                 null, 2.0f, $"listrequiredtreatments{Target.Name}".ToIdentifier(), 60.0f);
                         }
+
+                        var itemsToFind = currentTreatmentSuitabilities
+                            //items that have a positive effect and that the bot doesn't yet have
+                            .Where(kvp => kvp.Value > 0.0f &&  character.Inventory.AllItems.None(it => it.Prefab.Identifier == kvp.Key))
+                            .Select(kvp => kvp.Key);
+
                         RemoveSubObjective(ref getItemObjective);
                         TryAddSubObjective(ref getItemObjective,
-                            constructor: () => new AIObjectiveGetItem(character, suitableItemIdentifiers.ToArray(), objectiveManager, equip: true, spawnItemIfNotFound: character.TeamID == CharacterTeamType.FriendlyNPC),
+                            constructor: () => new AIObjectiveGetItem(character, itemsToFind, objectiveManager, equip: true, spawnItemIfNotFound: character.TeamID == CharacterTeamType.FriendlyNPC)
+                            {
+                                GetItemPriority = it => currentTreatmentSuitabilities.GetValueOrDefault(it.Prefab.Identifier)
+                            },
                             onCompleted: () => RemoveSubObjective(ref getItemObjective),
                             onAbandon: () =>
                             {
@@ -420,6 +450,28 @@ namespace Barotrauma
             }
         }
 
+        public static Item FindMedicalItem(Inventory inventory, Identifier itemIdentifier)
+        {
+            return FindMedicalItem(inventory, it => it.Prefab.Identifier == itemIdentifier);
+        }
+
+        public static Item FindMedicalItem(Inventory inventory, Func<Item, bool> predicate)
+        {
+            if (inventory == null) { return null; }
+            //prefer items not in a container
+            Item match = inventory.FindItem(predicate, recursive: false);
+            if (match != null) { return match; }
+
+            //start from the inventories with most slots 
+            //= prefer taking items from things like toolbelts or doctor's uniforms, as opposed to e.g. autoinjectors which tend to have one or two slots
+            foreach (var potentialContainer in inventory.AllItems.OrderByDescending(it => it.OwnInventory?.Capacity ?? -1))
+            {
+                match = potentialContainer.OwnInventory?.FindItem(predicate, recursive: true);
+                if (match != null) { return match; }
+            }
+            return null;
+        }
+
         private void SpeakCannotTreat()
         {
             LocalizedString msg = character == Target ?
@@ -433,22 +485,22 @@ namespace Barotrauma
             item.ApplyTreatment(character, Target, Target.CharacterHealth.GetAfflictionLimb(affliction));
         }
 
-        protected override bool CheckObjectiveSpecific()
+        protected override bool CheckObjectiveState()
         {
-            bool isCompleted = AIObjectiveRescueAll.GetVitalityFactor(Target) >= AIObjectiveRescueAll.GetVitalityThreshold(objectiveManager, character, Target);
-            if (isCompleted && Target != character && character.IsOnPlayerTeam)
+            IsCompleted = AIObjectiveRescueAll.GetVitalityFactor(Target) >= AIObjectiveRescueAll.GetVitalityThreshold(objectiveManager, character, Target);
+            if (IsCompleted && Target != character && character.IsOnPlayerTeam)
             {
                 string textTag = performedCpr ? "DialogTargetResuscitated" : "DialogTargetHealed";
-                string message = TextManager.GetWithVariable(textTag, "[targetname]", Target.Name)?.Value;
+                string message = TextManager.GetWithVariable(textTag, "[targetname]", Target.DisplayName)?.Value;
                 character.Speak(message, delay: 1.0f, identifier: $"targethealed{Target.Name}".ToIdentifier(), minDurationBetweenSimilar: 60.0f);
             }
-            return isCompleted;
+            return IsCompleted;
         }
 
         protected override float GetPriority()
         {
             if (Target == null) { Abandon = true; }
-            if (!IsAllowed) { HandleNonAllowed(); }
+            if (!IsAllowed) { HandleDisallowed(); }
             if (Abandon)
             {
                 return Priority;
@@ -495,8 +547,8 @@ namespace Barotrauma
 
         public override void OnDeselected()
         {
-            character.SelectedCharacter = null;
             base.OnDeselected();
+            character.DeselectCharacter();
         }
     }
 }

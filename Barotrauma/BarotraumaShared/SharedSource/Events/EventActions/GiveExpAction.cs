@@ -2,19 +2,23 @@ using System.Linq;
 
 namespace Barotrauma
 {
+    /// <summary>
+    /// Gives experience to a specific character.
+    /// </summary>
     class GiveExpAction : EventAction
     {
-        [Serialize(0, IsPropertySaveable.Yes)]
+        [Serialize(0, IsPropertySaveable.Yes, description: "The amount of experience to give. Cannot be negative.")]
         public int Amount { get; set; }
 
-        [Serialize("", IsPropertySaveable.Yes)]
+        [Serialize("", IsPropertySaveable.Yes, description: "Tag of the character(s) to give the experience to.")]
         public Identifier TargetTag { get; set; }
 
         public GiveExpAction(ScriptedEvent parentEvent, ContentXElement element) : base(parentEvent, element)
         {
             if (TargetTag.IsEmpty)
             {
-                DebugConsole.ThrowError($"Error in event \"{parentEvent.Prefab.Identifier}\": {nameof(GiveExpAction)} without a target tag (the action needs to know whose skill to check).");
+                DebugConsole.ThrowError($"Error in event \"{parentEvent.Prefab.Identifier}\": {nameof(GiveExpAction)} without a target tag (the action needs to know whose skill to check).",
+                    contentPackage: element.ContentPackage);
             }
         }
 

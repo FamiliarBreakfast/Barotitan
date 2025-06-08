@@ -1,4 +1,4 @@
-using System.Xml.Linq;
+﻿using System.Xml.Linq;
 
 namespace Barotrauma
 {
@@ -65,7 +65,8 @@ namespace Barotrauma
             }
             else
             {
-                DebugConsole.ThrowError($"RandomEventsFile: Invalid {GetType().Name} element: {parentElement.Name} in {Path}");
+                DebugConsole.ThrowError($"RandomEventsFile: Invalid {GetType().Name} element: {parentElement.Name} in {Path}",
+                    contentPackage: parentElement.ContentPackage);
             }
         }
 
@@ -76,12 +77,15 @@ namespace Barotrauma
 
             var rootElement = doc.Root.FromPackage(ContentPackage);
             LoadFromXElement(rootElement, false);
+
+            EventSet.RefreshAllEventPrefabs();
         }
 
         public override void UnloadFile()
         {
             EventPrefab.Prefabs.RemoveByFile(this);
             EventSet.Prefabs.RemoveByFile(this);
+            EventSet.RefreshAllEventPrefabs();
 #if CLIENT
             EventSprite.Prefabs.RemoveByFile(this);
 #endif
@@ -91,6 +95,9 @@ namespace Barotrauma
         {
             EventPrefab.Prefabs.SortAll();
             EventSet.Prefabs.SortAll();
+            //need to referesh, because the order of the prefabs may affect which content package overrides some event
+            EventSet.RefreshAllEventPrefabs();
+
 #if CLIENT
             EventSprite.Prefabs.SortAll();
 #endif

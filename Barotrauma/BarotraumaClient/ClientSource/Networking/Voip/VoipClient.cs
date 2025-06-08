@@ -106,7 +106,7 @@ namespace Barotrauma.Networking
                 if (client.VoipSound == null)
                 {
                     DebugConsole.Log("Recreating voipsound " + queueId);
-                    client.VoipSound = new VoipSound(client.Name, GameMain.SoundManager, client.VoipQueue);
+                    client.VoipSound = new VoipSound(client, GameMain.SoundManager, client.VoipQueue);
                 }
                 GameMain.SoundManager.ForceStreamUpdate();
                 client.RadioNoise = 0.0f;
@@ -116,18 +116,19 @@ namespace Barotrauma.Networking
                     bool spectating = Character.Controlled == null;
                     float rangeMultiplier = spectating ? 2.0f : 1.0f;
                     WifiComponent senderRadio = null;
+
                     var messageType = 
                         !client.VoipQueue.ForceLocal && 
                         ChatMessage.CanUseRadio(client.Character, out senderRadio) && 
-                        ChatMessage.CanUseRadio(Character.Controlled, out var recipientRadio) && 
-                        senderRadio.CanReceive(recipientRadio) ? 
-                            ChatMessageType.Radio : ChatMessageType.Default;
-                    client.Character.ShowSpeechBubble(1.25f, ChatMessage.MessageColor[(int)messageType]);
+                        (spectating || (ChatMessage.CanUseRadio(Character.Controlled, out var recipientRadio) && senderRadio.CanReceive(recipientRadio)))
+                            ? ChatMessageType.Radio : ChatMessageType.Default;
+                    client.Character.ShowTextlessSpeechBubble(1.25f, ChatMessage.MessageColor[(int)messageType]);
 
                     client.VoipSound.UseRadioFilter = messageType == ChatMessageType.Radio && !GameSettings.CurrentConfig.Audio.DisableVoiceChatFilters;
                     client.RadioNoise = 0.0f;
                     if (messageType == ChatMessageType.Radio)
                     {
+                        client.VoipSound.UsingRadio = true;
                         client.VoipSound.SetRange(senderRadio.Range * RangeNear * speechImpedimentMultiplier * rangeMultiplier, senderRadio.Range * speechImpedimentMultiplier * rangeMultiplier);
                         if (distanceFactor > RangeNear && !spectating)
                         {
@@ -137,17 +138,18 @@ namespace Barotrauma.Networking
                     }
                     else
                     {
-                        client.VoipSound.SetRange(ChatMessage.SpeakRange * RangeNear * speechImpedimentMultiplier * rangeMultiplier, ChatMessage.SpeakRange * speechImpedimentMultiplier * rangeMultiplier);
+                        client.VoipSound.UsingRadio = false;
+                        client.VoipSound.SetRange(ChatMessage.SpeakRangeVOIP * RangeNear * speechImpedimentMultiplier * rangeMultiplier, ChatMessage.SpeakRangeVOIP * speechImpedimentMultiplier * rangeMultiplier);
                     }
                     client.VoipSound.UseMuffleFilter = 
                         messageType != ChatMessageType.Radio && Character.Controlled != null && !GameSettings.CurrentConfig.Audio.DisableVoiceChatFilters &&
-                        SoundPlayer.ShouldMuffleSound(Character.Controlled, client.Character.WorldPosition, ChatMessage.SpeakRange, client.Character.CurrentHull);                 
+                        SoundPlayer.ShouldMuffleSound(Character.Controlled, client.Character.WorldPosition, ChatMessage.SpeakRangeVOIP, client.Character.CurrentHull);
                 }
 
                 GameMain.NetLobbyScreen?.SetPlayerSpeaking(client);
                 GameMain.GameSession?.CrewManager?.SetClientSpeaking(client);
 
-                if ((client.VoipSound.CurrentAmplitude * client.VoipSound.Gain * GameMain.SoundManager.GetCategoryGainMultiplier("voip")) > 0.1f) //TODO: might need to tweak
+                if ((client.VoipSound.CurrentAmplitude * client.VoipSound.Gain * GameMain.SoundManager.GetCategoryGainMultiplier(SoundManager.SoundCategoryVoip)) > 0.1f) //TODO: might need to tweak
                 {
                     if (client.Character != null && !client.Character.Removed && !client.Character.IsDead)
                     {

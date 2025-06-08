@@ -90,12 +90,11 @@ namespace Barotrauma.Items.Components
         [Serialize(false, IsPropertySaveable.No, description: "Can the item repair things through holes in walls.")]
         public bool RepairThroughHoles { get; set; }
 
-
         [Serialize(100.0f, IsPropertySaveable.No, description: "How far two walls need to not be considered overlapping and to stop the ray.")]
-        public float MaxOverlappingWallDist
-        {
-            get; set;
-        }
+        public float MaxOverlappingWallDist { get; set; }
+
+        [Serialize(1.0f, IsPropertySaveable.No, description: "How fast the tool detaches level resources (e.g. minerals). Acts as a multiplier on the speed: with a value of 2, detaching an item whose DeattachDuration is set to 30 seconds would take 15 seconds.")]
+        public float DeattachSpeed { get; set; }
 
         [Serialize(true, IsPropertySaveable.No, description: "Can the item hit doors.")]
         public bool HitItems { get; set; }
@@ -137,7 +136,8 @@ namespace Barotrauma.Items.Components
 
             if (element.GetAttribute("limbfixamount") != null)
             {
-                DebugConsole.ThrowError("Error in item \"" + item.Name + "\" - RepairTool damage should be configured using a StatusEffect with Afflictions, not the limbfixamount attribute.");
+                DebugConsole.ThrowError("Error in item \"" + item.Name + "\" - RepairTool damage should be configured using a StatusEffect with Afflictions, not the limbfixamount attribute.",
+                    contentPackage: element.ContentPackage);
             }
 
             fixableEntities = new HashSet<Identifier>();
@@ -149,7 +149,8 @@ namespace Barotrauma.Items.Components
                     case "fixable":
                         if (subElement.GetAttribute("name") != null)
                         {
-                            DebugConsole.ThrowError("Error in RepairTool " + item.Name + " - use identifiers instead of names to configure fixable entities.");
+                            DebugConsole.ThrowError("Error in RepairTool " + item.Name + " - use identifiers instead of names to configure fixable entities.",
+                                contentPackage: element.ContentPackage);
                             fixableEntities.Add(subElement.GetAttribute("name").Value.ToIdentifier());
                         }
                         else
@@ -169,7 +170,7 @@ namespace Barotrauma.Items.Components
                 }
             }
             item.IsShootable = true;
-            item.RequireAimToUse = element.Parent.GetAttributeBool("requireaimtouse", true);
+            item.RequireAimToUse = element.Parent.GetAttributeBool(nameof(item.RequireAimToUse), true);
             InitProjSpecific(element);
         }
 
@@ -247,7 +248,7 @@ namespace Barotrauma.Items.Components
                 var barrelHull = Hull.FindHull(ConvertUnits.ToDisplayUnits(rayStartWorld), item.CurrentHull, useWorldCoordinates: true);
                 if (barrelHull != null && barrelHull != item.CurrentHull)
                 {
-                    if (MathUtils.GetLineRectangleIntersection(ConvertUnits.ToDisplayUnits(sourcePos), ConvertUnits.ToDisplayUnits(rayStart), item.CurrentHull.Rect, out Vector2 hullIntersection))
+                    if (MathUtils.GetLineWorldRectangleIntersection(ConvertUnits.ToDisplayUnits(sourcePos), ConvertUnits.ToDisplayUnits(rayStart), item.CurrentHull.Rect, out Vector2 hullIntersection))
                     {
                         if (!item.CurrentHull.ConnectedGaps.Any(g => g.Open > 0.0f && Submarine.RectContains(g.Rect, hullIntersection))) 
                         { 
@@ -319,7 +320,7 @@ namespace Barotrauma.Items.Components
         private readonly List<FireSource> fireSourcesInRange = new List<FireSource>();
         private void Repair(Vector2 rayStart, Vector2 rayEnd, float deltaTime, Character user, float degreeOfSuccess, List<Body> ignoredBodies)
         {
-            var collisionCategories = Physics.CollisionWall | Physics.CollisionItem | Physics.CollisionLevel | Physics.CollisionRepair;
+            var collisionCategories = Physics.CollisionWall | Physics.CollisionItem | Physics.CollisionLevel | Physics.CollisionRepairableWall | Physics.CollisionItemBlocking;
             if (!IgnoreCharacters)
             {
                 collisionCategories |= Physics.CollisionCharacter;
@@ -412,7 +413,7 @@ namespace Barotrauma.Items.Components
                         break;
                     }
                     pickedPosition = rayStart + (rayEnd - rayStart) * thisBodyFraction;
-                    if (FixBody(user, deltaTime, degreeOfSuccess, body))
+                    if (FixBody(user, pickedPosition, deltaTime, degreeOfSuccess, body))
                     {
                         lastPickedFraction = thisBodyFraction;
                         if (bodyType != null) { lastHitType = bodyType; }
@@ -450,7 +451,7 @@ namespace Barotrauma.Items.Components
                     },
                     allowInsideFixture: true);
                 pickedPosition = Submarine.LastPickedPosition;
-                FixBody(user, deltaTime, degreeOfSuccess, pickedBody);                    
+                FixBody(user, pickedPosition, deltaTime, degreeOfSuccess, pickedBody);                    
                 lastPickedFraction = Submarine.LastPickedFraction;
             }
             
@@ -536,12 +537,12 @@ namespace Barotrauma.Items.Components
                 {
                     Vector2 displayPos = ConvertUnits.ToDisplayUnits(rayStart + (rayEnd - rayStart) * lastPickedFraction * 0.9f);
                     if (item.CurrentHull.Submarine != null) { displayPos += item.CurrentHull.Submarine.Position; }
-                    new FireSource(displayPos);
+                    new FireSource(displayPos, sourceCharacter: user);
                 }
             }
         }
 
-        private bool FixBody(Character user, float deltaTime, float degreeOfSuccess, Body targetBody)
+        private bool FixBody(Character user, Vector2 hitPosition, float deltaTime, float degreeOfSuccess, Body targetBody)
         {
             if (targetBody?.UserData == null) { return false; }
 
@@ -570,7 +571,14 @@ namespace Barotrauma.Items.Components
                     structureFixAmount *= 1 + item.GetQualityModifier(Quality.StatType.RepairToolStructureDamageMultiplier);
                 }
 
+                var didLeak = targetStructure.SectionIsLeakingFromOutside(sectionIndex);
+
                 targetStructure.AddDamage(sectionIndex, -structureFixAmount * degreeOfSuccess, user);
+
+                if (didLeak && !targetStructure.SectionIsLeakingFromOutside(sectionIndex))
+                {
+                    user.CheckTalents(AbilityEffectType.OnRepairedOutsideLeak);
+                }
 
                 //if the next section is small enough, apply the effect to it as well
                 //(to make it easier to fix a small "left-over" section)
@@ -591,7 +599,7 @@ namespace Barotrauma.Items.Components
             {
                 if (Level.Loaded?.ExtraWalls.Find(w => w.Body == cell.Body) is DestructibleLevelWall levelWall)
                 {
-                    levelWall.AddDamage(-LevelWallFixAmount * deltaTime, item.WorldPosition);
+                    levelWall.AddDamage(-LevelWallFixAmount * deltaTime, ConvertUnits.ToDisplayUnits(hitPosition));
                 }
                 return true;
             }
@@ -646,21 +654,26 @@ namespace Barotrauma.Items.Components
                 FixCharacterProjSpecific(user, deltaTime, targetLimb.character);
                 return true;
             }
-            else if (targetBody.UserData is Item targetItem)
+            else if (targetBody.UserData is Barotrauma.Item or Holdable)
             {
+                Item targetItem = targetBody.UserData is Holdable holdable ? holdable.Item : (Item)targetBody.UserData;
                 if (!HitItems || !targetItem.IsInteractable(user)) { return false; }
 
                 var levelResource = targetItem.GetComponent<LevelResource>();
                 if (levelResource != null && levelResource.Attached &&
-                    levelResource.requiredItems.Any() &&
+                    levelResource.RequiredItems.Any() &&
                     levelResource.HasRequiredItems(user, addMessage: false))
                 {
-                    float addedDetachTime = deltaTime * (1f + user.GetStatValue(StatTypes.RepairToolDeattachTimeMultiplier)) * (1f + item.GetQualityModifier(Quality.StatType.RepairToolDeattachTimeMultiplier));
+                    float addedDetachTime = deltaTime *
+                        DeattachSpeed *
+                        (1f + user.GetStatValue(StatTypes.RepairToolDeattachTimeMultiplier)) * 
+                        (1f + item.GetQualityModifier(Quality.StatType.RepairToolDeattachTimeMultiplier));
                     levelResource.DeattachTimer += addedDetachTime;
 #if CLIENT
-                    if (targetItem.Prefab.ShowHealthBar)
+                    if (targetItem.Prefab.ShowHealthBar && Character.Controlled != null &&
+                        (user == Character.Controlled || Character.Controlled.CanSeeTarget(item)))
                     {
-                        Character.Controlled?.UpdateHUDProgressBar(
+                        Character.Controlled.UpdateHUDProgressBar(
                             this,
                             targetItem.WorldPosition,
                             levelResource.DeattachTimer / levelResource.DeattachDuration,
@@ -752,7 +765,7 @@ namespace Barotrauma.Items.Components
                 if (!character.AnimController.InWater && character.AnimController is HumanoidAnimController humanAnim &&
                     Math.Abs(fromCharacterToLeak.X) < 100.0f && fromCharacterToLeak.Y < 0.0f && fromCharacterToLeak.Y > -150.0f)
                 {
-                    humanAnim.Crouching = true;
+                    humanAnim.Crouch();
                 }
             }
             if (!character.IsClimbing)

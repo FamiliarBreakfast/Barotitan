@@ -1,7 +1,6 @@
-using Microsoft.Xna.Framework;
+﻿using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 
 namespace Barotrauma.Networking
 {
@@ -10,6 +9,7 @@ namespace Barotrauma.Networking
     {
         public string Name;
         public Identifier PreferredJob;
+        public CharacterTeamType TeamID;
         public CharacterTeamType PreferredTeam;
         public UInt16 NameId;
         public AccountInfo AccountInfo;
@@ -51,7 +51,23 @@ namespace Barotrauma.Networking
 
         public Identifier PreferredJob;
 
-        public CharacterTeamType TeamID;
+        private CharacterTeamType teamID;
+        public CharacterTeamType TeamID
+        {
+            get { return teamID; }
+            set
+            {
+                if (value != teamID)
+                {
+                    DebugConsole.Log($"Changed client {Name}'s team to {teamID}.");
+                    if (GameMain.NetworkMember != null && GameMain.NetworkMember.IsServer)
+                    {
+                        GameMain.NetworkMember.LastClientListUpdateID++;
+                    }
+                    teamID = value;
+                }
+            }
+        }
 
         public CharacterTeamType PreferredTeam;
 
@@ -218,7 +234,7 @@ namespace Barotrauma.Networking
                 msg.WriteUInt16((UInt16)PermittedConsoleCommands.Count);
                 foreach (DebugConsole.Command command in PermittedConsoleCommands)
                 {
-                    msg.WriteString(command.names[0]);
+                    msg.WriteIdentifier(command.Names[0]);
                 }
             }
         }
@@ -240,8 +256,8 @@ namespace Barotrauma.Networking
                 UInt16 commandCount = inc.ReadUInt16();
                 for (int i = 0; i < commandCount; i++)
                 {
-                    string commandName = inc.ReadString();
-                    var consoleCommand = DebugConsole.Commands.Find(c => c.names.Contains(commandName));
+                    Identifier commandName = inc.ReadIdentifier();
+                    var consoleCommand = DebugConsole.Commands.Find(c => c.Names.Contains(commandName));
                     if (consoleCommand != null)
                     {
                         permittedCommands.Add(consoleCommand);

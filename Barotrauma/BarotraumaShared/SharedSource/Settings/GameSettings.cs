@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 using Barotrauma.Extensions;
 using Microsoft.Xna.Framework;
 using System;
@@ -41,6 +41,13 @@ namespace Barotrauma
         BossHealthBarsOnly,
         HideAll
     }
+    
+    public enum InteractionLabelDisplayMode
+    {
+        Everything,
+        InteractionAvailable,
+        LooseItems
+    }
 
     public static class GameSettings
     {
@@ -67,12 +74,15 @@ namespace Barotrauma
                     RemoteMainMenuContentUrl = "https://www.barotraumagame.com/gamedata/",
                     AimAssistAmount = DefaultAimAssist,
                     ShowEnemyHealthBars = EnemyHealthBarMode.ShowAll,
+                    ChatSpeechBubbles = true,
+                    InteractionLabelDisplayMode = InteractionLabelDisplayMode.Everything,
                     EnableMouseLook = true,
                     ChatOpen = true,
                     CrewMenuOpen = true,
                     ShowOffensiveServerPrompt = true,
                     TutorialSkipWarning = true,
                     CorpseDespawnDelay = 600,
+                    CorpseDespawnDelayPvP = 60,
                     CorpsesPerSubDespawnThreshold = 5,
 #if OSX
                     UseDualModeSockets = false,
@@ -84,15 +94,15 @@ namespace Barotrauma
                     Graphics = GraphicsSettings.GetDefault(),
                     Audio = AudioSettings.GetDefault(),
 #if CLIENT
+                    CrossplayChoice = Eos.EosSteamPrimaryLogin.CrossplayChoice.Unknown,
+                    DisableGlobalSpamList = false,
                     KeyMap = KeyMapping.GetDefault(),
                     InventoryKeyMap = InventoryKeyMapping.GetDefault()
 #endif
 
                 };
 #if DEBUG
-                config.UseSteamMatchmaking = true;
                 config.QuickStartSub = "Humpback".ToIdentifier();
-                config.RequireSteamAuthentication = true;
                 config.AutomaticQuickStartEnabled = false;
                 config.AutomaticCampaignLoadEnabled = false;
                 config.TextManagerDebugModeEnabled = false;
@@ -143,11 +153,14 @@ namespace Barotrauma
             public float AimAssistAmount;
             public bool EnableMouseLook;
             public EnemyHealthBarMode ShowEnemyHealthBars;
+            public bool ChatSpeechBubbles;
+            public InteractionLabelDisplayMode InteractionLabelDisplayMode;
             public bool ChatOpen;
             public bool CrewMenuOpen;
             public bool ShowOffensiveServerPrompt;
             public bool TutorialSkipWarning;
             public int CorpseDespawnDelay;
+            public int CorpseDespawnDelayPvP;
             public int CorpsesPerSubDespawnThreshold;
             public bool UseDualModeSockets;
             public bool DisableInGameHints;
@@ -155,19 +168,16 @@ namespace Barotrauma
             public Identifier QuickStartSub;
             public string RemoteMainMenuContentUrl;
 #if CLIENT
+            public Eos.EosSteamPrimaryLogin.CrossplayChoice CrossplayChoice;
             public XElement SavedCampaignSettings;
+            public bool DisableGlobalSpamList;
 #endif
 #if DEBUG
-            public bool UseSteamMatchmaking;
-            public bool RequireSteamAuthentication;
             public bool AutomaticQuickStartEnabled;
             public bool AutomaticCampaignLoadEnabled;
             public bool TestScreenEnabled;
             public bool TextManagerDebugModeEnabled;
             public bool ModBreakerMode;
-#else
-            public bool UseSteamMatchmaking => true;
-            public bool RequireSteamAuthentication => true;
 #endif
 
             public struct GraphicsSettings
@@ -178,10 +188,11 @@ namespace Barotrauma
                 {
                     GraphicsSettings gfxSettings = new GraphicsSettings
                     {
+                        Display = 0,
                         RadialDistortion = true,
                         InventoryScale = 1.0f,
                         LightMapScale = 1.0f,
-                        VisibleLightLimit = 50,
+                        VisibleLightLimit = 100,
                         TextScale = 1.0f,
                         HUDScale = 1.0f,
                         Specularity = true,
@@ -208,6 +219,7 @@ namespace Barotrauma
                     return retVal;
                 }
 
+                public int Display;
                 public int Width;
                 public int Height;
                 public bool VSync;
@@ -298,12 +310,14 @@ namespace Barotrauma
                     new Dictionary<InputType, KeyOrMouse>()
                     {
                         { InputType.Run, Keys.LeftShift },
+                        { InputType.ToggleRun, Keys.None },
                         { InputType.Attack, Keys.R },
                         { InputType.Crouch, Keys.LeftControl },
                         { InputType.Grab, Keys.G },
                         { InputType.Health, Keys.H },
                         { InputType.Ragdoll, Keys.Space },
                         { InputType.Aim, MouseButton.SecondaryMouse },
+                        { InputType.DropItem, Keys.None },
 
                         { InputType.InfoTab, Keys.Tab },
                         { InputType.Chat, Keys.None },
@@ -317,6 +331,7 @@ namespace Barotrauma
                         { InputType.LocalVoice, Keys.None },
                         { InputType.ToggleChatMode, Keys.R },
                         { InputType.Command, MouseButton.MiddleMouse },
+                        { InputType.ContextualCommand, Keys.LeftShift },
                         { InputType.PreviousFireMode, MouseButton.MouseWheelDown },
                         { InputType.NextFireMode, MouseButton.MouseWheelUp },
 
@@ -335,7 +350,8 @@ namespace Barotrauma
                         { InputType.Use, Keys.E },
                         { InputType.Select, MouseButton.PrimaryMouse },
                         { InputType.Deselect, MouseButton.SecondaryMouse },
-                        { InputType.Shoot, MouseButton.PrimaryMouse }
+                        { InputType.Shoot, MouseButton.PrimaryMouse },
+                        { InputType.ShowInteractionLabels, Keys.LeftAlt }
                 }.ToImmutableDictionary();
 
                 public static KeyMapping GetDefault() => new KeyMapping
@@ -385,6 +401,13 @@ namespace Barotrauma
                         {
                             foreach (var savedBinding in savedBindings)
                             {
+                                if (savedBinding.Key is InputType.Run or InputType.TakeHalfFromInventorySlot &&
+                                    defaultBinding.Key == InputType.ContextualCommand)
+                                {
+                                    //run and contextual commands have always defaulted to Shift, but the latter used to be hard-coded.
+                                    //don't show a warning about those being bound to the same key
+                                    continue;
+                                }
                                 if (savedBinding.Value == defaultBinding.Value)
                                 {
                                     OnGameMainHasLoaded += () =>
@@ -504,6 +527,10 @@ namespace Barotrauma
 
         public static void Init()
         {
+            // Ensure the save folder exists early. Otherwise the game will crash on macOS,
+            // attempting to read the non-existent folder in SafeIO.CanWrite() when saving initial user config.
+            SaveUtil.EnsureSaveFolderExists();
+            
             XDocument? currentConfigDoc = null;
 
             if (File.Exists(PlayerConfigPath))
@@ -515,6 +542,7 @@ namespace Barotrauma
             {
                 currentConfig = Config.FromElement(currentConfigDoc.Root ?? throw new NullReferenceException("Config XML element is invalid: document is null."));
 #if CLIENT
+                MainMenuScreen.DismissedNotifications = currentConfigDoc.Root.GetAttributeIdentifierArray(nameof(MainMenuScreen.DismissedNotifications), defaultValue: Array.Empty<Identifier>()).ToHashSet();
                 ServerListFilters.Init(currentConfigDoc.Root.GetChildElement("serverfilters"));
                 MultiplayerPreferences.Init(
                     currentConfigDoc.Root.GetChildElement("player"),
@@ -546,7 +574,21 @@ namespace Barotrauma
             bool setGraphicsMode =
                 resolutionChanged ||
                 currentConfig.Graphics.VSync != newConfig.Graphics.VSync ||
-                currentConfig.Graphics.DisplayMode != newConfig.Graphics.DisplayMode;
+                currentConfig.Graphics.DisplayMode != newConfig.Graphics.DisplayMode ||
+                currentConfig.Graphics.Display != newConfig.Graphics.Display;
+
+#if CLIENT
+            bool keybindsChanged = false;
+            foreach (var kvp in newConfig.KeyMap.Bindings)
+            {
+                if (!currentConfig.KeyMap.Bindings.TryGetValue(kvp.Key, out var existingBinding) ||
+                    existingBinding != kvp.Value)
+                {
+                    keybindsChanged = true;
+                    break;
+                }
+            }
+#endif
 
             currentConfig = newConfig;
 
@@ -575,7 +617,19 @@ namespace Barotrauma
                 HUDLayoutSettings.CreateAreas();
                 GameMain.GameSession?.HUDScaleChanged();
             }
-            
+
+            if (keybindsChanged)
+            {
+                foreach (var item in Item.ItemList)
+                {
+                    foreach (var ic in item.Components)
+                    {
+                        //parse messages because they may contain keybind texts
+                        ic.ParseMsg();
+                    }
+                }
+            }
+
             GameMain.SoundManager?.ApplySettings();
 #endif
             if (languageChanged) { TextManager.ClearCache(); }
@@ -607,6 +661,8 @@ namespace Barotrauma
             }
 
 #if CLIENT
+            root.Add(new XAttribute(nameof(MainMenuScreen.DismissedNotifications), string.Join(',', MainMenuScreen.DismissedNotifications.Select(n => n.Value))));
+
             XElement serverFiltersElement = new XElement("serverfilters"); root.Add(serverFiltersElement);
             ServerListFilters.Instance.SaveTo(serverFiltersElement);
 

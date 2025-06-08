@@ -1,6 +1,7 @@
 ﻿#nullable enable
 using Barotrauma.Extensions;
 using Microsoft.Xna.Framework;
+using Steamworks.Data;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -21,14 +22,14 @@ namespace Barotrauma.Steam
         private readonly Action<ItemOrPackage> onInstalledInfoButtonHit;
         private readonly GUITextBox modsListFilter;
         private readonly Dictionary<Filter, GUITickBox> modsListFilterTickboxes;
-        private readonly GUIButton bulkUpdateButton;
+        private readonly Option<GUIButton> bulkUpdateButtonOption;
 
         private GUIComponent? draggedElement = null;
         private GUIListBox? draggedElementOrigin = null;
 
         private void UpdateSubscribedModInstalls()
         {
-            if (!SteamManager.IsInitialized) { return; }
+            if (!EnableWorkshopSupport) { return; }
 
             uint numSubscribedMods = SteamManager.GetNumSubscribedItems();
             if (numSubscribedMods == memSubscribedModCount) { return; }
@@ -171,7 +172,7 @@ namespace Barotrauma.Steam
             out Action<ItemOrPackage> onInstalledInfoButtonHit,
             out GUITextBox modsListFilter,
             out Dictionary<Filter, GUITickBox> modsListFilterTickboxes,
-            out GUIButton bulkUpdateButton)
+            out Option<GUIButton> bulkUpdateButton)
         {
             GUIFrame content = CreateNewContentFrame(Tab.InstalledMods);
             
@@ -233,18 +234,22 @@ namespace Barotrauma.Steam
                     },
                     ToolTip = TextManager.Get("RefreshModLists")
                 };
-            bulkUpdateButton
-                = new GUIButton(
-                    new RectTransform(Vector2.One, topRightButtons.RectTransform, scaleBasis: ScaleBasis.BothHeight),
-                    text: "", style: "GUIUpdateButton")
-                {
-                    OnClicked = (b, o) =>
+
+            bulkUpdateButton = EnableWorkshopSupport
+                ? Option.Some(
+                    new GUIButton(
+                        new RectTransform(Vector2.One, topRightButtons.RectTransform, scaleBasis: ScaleBasis.BothHeight),
+                        text: "", style: "GUIUpdateButton")
                     {
-                        BulkDownloader.PrepareUpdates();
-                        return false;
-                    },
-                    Enabled = false
-                };
+                        OnClicked = (b,
+                                     o) =>
+                        {
+                            BulkDownloader.PrepareUpdates();
+                            return false;
+                        },
+                        Enabled = false
+                    })
+                : Option.None;
             padTopRight(width: 0.1f);
 
             var (left, center, right) = CreateSidebars(mainLayout, centerWidth: 0.05f, leftWidth: 0.475f, rightWidth: 0.475f, height: 0.8f);
@@ -405,10 +410,13 @@ namespace Barotrauma.Steam
                     CanBeFocused = false
                 };
             }
-            
-            addFilterTickbox(Filter.ShowLocal, "WorkshopMenu.EditButton", selected: true);
-            addFilterTickbox(Filter.ShowWorkshop, "WorkshopMenu.DownloadedIcon", selected: true);
-            addFilterTickbox(Filter.ShowPublished, "WorkshopMenu.PublishedIcon", selected: true);
+
+            if (EnableWorkshopSupport)
+            {
+                addFilterTickbox(Filter.ShowLocal, "WorkshopMenu.EditButton", selected: true);
+                addFilterTickbox(Filter.ShowWorkshop, "WorkshopMenu.DownloadedIcon", selected: true);
+                addFilterTickbox(Filter.ShowPublished, "WorkshopMenu.PublishedIcon", selected: true);
+            }
             addFilterTickbox(Filter.ShowOnlySubs, null, selected: false);
             addFilterTickbox(Filter.ShowOnlyItemAssemblies, null, selected: false);
             
@@ -487,14 +495,23 @@ namespace Barotrauma.Steam
             var iconBtn = guiItem.GetChild<GUILayoutGroup>()?.GetAllChildren<GUIButton>().Last();
 
             bool matches = false;
-            matches |= modsListFilterTickboxes[Filter.ShowLocal].Selected
-                       && ContentPackageManager.LocalPackages.Contains(p);
-            matches |= modsListFilterTickboxes[Filter.ShowPublished].Selected
-                       && (ContentPackageManager.WorkshopPackages.Contains(p)
-                            && iconBtn?.Style?.Identifier == "WorkshopMenu.PublishedIcon");
-            matches |= modsListFilterTickboxes[Filter.ShowWorkshop].Selected
-                       && (ContentPackageManager.WorkshopPackages.Contains(p)
-                            && iconBtn?.Style?.Identifier != "WorkshopMenu.PublishedIcon");
+
+            if (EnableWorkshopSupport)
+            {
+                matches |= modsListFilterTickboxes[Filter.ShowLocal].Selected
+                           && ContentPackageManager.LocalPackages.Contains(p);
+
+                matches |= modsListFilterTickboxes[Filter.ShowPublished].Selected
+                           && (ContentPackageManager.WorkshopPackages.Contains(p)
+                               && iconBtn?.Style?.Identifier == "WorkshopMenu.PublishedIcon");
+                matches |= modsListFilterTickboxes[Filter.ShowWorkshop].Selected
+                           && (ContentPackageManager.WorkshopPackages.Contains(p)
+                               && iconBtn?.Style?.Identifier != "WorkshopMenu.PublishedIcon");
+            }
+            else
+            {
+                matches = true;
+            }
 
             if (modsListFilterTickboxes[Filter.ShowOnlySubs].Selected
                 && modsListFilterTickboxes[Filter.ShowOnlyItemAssemblies].Selected
@@ -521,20 +538,30 @@ namespace Barotrauma.Steam
         {
             if (!mod.UgcId.TryUnwrap(out var ugcId)
                 || ugcId is not SteamWorkshopId workshopId) { return; }
+
+            if (mod.UgcItem.TryUnwrap(out var cachedItem))
+            {
+                onInstalledInfoButtonHit(cachedItem);
+                return;
+            }
+
             TaskPool.Add($"PrepareToShow{mod.UgcId}Info", SteamManager.Workshop.GetItem(workshopId.Value),
                 t =>
                 {
-                    if (!t.TryGetResult(out Steamworks.Ugc.Item? item)) { return; }
-                    if (item is null) { return; }
-                    onInstalledInfoButtonHit(item.Value);
+                    if (!t.TryGetResult(out Option<Steamworks.Ugc.Item> itemOption)) { return; }
+                    if (!itemOption.TryUnwrap(out var item)) { return; }
+                    onInstalledInfoButtonHit(item);
                 });
         }
         
         public void PopulateInstalledModLists(bool forceRefreshEnabled = false, bool refreshDisabled = true)
         {
             ViewingItemDetails = false;
-            bulkUpdateButton.Enabled = false;
-            bulkUpdateButton.ToolTip = "";
+            if (bulkUpdateButtonOption.TryUnwrap(out var bulkUpdateButton))
+            {
+                bulkUpdateButton.Enabled = false;
+                bulkUpdateButton.ToolTip = "";
+            }
             ContentPackageManager.UpdateContentPackageList();
 
             var corePackages = ContentPackageManager.CorePackages.ToArray();
@@ -583,7 +610,7 @@ namespace Barotrauma.Steam
                             return false;
                         }
                     };
-                    if (!SteamManager.IsInitialized)
+                    if (!EnableWorkshopSupport)
                     {
                         infoButton.Enabled = false;
                     }
@@ -599,8 +626,11 @@ namespace Barotrauma.Steam
                             infoButton.CanBeSelected = true;
                             infoButton.ApplyStyle(GUIStyle.ComponentStyles["WorkshopMenu.InfoButtonUpdate"]);
                             infoButton.ToolTip = TextManager.Get("ViewModDetailsUpdateAvailable");
-                            bulkUpdateButton.Enabled = true;
-                            bulkUpdateButton.ToolTip = TextManager.Get("ModUpdatesAvailable");
+                            if (bulkUpdateButtonOption.TryUnwrap(out var bulkUpdateButton))
+                            {
+                                bulkUpdateButton.Enabled = true;
+                                bulkUpdateButton.ToolTip = TextManager.Get("ModUpdatesAvailable");
+                            }
                         });
                 }
             }
@@ -612,7 +642,23 @@ namespace Barotrauma.Steam
                 {
                     UserData = mod
                 };
-                
+                //fetch the description in DrawToolTip, so we only need to fetch it if it's actually needed
+                modFrame.OnDrawToolTip += (GUIComponent component) =>
+                {
+                    if (modFrame.ToolTip.IsNullOrEmpty())
+                    {
+                        mod.TryFetchUgcDescription(onFinished: (string? description) =>
+                        {
+                            //check if the tooltip is empty still (in case it was changed after we started fetching the description
+                            if (modFrame.ToolTip.IsNullOrEmpty() &&
+                                !string.IsNullOrEmpty(description))
+                            {
+                                modFrame.ToolTip = description + "...";
+                            }
+                        });
+                    }
+                };
+
                 var frameContent = new GUILayoutGroup(new RectTransform((0.95f, 0.9f), modFrame.RectTransform, Anchor.Center), isHorizontal: true, childAnchor: Anchor.CenterLeft)
                 {
                     Stretch = true,
@@ -652,77 +698,125 @@ namespace Barotrauma.Steam
                 var contextMenuHandler = new GUICustomComponent(new RectTransform(Vector2.Zero, modFrame.RectTransform),
                     onUpdate: (f, component) =>
                     {
-                        var parentList = modFrame.Parent?.Parent?.Parent as GUIListBox; //lovely jank :)
-                        if (parentList is null) { return; }
-                        if (GUI.MouseOn == modFrame && parentList.DraggedElement is null && PlayerInput.SecondaryMouseButtonClicked())
+                        if (modFrame.Parent?.Parent?.Parent is not GUIListBox parentList || GUI.MouseOn != modFrame || parentList.DraggedElement is not null || !PlayerInput.SecondaryMouseButtonClicked()) { return; }
+                        if (!parentList.AllSelected.Contains(modFrame))
                         {
-                            if (!parentList.AllSelected.Contains(modFrame)) { parentList.Select(parentList.Content.GetChildIndex(modFrame)); }
-                            static void noop() { }
-
-                            List<ContextMenuOption> contextMenuOptions = new List<ContextMenuOption>();
-                            if (ContentPackageManager.WorkshopPackages.Contains(mod))
+                            parentList.Select(parentList.Content.GetChildIndex(modFrame));
+                        }
+                        List<ContextMenuOption> contextMenuOptions = new List<ContextMenuOption>();
+                        ContentPackage[] selectedMods = parentList.AllSelected.Select(it => it.UserData).OfType<ContentPackage>().ToArray();
+                        Identifier swapLabel = ((parentList == enabledRegularModsList, selectedMods.Length > 1) switch
+                        {
+                            (false, true) => "EnableSelectedWorkshopMods",
+                            (false, false) => "EnableWorkshopMod",
+                            (true, true) => "DisableSelectedWorkshopMods",
+                            (true, false) => "DisableWorkshopMod"
+                        }).ToIdentifier();
+                        contextMenuOptions.Add(new(swapLabel, isEnabled: true, currentSwapFunc ?? NoOp));
+                        if (ContentPackageManager.WorkshopPackages.Contains(mod))
+                        {
+                            if (selectedMods.Length == 1)
                             {
-                                contextMenuOptions.Add(
-                                    new ContextMenuOption("ViewWorkshopModDetails".ToIdentifier(), isEnabled: true, onSelected: () => PrepareToShowModInfo(mod)));
+                                contextMenuOptions.Add(new("ViewWorkshopModDetails".ToIdentifier(), isEnabled: true, () => PrepareToShowModInfo(mod)));
+                                contextMenuOptions.Add(new("CopyWorkshopToLocal".ToIdentifier(), isEnabled: true, () => CopyToLocal()));
                             }
-
-                            var labelConditions
-                                = (parentList == enabledRegularModsList, parentList.AllSelected.Count > 1);
-                            Identifier swapLabel = (labelConditions switch
+                            if (mod.MissingDependencies.Any())
                             {
-                                (false, true) => "EnableSelectedWorkshopMods",
-                                (false, false) => "EnableWorkshopMod",
-                                (true, true) => "DisableSelectedWorkshopMods",
-                                (true, false) => "DisableWorkshopMod"
-                            }).ToIdentifier();
-                            
-                            contextMenuOptions.Add(new ContextMenuOption(swapLabel,
-                                isEnabled: true, onSelected: currentSwapFunc ?? noop));
-
-                            var selectedMods = parentList.AllSelected.Select(it => it.UserData)
-                                .OfType<ContentPackage>().ToArray();
-                            if (selectedMods.All(ContentPackageManager.LocalPackages.Contains) && selectedMods.Length > 1)
-                            {
-                                contextMenuOptions.Add(new ContextMenuOption("MergeSelectedMods".ToIdentifier(), isEnabled: true,
-                                    onSelected: () => ModMerger.AskMerge(selectedMods)));
+                                contextMenuOptions.Add(new("workshop.dependencynotfound.showmissingdependencies".ToIdentifier(), isEnabled: true, 
+                                    () => CreateDependencyErrorMessageBox(mod, mod.MissingDependencies)));
                             }
-
-                            GUIButton? iconBtn(GUIComponent component) => component.GetChild<GUILayoutGroup>()?.GetAllChildren<GUIButton>().Last();
-                            if (selectedMods.All(ContentPackageManager.WorkshopPackages.Contains)
-                                && parentList.AllSelected.All(c => iconBtn(c)?.Style?.Identifier == "WorkshopMenu.DownloadedIcon")
-                                && selectedMods.Length > 0)
+                            if (selectedMods.All(ContentPackageManager.WorkshopPackages.Contains))
                             {
-                                contextMenuOptions.Add(new ContextMenuOption(
-                                    (selectedMods.Length > 1 ? "UnsubscribeFromAllSelected" : "WorkshopItemUnsubscribe").ToIdentifier(),
-                                    isEnabled: true,
-                                    onSelected: () =>
+                                if (parentList.AllSelected.All(c => c.GetChild<GUILayoutGroup>()?.GetAllChildren<GUIButton>().Last()?.Style?.Identifier == "WorkshopMenu.DownloadedIcon") && selectedMods.Length > 0 && SteamManager.IsInitialized)
+                                {
+                                    contextMenuOptions.Add(new((selectedMods.Length > 1 ? "UnsubscribeFromAllSelected" : "WorkshopItemUnsubscribe").ToIdentifier(), true, () =>
                                     {
-                                        var workshopIds = selectedMods
-                                            .Select(m => m.UgcId)
-                                            .NotNone()
-                                            .OfType<SteamWorkshopId>()
-                                            .Select(id => id.Value);
-                                        TaskPool.AddIfNotFound($"UnsubFromSelected", Task.WhenAll(workshopIds.Select(SteamManager.Workshop.GetItem)),
-                                            t =>
+                                        TaskPool.AddIfNotFound("UnsubFromSelected", Task.WhenAll(selectedMods.Select(m => m.UgcId).NotNone().OfType<SteamWorkshopId>().Select(id => SteamManager.Workshop.GetItem(id.Value))), t =>
+                                        {
+                                            if (!t.TryGetResult(out Option<Steamworks.Ugc.Item>[]? itemOptions)) { return; }
+                                            itemOptions.ForEach(io =>
                                             {
-                                                if (!t.TryGetResult(out Steamworks.Ugc.Item?[] items)) { return; }
-                                                items.ForEach(it =>
-                                                {
-                                                    if (!(it is { } item)) { return; }
-
-                                                    item.Unsubscribe();
-                                                    SteamManager.Workshop.Uninstall(item);
-                                                    PopulateInstalledModLists();
-                                                });
+                                                if (!io.TryUnwrap(out Steamworks.Ugc.Item item) || !item.IsSubscribed) { return; }
+                                                item.Unsubscribe();
+                                                SteamManager.Workshop.Uninstall(item);
+                                                PopulateInstalledModLists();
                                             });
+                                        });
                                     }));
+                                }
                             }
-                            
-                            GUIContextMenu.CreateContextMenu(
-                                pos: PlayerInput.MousePosition,
-                                header:  ToolBox.LimitString(mod.Name, GUIStyle.SubHeadingFont, GUI.IntScale(300f)),
-                                headerColor: null,
-                                contextMenuOptions.ToArray());
+                        }
+                        else if (ContentPackageManager.LocalPackages.Contains(mod))
+                        {
+                            if (selectedMods.Length == 1)
+                            {
+                                contextMenuOptions.Add(new ContextMenuOption("RenamePackage".ToIdentifier(), isEnabled: true, AskToRenameLocal));
+                            }
+                            if (selectedMods.All(ContentPackageManager.LocalPackages.Contains))
+                            {
+                                if (selectedMods.Length > 1)
+                                {
+                                    contextMenuOptions.Add(new("MergeSelectedMods".ToIdentifier(), isEnabled: true, () => ModMerger.AskMerge(selectedMods)));
+                                }
+                                contextMenuOptions.Add(new("Delete".ToIdentifier(), isEnabled: true, AskToDeleteLocal));
+                            }
+                        }
+                        GUIContextMenu.CreateContextMenu(PlayerInput.MousePosition, ToolBox.LimitString(mod.Name, GUIStyle.SubHeadingFont, GUI.IntScale(300)), null, contextMenuOptions.ToArray());
+                        static void NoOp() { }
+                        void AskToRenameLocal()
+                        {
+                            GUIMessageBox msgBox = new(TextManager.Get("RenamePackage"), mod.Name, new LocalizedString[] {  TextManager.Get("Confirm"), TextManager.Get("Cancel") }, minSize: new Point(0, GUI.IntScale(195)));
+                            GUITextBox textBox = new(new(Vector2.One, msgBox.Content.RectTransform), mod.Name)
+                            {
+                                OnEnterPressed = (textBox, text) =>
+                                {
+                                    textBox.Text = text.Trim();
+                                    return true;
+                                }
+                            };
+                            msgBox.Buttons[0].OnClicked += msgBox.Close;
+                            msgBox.Buttons[1].OnClicked += (_, _) =>
+                            {
+                                if (textBox.Text == mod.Name)
+                                {
+                                    msgBox.Close();
+                                    return true;
+                                }
+                                if (mod.TryRenameLocal(textBox.Text))
+                                {
+                                    PopulateInstalledModLists();
+                                    msgBox.Close();
+                                    return true;
+                                }
+                                else
+                                {
+                                    textBox.Flash();
+                                    return false;
+                                }
+                            };
+                        }
+                        void CopyToLocal()
+                        {
+                            if (mod.TryCreateLocalFromWorkshop())
+                            {
+                                PopulateInstalledModLists();
+                            }
+                        }
+                        void AskToDeleteLocal()
+                        {
+                            GUIMessageBox msgBox = new(TextManager.Get("DeleteMods"), TextManager.GetWithVariables("DeleteModsConfirm", ("[amount]", selectedMods.Length.ToString())), 
+                                new LocalizedString[] { TextManager.Get("Confirm"), TextManager.Get("Cancel")}, textAlignment: Alignment.TopCenter);
+                            msgBox.Buttons[0].OnClicked += (_, _) =>
+                            {
+                                foreach (ContentPackage mod in selectedMods)
+                                {
+                                    mod.TryDeleteLocal();
+                                    PopulateInstalledModLists();
+                                }
+                                msgBox.Close();
+                                return true;
+                            };
+                            msgBox.Buttons[1].OnClicked += msgBox.Close;
                         }
                     });
 
@@ -761,7 +855,7 @@ namespace Barotrauma.Steam
                 SteamManager.Workshop.GetPublishedItems(),
                 t =>
                 {
-                    if (!t.TryGetResult(out ISet<Steamworks.Ugc.Item> items)) { return; }
+                    if (!t.TryGetResult(out ISet<Steamworks.Ugc.Item>? items)) { return; }
                     var ids = items.Select(it => it.Id).ToHashSet();
 
                     foreach (var child in enabledRegularModsList.Content.Children
@@ -790,6 +884,81 @@ namespace Barotrauma.Steam
                 });
             
             UpdateModListItemVisibility();
+        }
+        
+        private void CreateDependencyErrorMessageBox(ContentPackage contentPackage, IEnumerable<PublishedFileId> missingDependencies)
+        {
+            GUIMessageBox msgBox = new GUIMessageBox(TextManager.Get("Error"),
+                TextManager.GetWithVariable("workshop.dependencynotfoundtitle", "[name]", contentPackage.Name), new Vector2(0.25f, 0.0f), minSize: new Point(GUI.IntScale(650), GUI.IntScale(650)));
+            msgBox.Buttons[0].OnClicked = (btn, userdata) =>
+            {
+                SettingsMenu.Instance?.ApplyInstalledModChanges();
+                msgBox.Close();
+                return true;
+            };
+            var textListBox = new GUIListBox(new RectTransform(new Vector2(1.0f, 0.75f), msgBox.Content.RectTransform));
+
+            foreach (var dependency in missingDependencies)
+            {
+                var textBlock = new GUITextBlock(new RectTransform(new Vector2(1.0f, 0.0f), textListBox.Content.RectTransform),
+                    $"- {TextManager.Get("unknown")} {dependency}")
+                {
+                    CanBeFocused = false
+                };
+
+                var matchingPackage = ContentPackageManager.WorkshopPackages.FirstOrDefault(p => 
+                    p.UgcId.TryUnwrap(out var ugcId) && 
+                    ugcId is SteamWorkshopId workshopId && 
+                    workshopId.Value == dependency.Value);
+                if (matchingPackage != null &&
+                    disabledRegularModsList.Content.GetChildByUserData(matchingPackage) is GUIComponent matchingListElement)
+                {
+                    textBlock.Text = $"- {matchingPackage.Name}";
+                    var enableButton = new GUIButton(new RectTransform(new Vector2(0.25f, 0.9f), textBlock.RectTransform, Anchor.CenterRight), TextManager.Get("workshopitemenabled"))
+                    {
+                        OnClicked = (btn, userdata) =>
+                        {
+                            btn.Enabled = false;
+                            textBlock.Flash(GUIStyle.Green);
+                            matchingListElement.RectTransform.Parent = enabledRegularModsList.Content.RectTransform;
+                            matchingListElement.Flash(GUIStyle.Green);
+                            return true;
+                        }
+                    };
+                    textBlock.RectTransform.MinSize = new Point(0, (int)(enableButton.Rect.Height * 1.2f));
+                }
+                else
+                {
+                    var subscribeButton = new GUIButton(new RectTransform(new Vector2(0.25f, 0.9f), textBlock.RectTransform, Anchor.CenterRight), TextManager.Get("downloadbutton"))
+                    {
+                        Enabled = false
+                    };
+                    textBlock.RectTransform.MinSize = new Point(0, (int)(subscribeButton.Rect.Height * 1.2f));
+
+                    //fetch the workshop item based on the ID, update the text to show it's title and create a subscribe button
+                    TaskPool.Add($"GetMissingDependencyInfo{dependency}", SteamManager.Workshop.GetItem(dependency),
+                        t =>
+                        {
+                            if (!t.TryGetResult(out Option<Steamworks.Ugc.Item> itemOption)) { return; }
+                            if (!itemOption.TryUnwrap(out var item)) { return; }
+                            if (!item.Title.IsNullOrEmpty())
+                            {
+                                textBlock.Text = $"- {item.Title}";
+                            }
+                            if (!item.IsSubscribed)
+                            {
+                                subscribeButton.OnClicked = (btn, userdata) =>
+                                {
+                                    _ = item.Subscribe();
+                                    subscribeButton.Enabled = false;
+                                    textBlock.Flash(GUIStyle.Green);
+                                    return true;
+                                };
+                                subscribeButton.Enabled = true;
+                            }
+                        });
+                }
+            }
         }
     }
 }

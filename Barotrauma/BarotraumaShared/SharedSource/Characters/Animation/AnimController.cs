@@ -32,6 +32,25 @@ namespace Barotrauma
         public abstract GroundedMovementParams RunParams { get; set; }
         public abstract SwimParams SwimSlowParams { get; set; }
         public abstract SwimParams SwimFastParams { get; set; }
+        
+        protected class AnimSwap
+        {
+            public readonly AnimationType AnimationType;
+            public readonly AnimationParams TemporaryAnimation;
+            public readonly float Priority;
+            public bool IsActive;
+            
+            public AnimSwap(AnimationParams temporaryAnimation, float priority)
+            {
+                AnimationType = temporaryAnimation.AnimationType;
+                TemporaryAnimation = temporaryAnimation;
+                Priority = priority;
+                IsActive = true;
+            }
+        }
+        
+        protected readonly Dictionary<AnimationType, AnimSwap> tempAnimations = new Dictionary<AnimationType, AnimSwap>();
+        protected readonly HashSet<AnimationType> expiredAnimations = new HashSet<AnimationType>();
 
         public AnimationParams CurrentAnimationParams
         {
@@ -87,7 +106,11 @@ namespace Barotrauma
         }
 
         public bool CanWalk => RagdollParams.CanWalk;
-        public bool IsMovingBackwards => !InWater && Math.Sign(targetMovement.X) == -Math.Sign(Dir) && CurrentAnimationParams is not FishGroundedParams { Flip: false };
+        public bool IsMovingBackwards => 
+            !InWater && 
+            Math.Sign(targetMovement.X) == -Math.Sign(Dir) && 
+            CurrentAnimationParams is not FishGroundedParams { Flip: false } &&
+            Anim != Animation.Climbing;
 
         // TODO: define death anim duration in XML
         protected float deathAnimTimer, deathAnimDuration = 5.0f;
@@ -105,7 +128,8 @@ namespace Barotrauma
                 }
                 else
                 {
-                    return Math.Abs(TargetMovement.X) > (WalkParams.MovementSpeed + RunParams.MovementSpeed) / 2.0f;
+                    float movementSpeed = IsClimbing ? TargetMovement.Y : TargetMovement.X;
+                    return Math.Abs(movementSpeed) > (WalkParams.MovementSpeed + RunParams.MovementSpeed) / 2.0f;
                 }
             }
         }
@@ -177,8 +201,14 @@ namespace Barotrauma
         public float WalkPos { get; protected set; }
 
         public AnimController(Character character, string seed, RagdollParams ragdollParams = null) : base(character, seed, ragdollParams) { }
+        
+        public void UpdateAnimations(float deltaTime)
+        {
+            UpdateTemporaryAnimations();
+            UpdateAnim(deltaTime);
+        }
 
-        public abstract void UpdateAnim(float deltaTime);
+        protected abstract void UpdateAnim(float deltaTime);
 
         public abstract void DragCharacter(Character target, float deltaTime);
 
@@ -253,23 +283,26 @@ namespace Barotrauma
             switch (type)
             {
                 case AnimationType.Walk:
-                    return WalkParams;
+                    return CanWalk ? WalkParams : null;
                 case AnimationType.Run:
-                    return RunParams;
+                    return CanWalk ? RunParams : null;
                 case AnimationType.Crouch:
                     if (this is HumanoidAnimController humanAnimController)
                     {
                         return humanAnimController.HumanCrouchParams;
                     }
-                    throw new NotImplementedException(type.ToString());
+                    else
+                    {
+                        DebugConsole.ThrowError($"Animation params of type {type} not implemented for non-humanoids!");
+                        return null;
+                    }
                 case AnimationType.SwimSlow:
                     return SwimSlowParams;
                 case AnimationType.SwimFast:
                     return SwimFastParams;
                 case AnimationType.NotDefined:
-                    return null;
                 default:
-                    throw new NotImplementedException(type.ToString());
+                    return null;
             }
         }
 
@@ -282,6 +315,31 @@ namespace Barotrauma
         public void LockFlipping(float time = 0.2f)
         {
             FlipLockTime = (float)Timing.TotalTime + time;
+        }
+        
+        protected void UpdateConstantTorque(float deltaTime)
+        {
+            foreach (var limb in Limbs)
+            {
+                if (limb.IsSevered) { continue; }
+                if (Math.Abs(limb.Params.ConstantTorque) > 0)
+                {
+                    // TODO: not sure if this works on ground
+                    float movementFactor = Math.Max(character.AnimController.Collider.LinearVelocity.Length() * 0.5f, 1);
+                    limb.body.SmoothRotate(MainLimb.Rotation + MathHelper.ToRadians(limb.Params.ConstantAngle) * Dir, limb.Mass * limb.Params.ConstantTorque * movementFactor, wrapAngle: true);
+                }
+            }
+        }
+        
+        protected void UpdateBlink(float deltaTime)
+        {
+            foreach (var limb in Limbs)
+            {
+                if (limb.IsSevered) { continue; }
+                if (limb.Params.BlinkFrequency <= 0) { continue; }
+                if (!limb.InWater && limb.Params.OnlyBlinkInWater) { continue; }
+                limb.UpdateBlink(deltaTime, MainLimb.Rotation);
+            }
         }
 
         public void UpdateUseItem(bool allowMovement, Vector2 handWorldPos)
@@ -353,9 +411,9 @@ namespace Barotrauma
                 character.WorldPosition.Y - handWorldPos.Y > ConvertUnits.ToDisplayUnits(CurrentGroundedParams.TorsoPosition) / 4 &&
                 this is HumanoidAnimController humanoidAnimController)
             {
-                humanoidAnimController.Crouching = true;
+                humanoidAnimController.Crouch();
+                // TODO: is this redundant/required?
                 humanoidAnimController.ForceSelectAnimationType = AnimationType.Crouch;
-                character.SetInput(InputType.Crouch, hit: false, held: true);
             }
         }
 
@@ -376,7 +434,7 @@ namespace Barotrauma
         private Direction previousDirection;
         private readonly Vector2[] transformedHandlePos = new Vector2[2];
         //TODO: refactor this method, it's way too convoluted
-        public void HoldItem(float deltaTime, Item item, Vector2[] handlePos, Vector2 holdPos, Vector2 aimPos, bool aim, float holdAngle, float itemAngleRelativeToHoldAngle = 0.0f, bool aimMelee = false)
+        public void HoldItem(float deltaTime, Item item, Vector2[] handlePos, Vector2 itemPos, bool aim, float holdAngle, float itemAngleRelativeToHoldAngle = 0.0f, bool aimMelee = false, Vector2? targetPos = null)
         {
             aimingMelee = aimMelee;
             if (character.Stun > 0.0f || character.IsIncapacitated)
@@ -385,22 +443,20 @@ namespace Barotrauma
             }
 
             //calculate the handle positions
-            Matrix itemTransfrom = Matrix.CreateRotationZ(item.body.Rotation);
-            transformedHandlePos[0] = Vector2.Transform(handlePos[0], itemTransfrom);
-            transformedHandlePos[1] = Vector2.Transform(handlePos[1], itemTransfrom);
+            Matrix itemTransform = Matrix.CreateRotationZ(item.body.Rotation);
+            transformedHandlePos[0] = Vector2.Transform(handlePos[0], itemTransform);
+            transformedHandlePos[1] = Vector2.Transform(handlePos[1], itemTransform);
 
             Limb torso = GetLimb(LimbType.Torso) ?? MainLimb;
             Limb leftHand = GetLimb(LimbType.LeftHand);
             Limb rightHand = GetLimb(LimbType.RightHand);
 
-            Vector2 itemPos = aim ? aimPos : holdPos;
-
             var controller = character.SelectedItem?.GetComponent<Controller>();
-            bool usingController = controller != null && !controller.AllowAiming;
+            bool usingController = controller is { AllowAiming: false };
             if (!usingController)
             {
                 controller = character.SelectedSecondaryItem?.GetComponent<Controller>();
-                usingController = controller != null && !controller.AllowAiming;
+                usingController = controller is { AllowAiming: false };
             }
             bool isClimbing = character.IsClimbing && Math.Abs(character.AnimController.TargetMovement.Y) > 0.01f;
             float itemAngle;
@@ -408,15 +464,17 @@ namespace Barotrauma
             float torsoRotation = torso.Rotation;
 
             Item rightHandItem = character.Inventory?.GetItemInLimbSlot(InvSlotType.RightHand);
-            bool equippedInRightHand = rightHandItem == item && rightHand != null && !rightHand.IsSevered;
+            bool equippedInRightHand = rightHandItem == item && rightHand is { IsSevered: false };
             Item leftHandItem = character.Inventory?.GetItemInLimbSlot(InvSlotType.LeftHand);
-            bool equippedInLefthand = leftHandItem == item && leftHand != null && !leftHand.IsSevered;
+            bool equippedInLeftHand = leftHandItem == item && leftHand is { IsSevered: false };
             if (aim && !isClimbing && !usingController && character.Stun <= 0.0f && itemPos != Vector2.Zero && !character.IsIncapacitated)
             {
-                Vector2 mousePos = ConvertUnits.ToSimUnits(character.SmoothedCursorPosition);
-                Vector2 diff = holdable.Aimable ?
-                    (mousePos - AimSourceSimPos) * Dir : 
+                targetPos ??= ConvertUnits.ToSimUnits(character.SmoothedCursorPosition);
+                
+                Vector2 diff = holdable.Aimable ? 
+                    (targetPos.Value - AimSourceSimPos) * Dir : 
                     MathUtils.RotatePoint(Vector2.UnitX, torsoRotation);
+                
                 holdAngle = MathUtils.VectorToAngle(new Vector2(diff.X, diff.Y * Dir)) - torsoRotation * Dir;
                 holdAngle += GetAimWobble(rightHand, leftHand, item);
                 itemAngle = torsoRotation + holdAngle * Dir;
@@ -424,7 +482,7 @@ namespace Barotrauma
                 if (holdable.ControlPose)
                 {
                     //if holding two items that should control the characters' pose, let the item in the right hand do it
-                    bool anotherItemControlsPose = equippedInLefthand && rightHandItem != item && (rightHandItem?.GetComponent<Holdable>()?.ControlPose ?? false);
+                    bool anotherItemControlsPose = equippedInLeftHand && rightHandItem != item && (rightHandItem?.GetComponent<Holdable>()?.ControlPose ?? false);
                     if (!anotherItemControlsPose && TargetMovement == Vector2.Zero && inWater)
                     {
                         torso.body.AngularVelocity -= torso.body.AngularVelocity * 0.1f;
@@ -441,7 +499,7 @@ namespace Barotrauma
                     {
                         itemAngle = rightHand.Rotation + holdAngle * Dir;
                     }
-                    else if (equippedInLefthand)
+                    else if (equippedInLeftHand)
                     {
                         itemAngle = leftHand.Rotation + holdAngle * Dir;
                     }
@@ -465,7 +523,7 @@ namespace Barotrauma
                     transformedHoldPos = rightHand.PullJointWorldAnchorA - transformedHandlePos[0];
                     itemAngle = rightHand.Rotation + (holdAngle - rightHand.Params.GetSpriteOrientation() + MathHelper.PiOver2) * Dir;
                 }
-                else if (equippedInLefthand)
+                else if (equippedInLeftHand)
                 {
                     transformedHoldPos = leftHand.PullJointWorldAnchorA - transformedHandlePos[1];
                     itemAngle = leftHand.Rotation + (holdAngle - leftHand.Params.GetSpriteOrientation() + MathHelper.PiOver2) * Dir;
@@ -478,7 +536,7 @@ namespace Barotrauma
                     transformedHoldPos = rightShoulder.WorldAnchorA;
                     rightHand.Disabled = true;
                 }
-                if (equippedInLefthand)
+                if (equippedInLeftHand)
                 {
                     if (leftShoulder == null) { return; }
                     transformedHoldPos = leftShoulder.WorldAnchorA;
@@ -550,9 +608,10 @@ namespace Barotrauma
                 {
                     if (!character.Inventory.IsInLimbSlot(item, i == 0 ? InvSlotType.RightHand : InvSlotType.LeftHand)) { continue; }
 #if DEBUG
-                    if (handlePos[i].LengthSquared() > ArmLength)
+                    if (ArmLength > 0 && handlePos[i].LengthSquared() > ArmLength)
                     {
-                        DebugConsole.AddWarning($"Aim position for the item {item.Name} may be incorrect (further than the length of the character's arm)");
+                        DebugConsole.AddWarning($"Aim position for the item {item.Name} may be incorrect (further than the length of the character's arm)",
+                            item.Prefab.ContentPackage);
                     }
 #endif
                     HandIK(
@@ -640,6 +699,290 @@ namespace Barotrauma
                 hand.body.SmoothRotate(handAngle, 10.0f * handTorque * hand.Mass, wrapAngle: false);
             }
         }
+        
+        private float prevFootPos;
+        protected void UpdateClimbing()
+        {
+            var ladder = character.SelectedSecondaryItem?.GetComponent<Ladder>();
+            if (character.IsIncapacitated)
+            {
+                Anim = Animation.None;
+                return;
+            }
+            else if (ladder == null)
+            {
+                StopClimbing();
+                return;
+            }
+
+            onGround = false;
+            IgnorePlatforms = true;
+            
+            bool climbFast = !character.Params.ForceSlowClimbing && character.AnimController.IsMovingFast;
+            var animParams = climbFast ? RunParams : WalkParams;
+            // Don't slide if we can climb faster than slide.
+            bool slide = animParams.SlideSpeed > animParams.ClimbSpeed && targetMovement.Y < -0.1f && climbFast;
+            float maxClimbingSpeed = climbFast && !character.Params.ForceSlowClimbing ? RunParams.ClimbSpeed : WalkParams.ClimbSpeed;
+            Vector2 tempTargetMovement = TargetMovement;
+            tempTargetMovement.Y = Math.Clamp(tempTargetMovement.Y, slide ? -animParams.SlideSpeed : -maxClimbingSpeed, maxClimbingSpeed);
+
+            movement = MathUtils.SmoothStep(movement, tempTargetMovement, 0.3f);
+
+            Limb leftFoot   = GetClimbingLimb(LimbType.LeftFoot);
+            Limb rightFoot  = GetClimbingLimb(LimbType.RightFoot);
+            Limb head       = GetClimbingLimb(LimbType.Head);
+            Limb torso      = GetClimbingLimb(LimbType.Torso);
+
+            Limb leftHand   = GetClimbingLimb(LimbType.LeftHand);
+            Limb rightHand  = GetClimbingLimb(LimbType.RightHand);
+
+            Vector2 ladderSimPos = ConvertUnits.ToSimUnits(
+                ladder.Item.Rect.X + ladder.Item.Rect.Width / 2.0f,
+                ladder.Item.Rect.Y);
+
+            Vector2 ladderSimSize = ConvertUnits.ToSimUnits(ladder.Item.Rect.Size.ToVector2());
+            
+            var lowestNearbyLadder = GetLowestNearbyLadder(ladder);
+            if (lowestNearbyLadder != null && lowestNearbyLadder != ladder)
+            {
+                ladderSimSize.Y = ConvertUnits.ToSimUnits(ladder.Item.WorldRect.Y - (lowestNearbyLadder.Item.WorldRect.Y - lowestNearbyLadder.Item.Rect.Size.Y));
+            }
+
+            float stepHeight = ConvertUnits.ToSimUnits(animParams.ClimbStepHeight);
+
+            if (currentHull == null && ladder.Item.Submarine != null)
+            {
+                ladderSimPos += ladder.Item.Submarine.SimPosition;
+            }
+            else if (currentHull?.Submarine != null && currentHull.Submarine != ladder.Item.Submarine && ladder.Item.Submarine != null)
+            {
+                ladderSimPos += ladder.Item.Submarine.SimPosition - currentHull.Submarine.SimPosition;
+            }
+            else if (currentHull?.Submarine != null && ladder.Item.Submarine == null)
+            {
+                ladderSimPos -= currentHull.Submarine.SimPosition;
+            }
+
+            float bottomPos = Collider.SimPosition.Y - ColliderHeightFromFloor - Collider.Radius - Collider.Height / 2.0f;
+            float torsoPos = TorsoPosition ?? 0;
+            float bodyMoveForce = animParams.ClimbBodyMoveForce;
+            if (torso != null)
+            {
+                MoveLimb(torso, new Vector2(ladderSimPos.X - 0.35f * Dir, bottomPos + torsoPos), bodyMoveForce);   
+            }
+            if (head != null)
+            {
+                float headPos = HeadPosition ?? 0;
+                MoveLimb(head, new Vector2(ladderSimPos.X - 0.2f * Dir, bottomPos + headPos), bodyMoveForce);    
+            }
+
+            Collider.MoveToPos(new Vector2(ladderSimPos.X - 0.1f * Dir, Collider.SimPosition.Y), bodyMoveForce);
+            
+            Vector2 handPos = new Vector2(
+                ladderSimPos.X,
+                bottomPos + torsoPos + movement.Y * 0.1f - ladderSimPos.Y);
+            if (climbFast) { handPos.Y -= stepHeight; }
+            
+            float handMoveForce = animParams.ClimbHandMoveForce;
+
+            //prevent the hands from going above the top of the ladders
+            handPos.Y = Math.Min(-0.5f, handPos.Y);
+            if (!Aiming || !(character.Inventory?.GetItemInLimbSlot(InvSlotType.RightHand)?.GetComponent<Holdable>()?.ControlPose ?? false) || Math.Abs(movement.Y) > 0.01f)
+            {
+                if (rightHand != null)
+                {
+                    MoveLimb(rightHand,
+                        new Vector2(slide ? handPos.X + ladderSimSize.X * 0.75f : handPos.X,
+                            (slide ? handPos.Y + stepHeight : MathUtils.Round(handPos.Y, stepHeight * 2.0f)) + ladderSimPos.Y),
+                        handMoveForce);
+                    rightHand.body.ApplyTorque(Dir * 2.0f);   
+                }
+            }
+            if (!Aiming || !(character.Inventory?.GetItemInLimbSlot(InvSlotType.LeftHand)?.GetComponent<Holdable>()?.ControlPose ?? false) || Math.Abs(movement.Y) > 0.01f)
+            {
+                if (leftHand != null)
+                {
+                    MoveLimb(leftHand,
+                        new Vector2(handPos.X - ladderSimSize.X * (slide ? 1.0f : 0.5f),
+                            (slide ? handPos.Y + stepHeight : MathUtils.Round(handPos.Y - stepHeight, stepHeight * 2.0f) + stepHeight) + ladderSimPos.Y),
+                        handMoveForce); ;
+                    leftHand.body.ApplyTorque(Dir * 2.0f);   
+                }
+            }
+
+            float stepHeightAdjustment = stepHeight * 2.7f;
+            Vector2 footPos = new Vector2(
+                handPos.X - Dir * 0.05f,
+                bottomPos + ColliderHeightFromFloor - stepHeightAdjustment - ladderSimPos.Y);
+            if (climbFast) { footPos.Y += stepHeight; }
+
+            //apply torque to the legs to make the knees bend
+            Limb leftLeg = GetClimbingLimb(LimbType.LeftLeg);
+            Limb rightLeg = GetClimbingLimb(LimbType.RightLeg);
+
+            //only move the feet if they're above the bottom of the ladders
+            //(if not, they'll just dangle in air, and the character holds itself up with its arms)
+            if (footPos.Y > -ladderSimSize.Y - 0.2f && leftFoot != null && rightFoot != null && leftLeg != null && rightLeg != null)
+            {
+                Limb refLimb = GetClimbingLimb(LimbType.Waist) ?? GetClimbingLimb(LimbType.Torso) ?? MainLimb;
+                bool leftLegBackwards = Math.Abs(leftLeg.body.Rotation - refLimb.body.Rotation) > MathHelper.Pi;
+                bool rightLegBackwards = Math.Abs(rightLeg.body.Rotation - refLimb.body.Rotation) > MathHelper.Pi;
+                float footMoveForce = animParams.ClimbFootMoveForce;
+                if (slide)
+                {
+                    if (!leftLegBackwards) { MoveLimb(leftFoot, new Vector2(footPos.X - ladderSimSize.X * 0.5f, footPos.Y + ladderSimPos.Y), footMoveForce, pullFromCenter: true); }
+                    if (!rightLegBackwards) { MoveLimb(rightFoot, new Vector2(footPos.X, footPos.Y + ladderSimPos.Y), footMoveForce, pullFromCenter: true); }
+                }
+                else
+                {
+                    float leftFootPos = MathUtils.Round(footPos.Y + stepHeight, stepHeight * 2.0f) - stepHeight;
+                    float prevLeftFootPos = MathUtils.Round(prevFootPos + stepHeight, stepHeight * 2.0f) - stepHeight;
+                    if (!leftLegBackwards) { MoveLimb(leftFoot, new Vector2(footPos.X, leftFootPos + ladderSimPos.Y), footMoveForce, pullFromCenter: true); }
+
+                    float rightFootPos = MathUtils.Round(footPos.Y, stepHeight * 2.0f);
+                    float prevRightFootPos = MathUtils.Round(prevFootPos, stepHeight * 2.0f);
+                    if (!rightLegBackwards) { MoveLimb(rightFoot, new Vector2(footPos.X, rightFootPos + ladderSimPos.Y), footMoveForce, pullFromCenter: true); }
+#if CLIENT
+                    if (Math.Abs(leftFootPos - prevLeftFootPos) > stepHeight && leftFoot.LastImpactSoundTime < Timing.TotalTime - Limb.SoundInterval)
+                    {
+                        SoundPlayer.PlaySound("footstep_armor_heavy", leftFoot.WorldPosition, hullGuess: currentHull);
+                        leftFoot.LastImpactSoundTime = (float)Timing.TotalTime;
+                    }
+                    if (Math.Abs(rightFootPos - prevRightFootPos) > stepHeight && rightFoot.LastImpactSoundTime < Timing.TotalTime - Limb.SoundInterval)
+                    {
+                        SoundPlayer.PlaySound("footstep_armor_heavy", rightFoot.WorldPosition, hullGuess: currentHull);
+                        rightFoot.LastImpactSoundTime = (float)Timing.TotalTime;
+                    }
+#endif
+                    prevFootPos = footPos.Y;
+                }
+
+                if (!leftLegBackwards) { leftLeg.body.ApplyTorque(Dir * -8.0f); } // TODO: expose?
+                if (!rightLegBackwards) { rightLeg.body.ApplyTorque(Dir * -8.0f); }
+            }
+
+            float movementFactor = (handPos.Y / stepHeight) * (float)Math.PI;
+            movementFactor = 0.8f + (float)Math.Abs(Math.Sin(movementFactor));
+
+            Vector2 subSpeed = currentHull != null || ladder.Item.Submarine == null
+                ? Vector2.Zero : ladder.Item.Submarine.Velocity;
+
+            //reached the top of the ladders -> can't go further up
+            Vector2 climbForce = new Vector2(0.0f, movement.Y) * movementFactor;
+
+            if (!InWater) { climbForce.Y += 0.3f * movementFactor; }
+
+            if (character.SimPosition.Y > ladderSimPos.Y) { climbForce.Y = Math.Min(0.0f, climbForce.Y); }
+            //reached the bottom -> can't go further down
+            float minHeightFromFloor = ColliderHeightFromFloor / 2 + Collider.Height;
+            if (floorFixture != null && 
+                !floorFixture.CollisionCategories.HasFlag(Physics.CollisionStairs) &&
+                !floorFixture.CollisionCategories.HasFlag(Physics.CollisionPlatform) &&
+                character.SimPosition.Y < standOnFloorY + minHeightFromFloor) 
+            { 
+                climbForce.Y = MathHelper.Clamp((standOnFloorY + minHeightFromFloor - character.SimPosition.Y) * 5.0f, climbForce.Y, 1.0f); 
+            }
+
+            //apply forces to the collider to move the Character up/down
+            Collider.ApplyForce((climbForce * 20.0f + subSpeed * 50.0f) * Collider.Mass);
+            // Don't rotate the head on non-humanoids, because it can cause issues with some ragdolls.
+            // E.g. the head might not actually be head, or it's not where we expect it to be.
+            if (head != null && character.IsHumanoid)
+            {
+                if (Aiming)
+                {
+                    RotateHead(head);
+                }
+                else if (Anim == Animation.UsingItemWhileClimbing && character.SelectedItem is { } selectedItem)
+                {
+                    Vector2 diff = (selectedItem.WorldPosition - head.WorldPosition) * Dir;
+                    float targetRotation = MathHelper.WrapAngle(MathUtils.VectorToAngle(diff) - MathHelper.PiOver4 * Dir);
+                    head.body.SmoothRotate(targetRotation, force: animParams.HeadTorque);
+                }
+                else
+                {
+                    float movementMultiplier = targetMovement.Y < 0 ? 0 : 1;
+                    head.body.SmoothRotate(MathHelper.PiOver4 * movementMultiplier * Dir, force: animParams.HeadTorque);
+                }   
+            }
+            
+            if (ladder.Item.Prefab.Triggers.None())
+            {
+                character.ReleaseSecondaryItem();
+                return;
+            }
+
+            Rectangle trigger = ladder.Item.Prefab.Triggers.FirstOrDefault();
+            trigger = ladder.Item.TransformTrigger(trigger);
+
+            bool isRemote = false;
+            bool isClimbing = true;
+            if (GameMain.NetworkMember != null && GameMain.NetworkMember.IsClient)
+            {
+                isRemote = character.IsRemotelyControlled;
+            }
+            //if the character is remotely controlled,
+            //let the server decide when to deselect the ladder and stop climbing
+            if (!isRemote)
+            {
+                if ((character.IsKeyDown(InputType.Left) || character.IsKeyDown(InputType.Right)) &&
+                    (!character.IsKeyDown(InputType.Up) && !character.IsKeyDown(InputType.Down)))
+                {
+                    isClimbing = false;
+                }
+            }
+
+            if (!isClimbing)
+            {
+                character.StopClimbing();
+                IgnorePlatforms = false;
+            }
+
+            Ladder GetLowestNearbyLadder(Ladder currentLadder, float threshold = 16.0f)
+            {
+                foreach (Ladder ladder in Ladder.List)
+                {
+                    if (ladder == currentLadder || !ladder.Item.IsInteractable(character)) { continue; }
+                    if (Math.Abs(ladder.Item.WorldPosition.X - currentLadder.Item.WorldPosition.X) > threshold) { continue; }
+                    if (ladder.Item.WorldPosition.Y > currentLadder.Item.WorldPosition.Y) { continue; }
+                    if ((currentLadder.Item.WorldRect.Y - currentLadder.Item.Rect.Height) - ladder.Item.WorldRect.Y > threshold) { continue; }
+                    return ladder;
+                }
+                return null;
+            }
+            
+            Limb GetClimbingLimb(LimbType limbType)
+            {
+                if (HasMultipleLimbsOfSameType)
+                {
+                    // First try to find a match using the secondary type, if that fails, use the primary type and exclude all the limbs with the secondary type.
+                    // Secondary limbs are first excluded and then targeted, because some feet are meant to be used as hands in this context, which means we don't want to get them when seeking the feet.
+                    return GetLimb(limbType, useSecondaryType: true) ?? GetLimb(limbType, excludeLimbsWithSecondaryType: true); 
+                }
+                else
+                {
+                    return GetLimb(limbType);
+                }
+            }
+        }
+        
+        protected void RotateHead(Limb head)
+        {
+            Vector2 mousePos = ConvertUnits.ToSimUnits(character.CursorPosition);
+            Vector2 dir = (mousePos - head.SimPosition) * Dir;
+            float rot = MathUtils.VectorToAngle(dir);
+            var neckJoint = GetJointBetweenLimbs(LimbType.Head, LimbType.Torso);
+            if (neckJoint != null)
+            {
+                float offset = MathUtils.WrapAnglePi(GetLimb(LimbType.Torso).body.Rotation);
+                float lowerLimit = neckJoint.LowerLimit + offset;
+                float upperLimit = neckJoint.UpperLimit + offset;
+                float min = Math.Min(lowerLimit, upperLimit);
+                float max = Math.Max(lowerLimit, upperLimit);
+                rot = Math.Clamp(rot, min, max);
+            }
+            head.body.SmoothRotate(rot, CurrentAnimationParams.HeadTorque);
+        }
 
         public void ApplyPose(Vector2 leftHandPos, Vector2 rightHandPos, Vector2 leftFootPos, Vector2 rightFootPos, float footMoveForce = 10)
         {
@@ -698,8 +1041,16 @@ namespace Barotrauma
             Limb rightHand = GetLimb(LimbType.RightHand);
             if (rightHand == null) { return; }
 
-            rightShoulder = GetJointBetweenLimbs(LimbType.Torso, LimbType.RightArm) ?? GetJointBetweenLimbs(LimbType.Head, LimbType.RightArm) ?? GetJoint(LimbType.RightArm, new LimbType[] { LimbType.RightHand, LimbType.RightForearm });
-            leftShoulder = GetJointBetweenLimbs(LimbType.Torso, LimbType.LeftArm) ?? GetJointBetweenLimbs(LimbType.Head, LimbType.LeftArm) ?? GetJoint(LimbType.LeftArm, new LimbType[] { LimbType.LeftHand, LimbType.LeftForearm });
+            rightShoulder = 
+                GetJointBetweenLimbs(LimbType.Torso, LimbType.RightArm) ?? 
+                GetJointBetweenLimbs(LimbType.Head, LimbType.RightArm) ?? 
+                GetJoint(LimbType.RightArm, new LimbType[] { LimbType.RightHand, LimbType.RightForearm }) ??
+                GetJointBetweenLimbs(LimbType.Torso, LimbType.RightHand);
+            leftShoulder = 
+                GetJointBetweenLimbs(LimbType.Torso, LimbType.LeftArm) ?? 
+                GetJointBetweenLimbs(LimbType.Head, LimbType.LeftArm) ?? 
+                GetJoint(LimbType.LeftArm, new LimbType[] { LimbType.LeftHand, LimbType.LeftForearm }) ??
+                GetJointBetweenLimbs(LimbType.Torso, LimbType.LeftHand);
 
             Vector2 localAnchorShoulder = Vector2.Zero;
             Vector2 localAnchorElbow = Vector2.Zero;
@@ -762,6 +1113,13 @@ namespace Barotrauma
                 CalculateArmLengths();
             }
         }
+        
+        public void RecreateAndRespawn(RagdollParams ragdollParams = null)
+        {
+            Vector2 pos = character.WorldPosition;
+            Recreate(ragdollParams);
+            character.TeleportTo(pos);
+        }
 
         private void StartAnimation(Animation animation)
         {
@@ -802,5 +1160,261 @@ namespace Barotrauma
         public void StopUsingItem() => StopAnimation(Animation.UsingItem);
 
         public void StopClimbing() => StopAnimation(Animation.Climbing);
+        
+        private readonly Dictionary<AnimationType, AnimationParams> defaultAnimations = new Dictionary<AnimationType, AnimationParams>();
+        
+        /// <summary>
+        /// Loads an animation (variation) that automatically resets in 0.1s, unless triggered again.
+        /// Meant e.g. for triggering animations in status effects, without having to worry about resetting them.
+        /// </summary>
+        public bool TryLoadTemporaryAnimation(StatusEffect.AnimLoadInfo animLoadInfo, bool throwErrors)
+        {
+            AnimationType animType = animLoadInfo.Type;
+            if (tempAnimations.TryGetValue(animType, out AnimSwap animSwap))
+            {
+                if (animLoadInfo.File.TryGet(out string fileName) && animSwap.TemporaryAnimation.FileNameWithoutExtension.Equals(fileName, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Already loaded, keep active
+                    animSwap.IsActive = true;
+                    return true;
+                }
+                else if (animLoadInfo.File.TryGet(out ContentPath contentPath) && animSwap.TemporaryAnimation.Path == contentPath)
+                {
+                    // Already loaded, keep active
+                    animSwap.IsActive = true;
+                    return true;
+                }
+                else
+                {
+                    if (animSwap.Priority >= animLoadInfo.Priority)
+                    {
+                        // If the priority of the current animation is higher than the new animation, just return and do nothing.
+                        // Returning false would tell the status effect to not try again, which is not what we want here, which is why we fake a bit with the return value.
+                        return true;
+                    }
+                    else
+                    {
+                        // Override any previous animations of the same type.
+                        tempAnimations.Remove(animType);   
+                    }
+                }
+            }
+            AnimationParams defaultAnimation = GetAnimationParamsFromType(animType);
+            if (defaultAnimation == null) { return false; }
+            if (!TryLoadAnimation(animType, animLoadInfo.File, out AnimationParams tempParams, throwErrors)) { return false; }
+            // Store the default animation, if not yet stored. There should always be just one of the same type.
+            defaultAnimations.TryAdd(animType, defaultAnimation);
+            tempAnimations.Add(animType, new AnimSwap(tempParams, animLoadInfo.Priority));
+            return true;
+        }
+        
+        private void UpdateTemporaryAnimations()
+        {
+            if (tempAnimations.None()) { return; }
+            foreach ((AnimationType animationType, AnimSwap animSwap) in tempAnimations)
+            {
+                if (!animSwap.IsActive)
+                {
+                    if (defaultAnimations.TryGetValue(animSwap.AnimationType, out AnimationParams defaultAnimation))
+                    {
+                        TrySwapAnimParams(defaultAnimation);
+                        expiredAnimations.Add(animationType); 
+                    }
+                    else
+                    {
+                        DebugConsole.ThrowError($"[AnimController] Failed to find the default animation parameters of type {animSwap.AnimationType}. Cannot swap back the default animations!");
+                        tempAnimations.Clear();
+                    }
+                }
+            }
+            foreach (AnimationType anim in expiredAnimations)
+            {
+                tempAnimations.Remove(anim);
+            }
+            expiredAnimations.Clear();
+            foreach (AnimSwap animSwap in tempAnimations.Values)
+            {
+                // Will be removed on the next frame, unless something keeps it alive.
+                animSwap.IsActive = false;
+            }
+        }
+        
+        /// <summary>
+        /// Loads animations. Non-permanent (= resets on load).
+        /// </summary>
+        public bool TryLoadAnimation(AnimationType animationType, Either<string, ContentPath> file, out AnimationParams animParams, bool throwErrors)
+        {
+            animParams = null;
+            if (character.IsHumanoid && this is HumanoidAnimController humanAnimController)
+            {
+                switch (animationType)
+                {
+                    case AnimationType.Walk:
+                        humanAnimController.WalkParams = HumanWalkParams.GetAnimParams(character, file, throwErrors);
+                        animParams = humanAnimController.WalkParams;
+                        break;
+                    case AnimationType.Run:
+                        humanAnimController.RunParams = HumanRunParams.GetAnimParams(character, file, throwErrors);
+                        animParams = humanAnimController.RunParams;
+                        break;
+                    case AnimationType.Crouch:
+                        humanAnimController.HumanCrouchParams = HumanCrouchParams.GetAnimParams(character, file, throwErrors);
+                        animParams = humanAnimController.HumanCrouchParams;
+                        break;
+                    case AnimationType.SwimSlow:
+                        humanAnimController.SwimSlowParams = HumanSwimSlowParams.GetAnimParams(character, file, throwErrors);
+                        animParams = humanAnimController.SwimSlowParams;
+                        break;
+                    case AnimationType.SwimFast:
+                        humanAnimController.SwimFastParams = HumanSwimFastParams.GetAnimParams(character, file, throwErrors);
+                        animParams = humanAnimController.SwimFastParams;
+                        break;
+                    default:
+                        DebugConsole.ThrowError($"[AnimController] Animation of type {animationType} not implemented!");
+                        break;
+                }
+            }
+            else
+            {
+                switch (animationType)
+                {
+                    case AnimationType.Walk:
+                        if (CanWalk)
+                        {
+                            character.AnimController.WalkParams = FishWalkParams.GetAnimParams(character, file, throwErrors);
+                            animParams = character.AnimController.WalkParams;
+                        }
+                        break;
+                    case AnimationType.Run:
+                        if (CanWalk)
+                        {
+                            character.AnimController.RunParams = FishRunParams.GetAnimParams(character, file, throwErrors);
+                            animParams = character.AnimController.RunParams;
+                        }
+                        break;
+                    case AnimationType.SwimSlow:
+                        character.AnimController.SwimSlowParams = FishSwimSlowParams.GetAnimParams(character, file, throwErrors);
+                        animParams = character.AnimController.SwimSlowParams;
+                        break;
+                    case AnimationType.SwimFast:
+                        character.AnimController.SwimFastParams = FishSwimFastParams.GetAnimParams(character, file, throwErrors);
+                        animParams = character.AnimController.SwimFastParams;
+                        break;
+                    default:
+                        DebugConsole.ThrowError($"[AnimController] Animation of type {animationType} not implemented!");
+                        break;
+                }
+            }
+            
+            bool success = animParams != null;
+            if (!file.TryGet(out string fileName))
+            {
+                if (file.TryGet(out ContentPath contentPath))
+                {
+                    fileName = contentPath.Value;
+                    if (success)
+                    {
+                        success = contentPath == animParams.Path;
+                    }
+                }
+            }
+            else
+            {
+                if (success)
+                {
+                    success = animParams.FileNameWithoutExtension.Equals(fileName, StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            if (success)
+            {
+                DebugConsole.NewMessage($"Animation {fileName} successfully loaded for {character.DisplayName}", Color.LightGreen, debugOnly: true);
+            }
+            else if (throwErrors)
+            {
+                DebugConsole.ThrowError($"Animation {fileName} for {character.DisplayName} could not be loaded!");
+            }
+            return success;
+        }
+        
+        /// <summary>
+        /// Simply swaps existing animation parameters as current parameters.
+        /// </summary>
+        protected bool TrySwapAnimParams(AnimationParams newParams)
+        {
+            AnimationType animationType = newParams.AnimationType;
+            if (character.IsHumanoid && this is HumanoidAnimController humanAnimController)
+            {
+                switch (animationType)
+                {
+                    case AnimationType.Walk:
+                        if (newParams is HumanWalkParams newWalkParams)
+                        {
+                            humanAnimController.WalkParams = newWalkParams;   
+                        }
+                        return true;
+                    case AnimationType.Run:
+                        if (newParams is HumanRunParams newRunParams)
+                        {
+                            humanAnimController.HumanRunParams = newRunParams;
+                        }
+                        break;
+                    case AnimationType.Crouch:
+                        if (newParams is HumanCrouchParams newCrouchParams)
+                        {
+                            humanAnimController.HumanCrouchParams = newCrouchParams;
+                        }
+                        return true;
+                    case AnimationType.SwimSlow:
+                        if (newParams is HumanSwimSlowParams newSwimSlowParams)
+                        {
+                            humanAnimController.HumanSwimSlowParams = newSwimSlowParams;
+                        }
+                        return true;
+                    case AnimationType.SwimFast:
+                        if (newParams is HumanSwimFastParams newSwimFastParams)
+                        {
+                            humanAnimController.HumanSwimFastParams = newSwimFastParams;
+                        }
+                        return true;
+                    default:
+                        DebugConsole.ThrowError($"[AnimController] Animation of type {animationType} not implemented!");
+                        return false;
+                }
+            }
+            else
+            {
+                switch (animationType)
+                {
+                    case AnimationType.Walk:
+                        if (newParams is FishWalkParams walkParams)
+                        {
+                            character.AnimController.WalkParams = walkParams;
+                        }
+                        return true;
+                    case AnimationType.Run:
+                        if (newParams is FishRunParams runParams)
+                        {
+                            character.AnimController.RunParams = runParams;
+                        }
+                        return true;
+                    case AnimationType.SwimSlow:
+                        if (newParams is FishSwimSlowParams swimSlowParams)
+                        {
+                            character.AnimController.SwimSlowParams = swimSlowParams;
+                        }
+                        return true;
+                    case AnimationType.SwimFast:
+                        if (newParams is FishSwimFastParams swimFastParams)
+                        {
+                            character.AnimController.SwimFastParams = swimFastParams;
+                        }
+                        return true;
+                    default:
+                        DebugConsole.ThrowError($"[AnimController] Animation of type {animationType} not implemented!");
+                        break;
+                }
+            }
+            return false;
+        }
     }
 }

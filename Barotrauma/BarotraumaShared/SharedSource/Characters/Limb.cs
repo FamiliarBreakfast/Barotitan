@@ -213,7 +213,9 @@ namespace Barotrauma
         public readonly Ragdoll ragdoll;
         public readonly LimbParams Params;
 
-        //the physics body of the limb
+        /// <summary>
+        /// The physics body of the limb
+        /// </summary>
         public PhysicsBody body;
 
         public Vector2 StepOffset => ConvertUnits.ToSimUnits(Params.StepOffset) * ragdoll.RagdollParams.JointScale;
@@ -258,10 +260,7 @@ namespace Barotrauma
         {
             get
             {
-                if (!mouthPos.HasValue)
-                {
-                    mouthPos = Params.MouthPos;
-                }
+                mouthPos ??= Params.MouthPos;
                 return mouthPos.Value;
             }
             set
@@ -366,7 +365,7 @@ namespace Barotrauma
                 if (isSevered)
                 {
                     ragdoll.SubtractMass(this);
-                    if (type == LimbType.Head)
+                    if (type == LimbType.Head && character.Params.Health.DieFromBeheading)
                     {
                         character.Kill(CauseOfDeathType.Unknown, null);
                     }
@@ -386,10 +385,18 @@ namespace Barotrauma
 
         public Submarine Submarine => character?.Submarine;
 
+        private bool _hidden;
         public bool Hidden
         {
-            get => Params.Hide;
-            set => Params.Hide = value;
+            get => _hidden || Params.Hide;
+            set => _hidden = value;
+        }
+        
+        // Just a wrapper for Hidden, but both can be used via status effects, so it's not safe to remove it.
+        public bool Hide
+        {
+            get => Hidden;
+            set => Hidden = value;
         }
 
         public Vector2 WorldPosition
@@ -416,6 +423,24 @@ namespace Barotrauma
                     return Vector2.Zero;
                 }
                 return body.SimPosition; 
+            }
+        }
+
+
+        public Vector2 DrawPosition
+        {
+            get
+            {
+                if (Removed)
+                {
+#if DEBUG
+                    DebugConsole.ThrowError("Attempted to access a removed limb.\n" + Environment.StackTrace.CleanupStackTrace());
+#endif
+                    GameAnalyticsManager.AddErrorEventOnce("Limb.LinearVelocity:DrawPosition", GameAnalyticsManager.ErrorSeverity.Error,
+                        "Attempted to access a removed limb.\n" + Environment.StackTrace.CleanupStackTrace());
+                    return Vector2.Zero;
+                }
+                return body.DrawPosition;
             }
         }
 
@@ -488,10 +513,26 @@ namespace Barotrauma
             }
         }
 
+        private float _alpha = 1.0f;
+        /// <summary>
+        /// Can be used by status effects
+        /// </summary>
+        public float Alpha
+        {
+            get => _alpha;
+            set
+            {
+                _alpha = MathHelper.Clamp(value, 0.0f, 1.0f);
+            }
+        }
+
         public int RefJointIndex => Params.RefJoint;
 
         public readonly List<WearableSprite> WearingItems = new List<WearableSprite>();
 
+        /// <summary>
+        /// Other wearables attached to the head. I.e. husk sprite, hair, beard, moustache, and face attachments.
+        /// </summary>
         public readonly List<WearableSprite> OtherWearables = new List<WearableSprite>();
 
         public bool PullJointEnabled
@@ -605,7 +646,7 @@ namespace Barotrauma
                 //if (character.Params.CanInteract) { return false; }
                 if (this == character.AnimController.MainLimb) { return false; }
                 bool canBeSevered = Params.CanBeSeveredAlive;
-                if (character.AnimController.CanWalk)
+                if (character.AnimController.CanWalk && !character.Params.Health.AllowSeveringLegs)
                 {
                     switch (type)
                     {
@@ -640,7 +681,7 @@ namespace Barotrauma
             this.character = character;
             this.Params = limbParams;
             dir = Direction.Right;
-            body = new PhysicsBody(limbParams);
+            body = new PhysicsBody(limbParams, findNewContacts: false);
             type = limbParams.Type;
             IgnoreCollisions = limbParams.IgnoreCollisions;
             body.UserData = this;
@@ -680,12 +721,12 @@ namespace Barotrauma
                             }
                             attack.DamageRange = ConvertUnits.ToDisplayUnits(attack.DamageRange);
                         }
-                        if (character is { VariantOf: { IsEmpty: false } })
+                        if (character is { VariantOf.IsEmpty: false })
                         {
-                            var attackElement = character.Params.VariantFile.Root.GetChildElement("attack");
+                            var attackElement = character.Params.VariantFile.GetRootExcludingOverride().GetChildElement("attack");
                             if (attackElement != null)
                             {
-                                attack.DamageMultiplier = attackElement.GetAttributeFloat("damagemultiplier", 1f);
+                                attack.SetInitialDamageMultiplier(attackElement.GetAttributeFloat("damagemultiplier", 1f));
                                 attack.RangeMultiplier = attackElement.GetAttributeFloat("rangemultiplier", 1f);
                                 attack.ImpactMultiplier = attackElement.GetAttributeFloat("impactmultiplier", 1f);
                             }
@@ -695,7 +736,7 @@ namespace Barotrauma
                         DamageModifiers.Add(new DamageModifier(subElement, character.Name));
                         break;
                     case "statuseffect":
-                        var statusEffect = StatusEffect.Load(subElement, Name);
+                        var statusEffect = StatusEffect.Load(subElement, character.Name + ", " + Name);
                         if (statusEffect != null)
                         {
                             if (!statusEffects.ContainsKey(statusEffect.type))
@@ -793,10 +834,12 @@ namespace Barotrauma
                 {
                     finalDamageModifier *= character.EmpVulnerability;
                 }
-                if (!character.Params.Health.PoisonImmunity && 
-                    (affliction.Prefab.AfflictionType == AfflictionPrefab.PoisonType || affliction.Prefab.AfflictionType == AfflictionPrefab.ParalysisType))
+                if (!character.Params.Health.PoisonImmunity)
                 {
-                    finalDamageModifier *= character.PoisonVulnerability;
+                    if (affliction.Prefab.AfflictionType == AfflictionPrefab.PoisonType || affliction.Prefab.AfflictionType == AfflictionPrefab.ParalysisType)
+                    {
+                        finalDamageModifier *= character.PoisonVulnerability;
+                    }
                 }
                 foreach (DamageModifier damageModifier in tempModifiers)
                 {
@@ -904,17 +947,17 @@ namespace Barotrauma
                     severedFadeOutTimer = SeveredFadeOutTime;
                 }
             }
-            else if (!IsDead)
+            else if (!IsDead && (character.IsPlayer || character.AIState is not AIState.PlayDead))
             {
                 if (Params.BlinkFrequency > 0)
                 {
-                    if (blinkTimer > -TotalBlinkDurationOut)
+                    if (BlinkTimer > -TotalBlinkDurationOut)
                     {
-                        blinkTimer -= deltaTime;
+                        BlinkTimer -= deltaTime;
                     }
                     else
                     {
-                        blinkTimer = Params.BlinkFrequency;
+                        BlinkTimer = Params.BlinkFrequency;
                     }
                 }
                 if (reEnableTimer > 0)
@@ -932,13 +975,14 @@ namespace Barotrauma
 
         private bool temporarilyDisabled;
         private float reEnableTimer = -1;
+        private bool originalIgnoreCollisions;
         public void HideAndDisable(float duration = 0, bool ignoreCollisions = true)
         {
             if (Hidden || Disabled) { return; }
-            if (ignoreCollisions && IgnoreCollisions) { return; }
             temporarilyDisabled = true;
             Hidden = true;
             Disabled = true;
+            originalIgnoreCollisions = IgnoreCollisions;
             IgnoreCollisions = ignoreCollisions;
             if (duration > 0)
             {
@@ -955,9 +999,10 @@ namespace Barotrauma
         public void ReEnable()
         {
             if (!temporarilyDisabled) { return; }
+            temporarilyDisabled = false;
             Hidden = false;
             Disabled = false;
-            IgnoreCollisions = false;
+            IgnoreCollisions = originalIgnoreCollisions;
             reEnableTimer = -1;
         }
 
@@ -974,6 +1019,7 @@ namespace Barotrauma
             float dist = distance > -1 ? distance : ConvertUnits.ToDisplayUnits(Vector2.Distance(simPos, attackSimPos));
             bool wasRunning = attack.IsRunning;
             attack.UpdateAttackTimer(deltaTime, character);
+            
             if (attack.Blink)
             {
                 if (attack.ForceOnLimbIndices != null && attack.ForceOnLimbIndices.Any())
@@ -1001,11 +1047,14 @@ namespace Barotrauma
                     case HitDetection.Distance:
                         if (dist < attack.DamageRange)
                         {
-                            structureBody = Submarine.PickBody(simPos, attackSimPos, collisionCategory: Physics.CollisionWall | Physics.CollisionLevel, allowInsideFixture: true, customPredicate:                             
-                            (Fixture f) =>
+                            Vector2 rayStart = simPos;
+                            Vector2 rayEnd = attackSimPos;
+                            if (Submarine == null && damageTarget is ISpatialEntity spatialEntity && spatialEntity.Submarine != null)
                             {
-                                return f?.Body?.UserData as string != "ruinroom";
-                            });
+                                rayStart -= spatialEntity.Submarine.SimPosition;
+                                rayEnd -= spatialEntity.Submarine.SimPosition;
+                            }
+                            structureBody = Submarine.CheckVisibility(rayStart, rayEnd);
                             if (damageTarget is Item i && i.GetComponent<Items.Components.Door>() != null)
                             {
                                 // If the attack is aimed to an item and hits an item, it's successful.
@@ -1119,7 +1168,7 @@ namespace Barotrauma
                 // Set the main collider where the body lands after the attack
                 if (Vector2.DistanceSquared(character.AnimController.Collider.SimPosition, character.AnimController.MainLimb.body.SimPosition) > 0.1f * 0.1f)
                 {
-                    character.AnimController.Collider.SetTransform(character.AnimController.MainLimb.body.SimPosition, rotation: character.AnimController.Collider.Rotation);
+                    character.AnimController.Collider.SetTransformIgnoreContacts(character.AnimController.MainLimb.body.SimPosition, rotation: character.AnimController.Collider.Rotation);
                 }
             }
             return wasHit;
@@ -1135,9 +1184,11 @@ namespace Barotrauma
                 LastAttackSoundTime = SoundInterval;
             }
 #endif
-            if (damageTarget is Character targetCharacter && targetLimb != null)
-            {
-                attackResult = attack.DoDamageToLimb(character, targetLimb, WorldPosition, 1.0f, playSound, body, this);
+            attack.ResetDamageMultiplier();
+            attack.DamageMultiplier *= 1.0f + character.GetStatValue(attack.Ranged ? StatTypes.NaturalRangedAttackMultiplier : StatTypes.NaturalMeleeAttackMultiplier);
+            if (damageTarget is Character && targetLimb != null)
+            { 
+                attackResult = attack.DoDamageToLimb(character, targetLimb, WorldPosition, deltaTime: 1.0f, playSound, body, sourceLimb: this);
             }
             else
             {
@@ -1147,7 +1198,7 @@ namespace Barotrauma
                 }
                 else
                 {
-                    attackResult = attack.DoDamage(character, damageTarget, WorldPosition, 1.0f, playSound, body, this);
+                    attackResult = attack.DoDamage(character, damageTarget, WorldPosition, deltaTime: 1.0f, playSound, body, sourceLimb: this);
                 }
             }
             /*if (structureBody != null && attack.StickChance > Rand.Range(0.0f, 1.0f, Rand.RandSync.ServerAndClient))
@@ -1228,6 +1279,8 @@ namespace Barotrauma
             if (!statusEffects.TryGetValue(actionType, out var statusEffectList)) { return; }
             foreach (StatusEffect statusEffect in statusEffectList)
             {
+                if (statusEffect.ShouldWaitForInterval(character, deltaTime)) { return; }
+
                 statusEffect.sourceBody = body;
                 if (statusEffect.type == ActionType.OnDamaged)
                 {
@@ -1308,20 +1361,21 @@ namespace Barotrauma
             }
         }
 
-        private float blinkTimer;
-        public float BlinkPhase;
+        public float BlinkTimer { get; private set; }
+        public float BlinkPhase { get; set; }
+
         public bool FreezeBlinkState;
 
         private float TotalBlinkDurationOut => Params.BlinkDurationOut + Params.BlinkHoldTime;
 
         public void Blink()
         {
-            blinkTimer = -TotalBlinkDurationOut;
+            BlinkTimer = -TotalBlinkDurationOut;
         }
 
         public void UpdateBlink(float deltaTime, float referenceRotation)
         {
-            if (blinkTimer > -TotalBlinkDurationOut)
+            if (BlinkTimer > -TotalBlinkDurationOut)
             {
                 if (!FreezeBlinkState)
                 {
@@ -1394,6 +1448,7 @@ namespace Barotrauma
 
         public void Remove()
         {
+            ragdoll.SubtractMass(this);
             body?.Remove();
             body = null;
             if (pullJoint != null)
@@ -1429,6 +1484,18 @@ namespace Barotrauma
         }
         public Character Character { get; set; }
         public Affliction Affliction { get; set; }
+    }
+
+    class AbilityReduceAffliction : AbilityObject, IAbilityCharacter, IAbilityValue
+    {
+        public AbilityReduceAffliction(Character character, float value)
+        {
+            Character = character;
+            Value = value;
+        }
+
+        public Character Character { get; set; }
+        public float Value { get; set; }
     }
 
 }

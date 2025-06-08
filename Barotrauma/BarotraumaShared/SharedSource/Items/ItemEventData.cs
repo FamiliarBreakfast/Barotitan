@@ -23,9 +23,11 @@ namespace Barotrauma
             Upgrade = 8,
             ItemStat = 9,
             DroppedStack = 10,
+            SetHighlight = 11,
+            SwapItem = 12,
 
             MinValue = 0,
-            MaxValue = 10
+            MaxValue = 12
         }
 
         public interface IEventData : NetEntityEvent.IData
@@ -147,6 +149,19 @@ namespace Barotrauma
             public UpgradeEventData(Upgrade upgrade)
             {
                 Upgrade = upgrade;
+            }
+        }
+
+        private readonly struct SwapItemEventData : IEventData
+        {
+            public EventType EventType => EventType.SwapItem;
+            public readonly ItemPrefab NewItem;
+            public readonly ushort NewId;
+
+            public SwapItemEventData(ItemPrefab newItem, ushort newId)
+            {
+                NewItem = newItem;
+                NewId = newId;
             }
         }
     }

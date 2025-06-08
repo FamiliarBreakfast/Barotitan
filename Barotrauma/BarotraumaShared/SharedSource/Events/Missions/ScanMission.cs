@@ -1,3 +1,4 @@
+using System;
 using Barotrauma.Extensions;
 using Barotrauma.Items.Components;
 using Barotrauma.RuinGeneration;
@@ -20,23 +21,14 @@ namespace Barotrauma
         private readonly Dictionary<WayPoint, bool> scanTargets = new Dictionary<WayPoint, bool>();
         private readonly HashSet<WayPoint> newTargetsScanned = new HashSet<WayPoint>();
         private readonly float minTargetDistance;
-
-
+        
         private Ruin TargetRuin { get; set; }
-
-        private bool AllTargetsScanned
-        {
-            get
-            {
-                return scanTargets.Any() && scanTargets.All(kvp => kvp.Value);
-            }
-        } 
 
         public override IEnumerable<(LocalizedString Label, Vector2 Position)> SonarLabels
         {
             get
             {
-                if (State > 0 || scanTargets.None())
+                if (AllTargetsScanned())
                 {
                     return Enumerable.Empty<(LocalizedString Label, Vector2 Position)>();
                 }
@@ -64,7 +56,8 @@ namespace Barotrauma
 
             if (itemConfig == null)
             {
-                DebugConsole.ThrowError("Failed to initialize a Scan mission: item config is not set");
+                DebugConsole.ThrowError("Failed to initialize a Scan mission: item config is not set",
+                    contentPackage: Prefab.ContentPackage);
                 return;
             }
 
@@ -77,7 +70,8 @@ namespace Barotrauma
             TargetRuin = Level.Loaded?.Ruins?.GetRandom(randSync: Rand.RandSync.ServerAndClient);
             if (TargetRuin == null)
             {
-                DebugConsole.ThrowError("Failed to initialize a Scan mission: level contains no alien ruins");
+                DebugConsole.ThrowError("Failed to initialize a Scan mission: level contains no alien ruins",
+                    contentPackage: Prefab.ContentPackage);
                 return;
             }
 
@@ -85,7 +79,8 @@ namespace Barotrauma
             ruinWaypoints.RemoveAll(wp => wp.CurrentHull == null);
             if (ruinWaypoints.Count < targetsToScan)
             {
-                DebugConsole.ThrowError($"Failed to initialize a Scan mission: target ruin has less waypoints than required as scan targets ({ruinWaypoints.Count} < {targetsToScan})");
+                DebugConsole.ThrowError($"Failed to initialize a Scan mission: target ruin has less waypoints than required as scan targets ({ruinWaypoints.Count} < {targetsToScan})",
+                    contentPackage: Prefab.ContentPackage);
                 return;
             }
             var availableWaypoints = new List<WayPoint>();
@@ -107,7 +102,8 @@ namespace Barotrauma
                         if (availableWaypoints.None())
                         {
 #if DEBUG
-                            DebugConsole.ThrowError($"Error initializing a Scan mission: not enough targets available on try #{tries + 1} to reach the required scan target count (current targets: {scanTargets.Count}, required targets: {targetsToScan})");
+                            DebugConsole.ThrowError($"Error initializing a Scan mission: not enough targets available on try #{tries + 1} to reach the required scan target count (current targets: {scanTargets.Count}, required targets: {targetsToScan})",
+                                contentPackage: Prefab.ContentPackage);
 #endif
                             break;
                         }
@@ -131,7 +127,8 @@ namespace Barotrauma
             }
             if (scanTargets.Count < targetsToScan)
             {
-                DebugConsole.ThrowError($"Error initializing a Scan mission: not enough targets (current targets: {scanTargets.Count}, required targets: {targetsToScan})");
+                DebugConsole.ThrowError($"Error initializing a Scan mission: not enough targets (current targets: {scanTargets.Count}, required targets: {targetsToScan})", 
+                    contentPackage: Prefab.ContentPackage);
             }
         }
 
@@ -229,24 +226,19 @@ namespace Barotrauma
         protected override void UpdateMissionSpecific(float deltaTime)
         {
             if (IsClient) { return; }
-            switch (State)
-            {
-                case 0:
-                    if (AllTargetsScanned)
-                    {
-                        State = 1;
-                    }
-                    break;
-            }
+            // Allow the state to be set higher with MissionStateAction, but not lower.
+            State = Math.Max(State, scanTargets.Count(kvp => kvp.Value));
         }
-
-        protected override bool DetermineCompleted() => State > 0;
+        
+        private bool AllTargetsScanned() => State >= targetsToScan;
+        
+        protected override bool DetermineCompleted() => AllTargetsScanned();
 
         protected override void EndMissionSpecific(bool completed)
         {
             foreach (var scanner in scanners)
             {
-                if (scanner.Item != null && !scanner.Item.Removed)
+                if (scanner.Item is { Removed: false })
                 {
                     scanner.OnScanStarted -= OnScanStarted;
                     scanner.OnScanCompleted -= OnScanCompleted;
@@ -254,7 +246,7 @@ namespace Barotrauma
                 }
             }
             Reset();
-            failed = !completed && state > 0;
+            failed = !completed;
         }
     }
 }

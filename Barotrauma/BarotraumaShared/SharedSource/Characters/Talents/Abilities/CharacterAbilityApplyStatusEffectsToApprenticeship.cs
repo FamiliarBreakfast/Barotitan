@@ -21,13 +21,14 @@ namespace Barotrauma.Abilities
             JobPrefab? apprenticeJob = GetApprenticeJob(Character, jobPrefabList);
             if (apprenticeJob is null)
             {
-                DebugConsole.ThrowError($"{nameof(CharacterAbilityUnlockApprenticeshipTalentTree)}: Could not find apprentice job for character {Character.Name}");
+                DebugConsole.ThrowError($"{nameof(CharacterAbilityUnlockApprenticeshipTalentTree)}: Could not find apprentice job for character {Character.Name}",
+                    contentPackage: CharacterTalent.Prefab.ContentPackage);
                 return;
             }
 
-            foreach (Character character in GameSession.GetSessionCrewCharacters(CharacterType.Both))
+            foreach (Character character in Character.GetFriendlyCrew(Character))
             {
-                JobPrefab? characterJob = character.Info?.Job?.Prefab;
+                JobPrefab? characterJob = character.Info.Job?.Prefab;
                 if (characterJob is null) { continue; }
 
                 switch (characterJob.Identifier == apprenticeJob.Identifier)

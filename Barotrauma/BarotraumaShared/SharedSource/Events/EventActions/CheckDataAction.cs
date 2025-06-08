@@ -1,21 +1,24 @@
 ﻿#nullable enable
 using System;
-using System.Linq;
 
 namespace Barotrauma
 {
+
+    /// <summary>
+    /// Can be used to check arbitrary campaign metadata set using <see cref="SetDataAction"/>.
+    /// </summary>
     class CheckDataAction : BinaryOptionAction
     {
-        [Serialize("", IsPropertySaveable.Yes)]
+        [Serialize("", IsPropertySaveable.Yes, description: "Identifier of the data to check.")]
         public Identifier Identifier { get; set; } = Identifier.Empty;
 
-        [Serialize("", IsPropertySaveable.Yes)]
+        [Serialize("", IsPropertySaveable.Yes, description: "The condition that must be met for the check to succeed. Uses the same formatting as conditionals (for example, \"gt 5.2\", \"true\", \"lt 10\".)")]
         public string Condition { get; set; } = "";
 
-        [Serialize(false, IsPropertySaveable.Yes, "Forces the comparison to use string instead of attempting to parse it as a boolean or a float first")]
+        [Serialize(false, IsPropertySaveable.Yes, "Forces the comparison to use string instead of attempting to parse it as a boolean or a float first. Use this if you know the value is a string.")]
         public bool ForceString { get; set; }
 
-        [Serialize(false, IsPropertySaveable.Yes, "Performs the comparison against a metadata by identifier instead of a constant value")]
+        [Serialize(false, IsPropertySaveable.Yes, "Performs the comparison against a metadata by identifier instead of a constant value. Meaning that you could for example check whether the value of \"progress_of_some_event\" is larger than \"progress_of_some_other_event\".")]
         public bool CheckAgainstMetadata { get; set; }
 
         protected object? value2;
@@ -30,7 +33,8 @@ namespace Barotrauma
                 Condition = element.GetAttributeString("value", string.Empty)!;
                 if (string.IsNullOrEmpty(Condition))
                 {
-                    DebugConsole.ThrowError($"Error in scripted event \"{parentEvent.Prefab.Identifier}\". CheckDataAction with no condition set ({element}).");
+                    DebugConsole.ThrowError($"Error in scripted event \"{parentEvent.Prefab.Identifier}\". CheckDataAction with no condition set ({element}).",
+                        contentPackage: element?.ContentPackage);
                 }
             }
         }
@@ -42,7 +46,8 @@ namespace Barotrauma
                 Condition = element.GetAttributeString("value", string.Empty)!;
                 if (string.IsNullOrEmpty(Condition))
                 {
-                    DebugConsole.ThrowError($"Error in scripted event \"{parentDebugString}\". CheckDataAction with no condition set ({element}).");
+                    DebugConsole.ThrowError($"Error in scripted event \"{parentDebugString}\". CheckDataAction with no condition set ({element}).",
+                        contentPackage: element?.ContentPackage);
                 }
             }
         }
@@ -59,7 +64,8 @@ namespace Barotrauma
             (Operator, string value) = PropertyConditional.ExtractComparisonOperatorFromConditionString(Condition);
             if (Operator == PropertyConditional.ComparisonOperatorType.None)
             {
-                DebugConsole.ThrowError($"{Condition} is invalid, it should start with an operator followed by a boolean or a floating point value.");
+                DebugConsole.ThrowError($"{Condition} is invalid, it should start with an operator followed by a boolean or a floating point value.", 
+                    contentPackage: ParentEvent?.Prefab?.ContentPackage);
                 return false;
             }
 
@@ -193,6 +199,10 @@ namespace Barotrauma
             if (value2 != null && value1 != null)
             {
                 condition = $"{value1.ColorizeObject()} {Operator.ColorizeObject()} {value2.ColorizeObject()}";
+            }
+            else if (!Identifier.IsEmpty)
+            {
+                condition = $"{Identifier} {Condition}".ColorizeObject();
             }
 
             return $"{ToolBox.GetDebugSymbol(succeeded.HasValue)} {nameof(CheckDataAction)} -> (Data: {Identifier.ColorizeObject()}, Success: {succeeded.ColorizeObject()}, Expression: {condition})";

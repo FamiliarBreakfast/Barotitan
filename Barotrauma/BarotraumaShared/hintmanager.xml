@@ -59,6 +59,7 @@
   <onweldingdoor/>
 
   <onobtaineditem.unidentifiedgeneticmaterial/>
+  <onobtaineditem.handgrenade/>
   <onobtaineditem.geneticmaterial/>
   <geneticmaterial.useinstructions/>
   <geneticmaterial.onrefiningorcombining/>
@@ -78,5 +79,9 @@
   <repairingsabotageditem/>
 
   <radiojammed/>
+
+  <onitemmarkedforrelocation/>
+  <onitemmarkedfordeconstruction/>
+  <ondeconstructorder/>
 
 </hintmanager>

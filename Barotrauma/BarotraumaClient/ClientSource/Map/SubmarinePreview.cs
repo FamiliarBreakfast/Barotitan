@@ -421,7 +421,7 @@ namespace Barotrauma
             float scale = element.GetAttributeFloat("scale", 1f);
             Color color = element.GetAttributeColor("spritecolor", Color.White);
 
-            float rotation = element.GetAttributeFloat("rotation", 0f);
+            float rotationRad = MathHelper.ToRadians(element.GetAttributeFloat("rotation", 0f));
 
             MapEntityPrefab prefab;
             if (element.NameAsIdentifier() == "item"
@@ -455,7 +455,7 @@ namespace Barotrauma
             ItemPrefab itemPrefab = prefab as ItemPrefab;
             if (itemPrefab != null)
             {
-                BakeItemComponents(itemPrefab, rect, color, scale, rotation, depth, out overrideSprite);
+                BakeItemComponents(itemPrefab, rect, color, scale, rotationRad, depth, out overrideSprite);
             }
 
             if (!overrideSprite)
@@ -477,21 +477,30 @@ namespace Barotrauma
                     Vector2 backGroundOffset = Vector2.Zero;
 
                     Vector2 textureOffset = element.GetAttributeVector2("textureoffset", Vector2.Zero);
-                    if (flippedX) { textureOffset.X = -textureOffset.X; }
-                    if (flippedY) { textureOffset.Y = -textureOffset.Y; }
+
+                    textureOffset = Structure.UpgradeTextureOffset(
+                        targetSize: rect.Size.ToVector2(),
+                        originalTextureOffset: textureOffset,
+                        submarineInfo: submarineInfo,
+                        sourceRect: prefab.Sprite.SourceRect,
+                        scale: textureScale * scale,
+                        flippedX: flippedX,
+                        flippedY: flippedY);
 
                     backGroundOffset = new Vector2(
-                                MathUtils.PositiveModulo((int)-textureOffset.X, prefab.Sprite.SourceRect.Width),
-                                MathUtils.PositiveModulo((int)-textureOffset.Y, prefab.Sprite.SourceRect.Height));
+                                MathUtils.PositiveModulo(-textureOffset.X, prefab.Sprite.SourceRect.Width * textureScale.X * scale),
+                                MathUtils.PositiveModulo(-textureOffset.Y, prefab.Sprite.SourceRect.Height * textureScale.Y * scale));
 
                     prefab.Sprite.DrawTiled(
-                        spriteRecorder,
-                        rect.Location.ToVector2() * new Vector2(1f, -1f),
-                        rect.Size.ToVector2(),
+                        spriteBatch: spriteRecorder,
+                        position: new Vector2(rect.X + rect.Width / 2, -(rect.Y - rect.Height / 2)),
+                        targetSize: rect.Size.ToVector2(),
+                        origin: rect.Size.ToVector2() * new Vector2(0.5f, 0.5f),
                         color: color,
                         startOffset: backGroundOffset,
                         textureScale: textureScale * scale,
-                        depth: depth);
+                        depth: depth,
+                        rotation: rotationRad);
                 }
                 else if (itemPrefab != null)
                 {
@@ -552,7 +561,7 @@ namespace Barotrauma
                             spritePos * new Vector2(1f, -1f),
                             color,
                             prefab.Sprite.Origin,
-                            rotation,
+                            rotationRad,
                             scale,
                             prefab.Sprite.effects, depth);
 
@@ -563,8 +572,9 @@ namespace Barotrauma
                             Vector2 offset = decorativeSprite.GetOffset(ref offsetState, Vector2.Zero) * scale;
                             if (flippedX) { offset.X = -offset.X; }
                             if (flippedY) { offset.Y = -offset.Y; }
-                            decorativeSprite.Sprite.Draw(spriteRecorder, new Vector2(spritePos.X + offset.X, -(spritePos.Y + offset.Y)), color,
-                                MathHelper.ToRadians(rotation) + rot, decorativeSprite.GetScale(0f) * scale, prefab.Sprite.effects,
+                            float throwAway = 0.0f;
+                            decorativeSprite.Sprite.Draw(spriteRecorder, new Vector2(spritePos.X + offset.X, -(spritePos.Y + offset.Y)), color, decorativeSprite.Sprite.Origin,
+                                rotationRad + rot, decorativeSprite.GetScale(ref throwAway, 0f) * scale, prefab.Sprite.effects,
                                 depth: Math.Min(depth + (decorativeSprite.Sprite.Depth - prefab.Sprite.Depth), 0.999f));
                         }
                     }
@@ -577,7 +587,7 @@ namespace Barotrauma
         private void BakeItemComponents(
             ItemPrefab prefab,
             Rectangle rect, Color color,
-            float scale, float rotation, float depth,
+            float scale, float rotationRad, float depth,
             out bool overrideSprite)
         {
             overrideSprite = false;
@@ -607,7 +617,7 @@ namespace Barotrauma
                         Vector2 relativeBarrelPos = barrelPos * prefab.Scale - new Vector2(rect.Width / 2, rect.Height / 2);
                         var transformedBarrelPos = MathUtils.RotatePoint(
                             relativeBarrelPos,                            
-                            MathHelper.ToRadians(rotation));
+                            rotationRad);
 
                         Vector2 drawPos = new Vector2(rect.X + rect.Width * relativeScale / 2 + transformedBarrelPos.X * relativeScale, rect.Y - rect.Height * relativeScale / 2 - transformedBarrelPos.Y * relativeScale);
                         drawPos.Y = -drawPos.Y;
@@ -615,13 +625,13 @@ namespace Barotrauma
                         railSprite?.Draw(spriteRecorder,
                             drawPos,
                             color,
-                            rotation + MathHelper.PiOver2, scale,
+                            rotationRad, scale,
                             SpriteEffects.None, depth + (railSprite.Depth - prefab.Sprite.Depth));
 
                         barrelSprite?.Draw(spriteRecorder,
                             drawPos,
                             color,
-                            rotation + MathHelper.PiOver2, scale,
+                            rotationRad, scale,
                             SpriteEffects.None, depth + (barrelSprite.Depth - prefab.Sprite.Depth));
 
                         break;
@@ -781,7 +791,7 @@ namespace Barotrauma
                 previewFrame = null;
             }
             spriteRecorder?.Dispose(); spriteRecorder = null;
-            camera?.Dispose(); camera = null;
+            camera = null;
             isDisposed = true;
         }
     }

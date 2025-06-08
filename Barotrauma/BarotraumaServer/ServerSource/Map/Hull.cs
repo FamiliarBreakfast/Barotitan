@@ -76,6 +76,12 @@ namespace Barotrauma
             }
         }
 
+
+        public void CreateStatusEvent()
+        {
+            GameMain.NetworkMember?.CreateEntityEvent(this, new StatusEventData());
+        }
+
         public void ServerEventWrite(IWriteMessage msg, Client c, NetEntityEvent.IData extraData = null)
         {
             if (!(extraData is IEventData eventData)) { throw new Exception($"Malformed hull event: expected {nameof(Hull)}.{nameof(IEventData)}"); }
@@ -124,7 +130,7 @@ namespace Barotrauma
                         out NetworkFireSource[] newFireSources);
 
                     if (!c.HasPermission(ClientPermissions.ConsoleCommands) ||
-                        !c.PermittedConsoleCommands.Any(command => command.names.Contains("fire") || command.names.Contains("editfire")))
+                        !c.PermittedConsoleCommands.Any(command => command.Names.Contains("fire".ToIdentifier()) || command.Names.Contains("editfire".ToIdentifier())))
                     {
                         return;
                     }
@@ -138,7 +144,7 @@ namespace Barotrauma
 
                         var newFire = i < FireSources.Count ?
                             FireSources[i] :
-                            new FireSource(Submarine == null ? pos : pos + Submarine.Position, null, true);
+                            new FireSource(Submarine == null ? pos : pos + Submarine.Position, sourceCharacter: null, isNetworkMessage: true);
                         newFire.Position = pos;
                         newFire.Size = new Vector2(size, newFire.Size.Y);
 

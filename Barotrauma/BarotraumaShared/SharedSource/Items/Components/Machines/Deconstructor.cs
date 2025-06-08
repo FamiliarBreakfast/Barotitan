@@ -14,8 +14,6 @@ namespace Barotrauma.Items.Components
         private float progressTimer;
         private float progressState;
 
-        private bool hasPower;
-
         private Character user;
 
         private float userDeconstructorSpeedMultiplier = 1.0f;
@@ -34,10 +32,16 @@ namespace Barotrauma.Items.Components
             get { return outputContainer; }
         }
 
+        /// <summary>
+        /// Should the output items left in the deconstructor be automatically moved to the main sub at the end of the round 
+        /// if the deconstructor is not in the main sub?
+        /// </summary>
+        public bool RelocateOutputToMainSub;
+
         [Serialize(false, IsPropertySaveable.Yes)]
         public bool DeconstructItemsSimultaneously { get; set; }
 
-        [Editable, Serialize(1.0f, IsPropertySaveable.Yes)]
+        [Editable(MinValueFloat = 0.1f, MaxValueFloat = 1000), Serialize(1.0f, IsPropertySaveable.Yes)]
         public float DeconstructionSpeed { get; set; }
 
         public Deconstructor(Item item, ContentXElement element)
@@ -82,9 +86,8 @@ namespace Barotrauma.Items.Components
                 SetActive(false);
                 return;
             }
-
-            hasPower = Voltage >= MinVoltage;
-            if (!hasPower) { return; }
+            
+            if (!HasPower) { return; }
 
             var repairable = item.GetComponent<Repairable>();
             if (repairable != null)
@@ -104,7 +107,7 @@ namespace Barotrauma.Items.Components
             // doesn't quite work properly, remaining time changes if tinkering stops
             float deconstructionSpeedModifier = userDeconstructorSpeedMultiplier * (1f + tinkeringStrength * TinkeringSpeedIncrease);
 
-            float deconstructionSpeed = item.StatManager.GetAdjustedValue(ItemTalentStats.DeconstructorSpeed, DeconstructionSpeed);
+            float deconstructionSpeed = item.StatManager.GetAdjustedValueMultiplicative(ItemTalentStats.DeconstructorSpeed, DeconstructionSpeed);
 
             if (DeconstructItemsSimultaneously)
             {
@@ -237,16 +240,16 @@ namespace Barotrauma.Items.Components
                         if (targetItem == otherItem) { continue; }
                         if (deconstructProduct.RequiredOtherItem.Any(r => otherItem.HasTag(r) || r == otherItem.Prefab.Identifier))
                         {
-                            var geneticMaterial1 = targetItem.GetComponent<GeneticMaterial>();
-                            var geneticMaterial2 = otherItem.GetComponent<GeneticMaterial>();
-                            if (geneticMaterial1 != null && geneticMaterial2 != null)
+                            var targetGeneticMaterial = targetItem.GetComponent<GeneticMaterial>();
+                            var otherGeneticMaterial = otherItem.GetComponent<GeneticMaterial>();
+                            if (targetGeneticMaterial != null && otherGeneticMaterial != null)
                             {
-                                var result = geneticMaterial1.Combine(geneticMaterial2, user);
+                                var result = targetGeneticMaterial.Combine(otherGeneticMaterial, user, out Item itemToDestroy);
                                 if (result == GeneticMaterial.CombineResult.Refined)
                                 {
                                     inputContainer.Inventory.RemoveItem(otherItem);
                                     OutputContainer.Inventory.RemoveItem(otherItem);
-                                    Entity.Spawner.AddItemToRemoveQueue(otherItem);
+                                    Entity.Spawner.AddItemToRemoveQueue(itemToDestroy);
                                 }
                                 if (result != GeneticMaterial.CombineResult.None)
                                 {
@@ -290,6 +293,10 @@ namespace Barotrauma.Items.Components
                         spawnedItem.AllowStealing = targetItem.AllowStealing;
                         spawnedItem.OriginalOutpost = targetItem.OriginalOutpost;
                         spawnedItem.SpawnedInCurrentOutpost = targetItem.SpawnedInCurrentOutpost;
+                        if (RelocateOutputToMainSub && user is { AIController: HumanAIController humanAi })
+                        {
+                            humanAi.HandleRelocation(spawnedItem);
+                        }
                         for (int i = 0; i < outputContainer.Capacity; i++)
                         {
                             var containedItem = outputContainer.Inventory.GetItemAt(i);
@@ -318,7 +325,12 @@ namespace Barotrauma.Items.Components
                 }
             }
 
-            GameAnalyticsManager.AddDesignEvent("ItemDeconstructed:" + (GameMain.GameSession?.GameMode?.Preset.Identifier.Value ?? "none") + ":" + targetItem.Prefab.Identifier);
+            if (targetItem.Prefab.ContentPackage == ContentPackageManager.VanillaCorePackage &&
+                /* we don't need info of every item, we can get a good sample size just by logging 5% */
+                Rand.Range(0.0f, 1.0f) < 0.05f)
+            {
+                GameAnalyticsManager.AddDesignEvent("ItemDeconstructed:" + (GameMain.GameSession?.GameMode?.Preset.Identifier.Value ?? "none") + ":" + targetItem.Prefab.Identifier);
+            }
 
             bool? result = GameMain.LuaCs.Hook.Call<bool?>("item.deconstructed", targetItem, this, user, allowRemove);
             if (result == true) { return; }
@@ -332,6 +344,10 @@ namespace Barotrauma.Items.Components
                     foreach (Item outputItem in ic.Inventory.AllItemsMod)
                     {
                         tryPutInOutputSlots(outputItem);
+                        if (RelocateOutputToMainSub && user != null && user.AIController is HumanAIController humanAi)
+                        {
+                            humanAi.HandleRelocation(outputItem);
+                        }
                     }
                 }
                 inputContainer.Inventory.RemoveItem(targetItem);
@@ -409,41 +425,50 @@ namespace Barotrauma.Items.Components
             foreach (Item inputItem in items)
             {
                 if (!inputItem.AllowDeconstruct) { continue; }
+                
                 foreach (var deconstructItem in inputItem.Prefab.DeconstructItems)
                 {
+                    // check for deconstructor compatibility (for example, 'geneticresearchstation' tag)
                     if (deconstructItem.RequiredDeconstructor.Length > 0)
                     {
-                        if (!deconstructItem.RequiredDeconstructor.Any(r => item.HasTag(r) || item.Prefab.Identifier == r)) { continue; }
+                        if (deconstructItem.RequiredDeconstructor.None(requiredId => item.HasTag(requiredId) || item.Prefab.Identifier == requiredId)) { continue; }
                     }
+                    
+                    // check for other required items in the same deconstructor (for example, 'geneticmaterial')
                     if (deconstructItem.RequiredOtherItem.Length > 0 && checkRequiredOtherItems)
                     {
-                        if (!deconstructItem.RequiredOtherItem.Any(r => items.Any(it => it.HasTag(r) || it.Prefab.Identifier == r))) { continue; }
+                        // no matching item with the required id, skip
+                        if (deconstructItem.RequiredOtherItem.None(requiredId => items.Any(it => it.HasTag(requiredId) || it.Prefab.Identifier == requiredId))) { continue; }
+                        
                         bool validOtherItemFound = false;
                         foreach (Item otherInputItem in items)
                         {
                             if (otherInputItem == inputItem) { continue; }
-                            if (!deconstructItem.RequiredOtherItem.Any(r => otherInputItem.HasTag(r) || otherInputItem.Prefab.Identifier == r)) { continue; }
+                            if (deconstructItem.RequiredOtherItem.None(requiredId => otherInputItem.HasTag(requiredId) || otherInputItem.Prefab.Identifier == requiredId)) { continue; }
 
-                            var geneticMaterial1 = inputItem.GetComponent<GeneticMaterial>();
-                            var geneticMaterial2 = otherInputItem.GetComponent<GeneticMaterial>();
-                            if (geneticMaterial1 != null && geneticMaterial2 != null)
+                            // skip if genetic materials cannot be combined (or refined)
+                            var geneticMaterial = inputItem.GetComponent<GeneticMaterial>();
+                            var otherGeneticMaterial = otherInputItem.GetComponent<GeneticMaterial>();
+                            if (geneticMaterial != null && otherGeneticMaterial != null)
                             {
-                                if (!geneticMaterial1.CanBeCombinedWith(geneticMaterial2)) { continue; }
+                                if (!geneticMaterial.CanBeCombinedWith(otherGeneticMaterial)) { continue; }
                             }
                             validOtherItemFound = true;
                         }
                         if (!validOtherItemFound) { continue; }
                     }
+                    
                     yield return (inputItem, deconstructItem);
                 }
             }
         }
 
-        private void SetActive(bool active, Character user = null)
+        public void SetActive(bool active, Character user = null, bool createNetworkEvent = false)
         {
             PutItemsToLinkedContainer();
 
             this.user = user;
+            RelocateOutputToMainSub = false;
 
             if (inputContainer.Inventory.IsEmpty()) { active = false; }
 
@@ -456,6 +481,10 @@ namespace Barotrauma.Items.Components
             {
                 GameServer.Log(GameServer.CharacterLogName(user) + (IsActive ? " activated " : " deactivated ") + item.Name, ServerLog.MessageType.ItemInteraction);
             }
+            if (createNetworkEvent)
+            {
+                item.CreateServerEvent(this);
+            }
 #endif
             if (!IsActive)
             {
@@ -465,7 +494,11 @@ namespace Barotrauma.Items.Components
 #if CLIENT
             else
             {
-                HintManager.OnStartDeconstructing(user, this);
+                HintManager.OnStartDeconstructing(user, this); 
+                if (Item.Submarine is { Info.IsOutpost: true } && user is { IsBot: true })
+                {
+                    HintManager.OnItemMarkedForRelocation();
+                }
             }
 #endif
 

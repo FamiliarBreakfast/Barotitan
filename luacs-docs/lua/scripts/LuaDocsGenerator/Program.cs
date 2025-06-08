@@ -10,6 +10,10 @@ namespace LuaDocsGenerator
         private static string generatedDir = "";
         private static string baseLuaDir = "";
 
+        private static void GenerateDocs(Type type, string file, string? categoryName = null, string realm = "shared")
+        {
+            DocsGenerator.GenerateDocs(type, $"{baseLuaDir}/{file}", $"{generatedDir}/{file}", categoryName, realm);
+        }
         private static void GenerateDocs<T>(string file, string? categoryName = null, string realm = "shared")
         {
             DocsGenerator.GenerateDocs(typeof(T), $"{baseLuaDir}/{file}", $"{generatedDir}/{file}", categoryName, realm);
@@ -24,11 +28,14 @@ namespace LuaDocsGenerator
         {
             DocsGenerator.GenerateDocs(clientType, serverType, $"{baseLuaDir}/{file}", $"{generatedDir}/{file}", categoryName);
         }
-        private static void GenerateEnum<T>(string file, string realm = "shared")
+        private static void GenerateEnum<T>(string file, string categoryName = null, string realm = "shared")
         {
-            DocsGenerator.GenerateEnum(typeof(T), $"{generatedDir}/{file}", realm);
+            DocsGenerator.GenerateEnum(typeof(T), $"{generatedDir}/{file}", categoryName, realm);
         }
-
+        private static void GenerateEnum(Type type, string file, string categoryName = null, string realm = "shared")
+        {
+            DocsGenerator.GenerateEnum(type,  $"{generatedDir}/{file}", categoryName, realm);
+        }
 
         static void Main(string[] args)
         {
@@ -88,6 +95,43 @@ namespace LuaDocsGenerator
             GenerateDocs<BarotraumaClient::Barotrauma.PhysicsBody, BarotraumaServer::Barotrauma.PhysicsBody>("PhysicsBody.lua");
             GenerateDocs<BarotraumaClient::Barotrauma.Limb, BarotraumaServer::Barotrauma.Limb>("Limb.lua");
             GenerateDocs<BarotraumaClient::Barotrauma.PlayerInput>("PlayerInput.lua", "PlayerInput", "client");
+            GenerateDocs<BarotraumaClient::Barotrauma.Networking.IReadMessage, BarotraumaServer::Barotrauma.Networking.IReadMessage>("IReadMessage.lua");
+            GenerateDocs<BarotraumaClient::Barotrauma.Networking.IWriteMessage, BarotraumaServer::Barotrauma.Networking.IWriteMessage>("IWriteMessage.lua");
+
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.GUI), "GUI.lua", "GUI", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.GUIStyle), "GUIStyle.lua", "GUI.Style", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.GUIComponent), "GUIComponent.lua", "GUI.Component", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.RectTransform), "RectTransform.lua", "GUI.RectTransform", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.GUILayoutGroup), "GUILayoutGroup.lua", "GUI.LayoutGroup", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.GUIButton),"GUIButton.lua", "GUI.Button", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.GUITextBox),"GUITextBox.lua", "GUI.TextBox", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.GUICanvas),"GUICanvas.lua", "GUI.Canvas", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.GUIFrame),"GUIFrame.lua", "GUI.Frame", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.GUITextBlock),"GUITextBlock.lua", "GUI.TextBlock", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.GUITickBox),"GUITickBox.lua", "GUI.TickBox", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.GUIImage),"GUIImage.lua", "GUI.Image", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.GUIListBox),"GUIListBox.lua", "GUI.ListBox", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.GUIScrollBar),"GUIScrollBar.lua", "GUI.ScrollBar", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.GUIDropDown),"GUIDropDown.lua", "GUI.DropDown", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.GUINumberInput),"GUINumberInput.lua", "GUI.NumberInput", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.GUIMessageBox),"GUIMessageBox.lua", "GUI.MessageBox", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.GUIColorPicker),"GUIColorPicker.lua", "GUI.ColorPicker", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.GUIProgressBar),"GUIProgressBar.lua", "GUI.ProgressBar", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.GUICustomComponent),"GUICustomComponent.lua", "GUI.CustomComponent", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.GUIScissorComponent),"GUIScissorComponent.lua", "GUI.ScissorComponent", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.VideoPlayer),"VideoPlayer.lua", "GUI.VideoPlayer", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.Graph),"Graph.lua", "GUI.Graph", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.SerializableEntityEditor),"SerializableEntityEditor.lua", "GUI.SerializableEntityEditor", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.SlideshowPlayer),"SlideshowPlayer.lua", "GUI.SlideshowPlayer", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.CreditsPlayer),"CreditsPlayer.lua", "GUI.CreditsPlayer", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.GUIDragHandle),"GUIDragHandle.lua", "GUI.DragHandle", "client");
+            GenerateDocs(typeof(BarotraumaClient::Barotrauma.Screen),"Screen.lua", "GUI.Screen", "client");
+
+            GenerateEnum<BarotraumaClient::Barotrauma.Anchor>("Anchor.lua", "GUI.Anchor", "client");
+            GenerateEnum<BarotraumaClient::Barotrauma.Pivot>("Pivot.lua", "GUI.Pivot", "client");
+            GenerateEnum<BarotraumaClient::Barotrauma.GUISoundType>("GUISoundType.lua", "GUI.SoundType", "client");
+            GenerateEnum<BarotraumaClient::Barotrauma.CursorState>("CursorState.lua", "GUI.CursorState", "client");
+            GenerateEnum<Barotrauma.Alignment>("Alignment.lua", "GUI.Alignment", "client");
 
             GenerateEnum<BarotraumaClient.Barotrauma.CauseOfDeathType>("CauseOfDeathType.lua");
             GenerateEnum<BarotraumaClient.Barotrauma.CharacterTeamType>("CharacterTeamType.lua");
@@ -99,6 +143,15 @@ namespace LuaDocsGenerator
             GenerateEnum<BarotraumaClient.Barotrauma.Networking.ServerLog.MessageType>("ServerLogMessageType.lua");
             GenerateEnum<BarotraumaClient.Barotrauma.SpawnType>("SpawnType.lua");
             GenerateEnum<BarotraumaClient.Barotrauma.Networking.DisconnectReason>("DisconnectReason.lua");
+            GenerateEnum<BarotraumaClient.Barotrauma.ActionType>("ActionType.lua");
+            GenerateEnum<BarotraumaClient.Barotrauma.StatTypes>("StatTypes.lua");
+            GenerateEnum<BarotraumaClient.Barotrauma.ChatMode>("ChatMode.lua");
+            GenerateEnum<BarotraumaClient.Barotrauma.CharacterType>("CharacterType.lua");
+            GenerateEnum<BarotraumaClient.Barotrauma.InputType>("InputType.lua");
+            GenerateEnum<Barotrauma.Networking.DeliveryMethod>("DeliveryMethod.lua");
+            GenerateEnum<BarotraumaClient.Barotrauma.NumberType>("NumberType.lua");
+            GenerateEnum<BarotraumaClient.Barotrauma.Level.PositionType>("PositionType.lua");
+            GenerateEnum<BarotraumaClient.Barotrauma.AbilityFlags>("AbilityFlags.lua");
 
         }
     }

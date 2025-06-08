@@ -7,7 +7,7 @@ using Barotrauma.Items.Components;
 
 namespace Barotrauma
 {
-    class TestGameMode : GameMode
+    partial class TestGameMode : GameMode
     {
         public Action OnRoundEnd;
 
@@ -22,18 +22,6 @@ namespace Barotrauma
 
         private GUIButton createEventButton;
 
-        public TestGameMode(GameModePreset preset) : base(preset)
-        {
-            foreach (JobPrefab jobPrefab in JobPrefab.Prefabs.OrderBy(p => p.Identifier))
-            {
-                for (int i = 0; i < jobPrefab.InitialCount; i++)
-                {
-                    var variant = Rand.Range(0, jobPrefab.Variants);
-                    CrewManager.AddCharacterInfo(new CharacterInfo(CharacterPrefab.HumanSpeciesName, jobOrJobPrefab: jobPrefab, variant: variant));
-                }
-            }
-        }
-
         public override void Start()
         {
             base.Start();
@@ -42,8 +30,24 @@ namespace Barotrauma
             foreach (Submarine submarine in Submarine.Loaded)
             {
                 submarine.NeutralizeBallast();
+                switch (submarine.Info.Type)
+                {
+                    case SubmarineType.Outpost:
+                    case SubmarineType.OutpostModule:
+                    case SubmarineType.Wreck:
+                    case SubmarineType.BeaconStation:
+                        //normally the body would be made static during level generation,
+                        //but in the test mode we load the outpost/wreck/beacon as if it was a normal sub and need to do this manually
+                        submarine.PhysicsBody.BodyType = FarseerPhysics.BodyType.Static;
+                        if (submarine.Info.ShouldBeRuin)
+                        {
+                            submarine.Info.Type = SubmarineType.Ruin;
+                        }
+                        submarine.TeamID = submarine.Info.IsOutpost ? CharacterTeamType.FriendlyNPC : CharacterTeamType.None;
+                        break;
+                }
             }
-
+                
             if (SpawnOutpost)
             {
                 GenerateOutpost(Submarine.MainSub);
@@ -51,14 +55,14 @@ namespace Barotrauma
 
             if (TriggeredEvent != null)
             {
-                scriptedEvent = new List<Event> { TriggeredEvent.CreateInstance() };
+                scriptedEvent = new List<Event> { TriggeredEvent.CreateInstance(GameMain.GameSession.EventManager.RandomSeed) };
                 GameMain.GameSession.EventManager.PinnedEvent = scriptedEvent.Last();
 
                 createEventButton = new GUIButton(new RectTransform(new Point(128, 64), GUI.Canvas, Anchor.TopCenter) { ScreenSpaceOffset = new Point(0, 32) }, TextManager.Get("create"))
                 {
                     OnClicked = delegate 
                     {
-                        scriptedEvent.Add(TriggeredEvent.CreateInstance());
+                        scriptedEvent.Add(TriggeredEvent.CreateInstance(GameMain.GameSession.EventManager.RandomSeed));
                         GameMain.GameSession.EventManager.PinnedEvent = scriptedEvent.Last();
                         return true;
                     }

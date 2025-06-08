@@ -50,7 +50,7 @@ namespace Barotrauma.Items.Components
                 Hull hull = Entity.FindEntityByID(hullID) as Hull;
                 item.Submarine = submarine;
                 item.CurrentHull = hull;
-                item.body.SetTransform(simPosition, item.body.Rotation);
+                item.body.SetTransformIgnoreContacts(simPosition, item.body.Rotation);
 
                 switch (targetType)
                 {
@@ -148,10 +148,28 @@ namespace Barotrauma.Items.Components
             Vector2 particlePos = item.WorldPosition;
             float rotation = -item.body.Rotation;
             if (item.body.Dir < 0.0f) { rotation += MathHelper.Pi; }
+
+            //if the position is in a sub's local coordinates, convert to world coordinates
+            particlePos = ConvertToWorldCoordinates(particlePos);
+            //if the start location is in a sub's local coordinates, convert to world coordinates
+            startLocation = ConvertToWorldCoordinates(startLocation);
+            //same for end location
+            endLocation = ConvertToWorldCoordinates(endLocation);
+
             Tuple<Vector2, Vector2> tracerPoints = new Tuple<Vector2, Vector2>(startLocation, endLocation);
             foreach (ParticleEmitter emitter in particleEmitters)
             {
                 emitter.Emit(1.0f, particlePos, hullGuess: null, angle: rotation, particleRotation: rotation, colorMultiplier: emitter.Prefab.Properties.ColorMultiplier, tracerPoints: tracerPoints);
+            }
+
+            static Vector2 ConvertToWorldCoordinates(Vector2 position)
+            {
+                Submarine containing = Submarine.FindContainingInLocalCoordinates(position);
+                if (containing != null)
+                {
+                    position += containing.Position;
+                }
+                return position;
             }
         }
 
@@ -162,7 +180,11 @@ namespace Barotrauma.Items.Components
                 switch (subElement.Name.ToString().ToLowerInvariant())
                 {
                     case "particleemitter":
-                        particleEmitters.Add(new ParticleEmitter(subElement));
+                        var emitter = new ParticleEmitter(subElement);
+                        //backwards compatibility: previously it was not possible to change if the particles use tracer points, they were always used on projectiles
+                        //now emitters don't use them by default, except on projectiles
+                        emitter.Prefab.Properties.UseTracerPoints = subElement.GetAttributeBool(nameof(emitter.Prefab.Properties.UseTracerPoints), true);
+                        particleEmitters.Add(emitter);                        
                         break;
                 }
             }

@@ -6,7 +6,21 @@ namespace Barotrauma
 {
     partial class CharacterCampaignData
     {
+#if DEBUG
+        /// <summary>
+        /// If enabled, client names must match the name of the character. Useful for testing the campaign with multiple clients running locally:
+        /// without this, the clients would all get assigned the same character due to all of them having the same AccountId or Address.
+        /// </summary>
+        public static bool RequireClientNameMatch = false;
+#endif
+
         public bool HasSpawned;
+        
+        /// <summary>
+        /// Respawning via shuttle has been blocked from permanently dead characters, but it should be possible when the player
+        /// chooses a bot from the reserve bench and shuttles are enabled in the campaign.
+        /// </summary>
+        public bool ChosenNewBotViaShuttle;
 
         public bool HasItemData
         {
@@ -69,6 +83,7 @@ namespace Barotrauma
             string accountIdStr = element.GetAttributeString("accountid", null)
                                ?? element.GetAttributeString("steamid", "");
             AccountId = Networking.AccountId.Parse(accountIdStr);
+            ChosenNewBotViaShuttle = element.GetAttributeBool("waitingforshuttle", false);
 
             foreach (XElement subElement in element.Elements())
             {
@@ -76,7 +91,7 @@ namespace Barotrauma
                 {
                     case "character":
                     case "characterinfo":
-                        CharacterInfo = new CharacterInfo(subElement);
+                        CharacterInfo = new CharacterInfo(new ContentXElement(contentPackage: null, subElement));
                         break;
                     case "inventory":
                         itemData = subElement;
@@ -103,12 +118,24 @@ namespace Barotrauma
             }
             else
             {
+#if DEBUG
+                if (RequireClientNameMatch)
+                {
+                    return ClientAddress == client.Connection.Endpoint.Address && client.Name == Name;
+                }
+#endif
                 return ClientAddress == client.Connection.Endpoint.Address;
             }
         }
 
         public bool IsDuplicate(CharacterCampaignData other)
         {
+#if DEBUG
+            if (RequireClientNameMatch)
+            {
+                return AccountId == other.AccountId && other.ClientAddress == ClientAddress && Name == other.Name;    
+            }
+#endif
             return AccountId == other.AccountId && other.ClientAddress == ClientAddress;
         }
 
@@ -117,6 +144,14 @@ namespace Barotrauma
             itemData = null;
             healthData = null;
             WalletData = null;
+        }
+
+        public void ApplyPermadeath()
+        {
+            Reset();
+            CharacterInfo.PermanentlyDead = true;
+            GameMain.GameSession?.IncrementPermadeath(AccountId);    
+            DebugConsole.NewMessage($"Permadeath applied on {Name}'s CharacterCampaignData.CharacterInfo.");
         }
 
         public void SpawnInventoryItems(Character character, Inventory inventory)
@@ -144,7 +179,7 @@ namespace Barotrauma
 
         public void ApplyWalletData(Character character)
         {
-            character.Wallet = new Wallet(Option<Character>.Some(character), WalletData);
+            character.Wallet = new Wallet(Option.Some(character), WalletData);
         }
 
         public XElement Save()
@@ -152,8 +187,8 @@ namespace Barotrauma
             XElement element = new XElement("CharacterCampaignData",
                 new XAttribute("name", Name),
                 new XAttribute("address", ClientAddress),
-                new XAttribute("accountid", AccountId.TryUnwrap(out var accountId) ? accountId.StringRepresentation : ""));
-
+                new XAttribute("accountid", AccountId.TryUnwrap(out var accountId) ? accountId.StringRepresentation : ""),
+                new XAttribute("waitingforshuttle", ChosenNewBotViaShuttle));
             CharacterInfo?.Save(element);
             if (itemData != null) { element.Add(itemData); }
             if (healthData != null) { element.Add(healthData); }

@@ -1,4 +1,5 @@
-﻿using Barotrauma.Items.Components;
+﻿using Barotrauma.Extensions;
+using Barotrauma.Items.Components;
 using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
@@ -8,14 +9,11 @@ namespace Barotrauma.Networking
 {
     partial class RespawnManager : Entity, IServerSerializable
     {
-        private DateTime despawnTime;
-
         private float shuttleEmptyTimer;
 
-        private int pendingRespawnCount, requiredRespawnCount;
-        private int prevPendingRespawnCount, prevRequiredRespawnCount;
+        public bool IsShuttleInsideLevel => RespawnShuttles.Any(s => s.WorldPosition.Y < Level.Loaded.Size.Y);
 
-        private IEnumerable<Client> GetClientsToRespawn()
+        private IEnumerable<Client> GetClientsToRespawn(CharacterTeamType teamId)
         {
             MultiPlayerCampaign campaign = GameMain.GameSession.GameMode as MultiPlayerCampaign;
             foreach (Client c in networkMember.ConnectedClients)
@@ -26,19 +24,33 @@ namespace Barotrauma.Networking
                 if (!c.InGame) { continue; }
                 if (c.SpectateOnly && (GameMain.Server.ServerSettings.AllowSpectating || GameMain.Server.OwnerConnection == c.Connection)) { continue; }
                 if (c.Character != null && !c.Character.IsDead) { continue; }
+                if (c.TeamID != CharacterTeamType.None && c.TeamID != teamId)
+                {
+                    continue;
+                }
 
-                //don't allow respawn if the client already has a character (they'll regain control once they're in sync)
                 var matchingData = campaign?.GetClientCharacterData(c);
+                
+                //don't allow respawn if the client already has a character (they'll regain control once they're in sync)
                 if (matchingData != null && matchingData.HasSpawned &&
                     Character.CharacterList.Any(c => c.Info == matchingData.CharacterInfo && !c.IsDead))
                 {
                     continue;
                 }
-
-                if (UseRespawnPrompt)
+                
+                // Respawning can still happen in permadeath mode (disconnected characters, reserve bench...), but never for permanently dead ones
+                if (GameMain.NetworkMember?.ServerSettings is { RespawnMode: RespawnMode.Permadeath } &&
+                    matchingData is not { ChosenNewBotViaShuttle: true } && // respawning as a bot that should respawn the usual way via shuttle
+                    (matchingData?.CharacterInfo is { PermanentlyDead: true } || c.Character is { IsDead: true }))
                 {
-                    if (matchingData != null && matchingData.HasSpawned)
+                    continue;
+                }
+                
+                if (campaign != null)
+                {
+                    if (matchingData != null && matchingData.HasSpawned && !matchingData.ChosenNewBotViaShuttle)
                     {
+                        //in the campaign mode, wait for the client to choose whether they want to spawn 
                         if (!c.WaitForNextRoundRespawn.HasValue || c.WaitForNextRoundRespawn.Value) { continue; }
                     }
                 }
@@ -47,18 +59,20 @@ namespace Barotrauma.Networking
             }
         }
 
-        private static bool IsRespawnPromptPendingForClient(Client c)
+        private static bool IsRespawnDecisionPendingForClient(Client c)
         {
-            if (!UseRespawnPrompt || !(GameMain.GameSession.GameMode is MultiPlayerCampaign campaign)) { return false; }
+            if (Level.Loaded == null || GameMain.GameSession.GameMode is not MultiPlayerCampaign campaign) { return false; }
 
             if (!c.InGame) { return false; }
             if (c.SpectateOnly && (GameMain.Server.ServerSettings.AllowSpectating || GameMain.Server.OwnerConnection == c.Connection)) { return false; }
             if (c.Character != null && !c.Character.IsDead) { return false; }
 
-            var matchingData = campaign.GetClientCharacterData(c);
+            CharacterCampaignData matchingData = campaign.GetClientCharacterData(c);
             if (matchingData != null && matchingData.HasSpawned)
             {
-                if (Character.CharacterList.Any(c => c.Info == matchingData.CharacterInfo && !c.IsDead))
+                if (Character.CharacterList.Any(c => 
+                    c.Info == matchingData.CharacterInfo && 
+                    (!c.IsDead || c.CauseOfDeath is { Type: CauseOfDeathType.Disconnected })))
                 {
                     return false;
                 }
@@ -70,36 +84,52 @@ namespace Barotrauma.Networking
             return false;
         }
 
-        private static List<CharacterInfo> GetBotsToRespawn()
+        private static bool ClientHasChosenNewBotViaShuttle(Client c)
         {
+            if (GameMain.GameSession.GameMode is MultiPlayerCampaign mpCampaign &&
+                mpCampaign.GetClientCharacterData(c) is CharacterCampaignData matchingData)
+            {
+                return matchingData.ChosenNewBotViaShuttle;
+            }
+            return false;
+        }
+
+        private static List<CharacterInfo> GetBotsToRespawn(CharacterTeamType teamId)
+        {
+            //this works under the assumption that GetCharacterInfos only returns bots in MP
+            var botInfos = GameMain.GameSession.CrewManager.GetCharacterInfos()
+                .Where(botInfo => botInfo.TeamID == teamId)
+                //filter out players in case a player has been given control of a bot using console commands
+                .Where(botInfo => GameMain.Server.ConnectedClients.None(c => c.CharacterInfo == botInfo))
+                .ToList();
+
             if (GameMain.Server.ServerSettings.BotSpawnMode == BotSpawnMode.Normal)
             {
-                return Character.CharacterList
-                    .FindAll(c => c.TeamID == CharacterTeamType.Team1 && c.AIController != null && c.Info != null && c.IsDead)
-                    .Select(c => c.Info)
-                    .ToList();
+                return botInfos.Where(ci => ci.Character == null || ci.Character.IsDead).ToList();
             }
 
             int currPlayerCount = GameMain.Server.ConnectedClients.Count(c =>
                 c.InGame &&
                 (!c.SpectateOnly || (!GameMain.Server.ServerSettings.AllowSpectating && GameMain.Server.OwnerConnection != c.Connection)));
 
-            var existingBots = Character.CharacterList
-                .FindAll(c => c.TeamID == CharacterTeamType.Team1 && c.AIController != null && c.Info != null);
-
+            var existingBots = Character.CharacterList.FindAll(c => c.IsBot && !c.IsDead && c.TeamID == teamId);
             int requiredBots = GameMain.Server.ServerSettings.BotCount - currPlayerCount;
             requiredBots -= existingBots.Count(b => !b.IsDead);
 
             List<CharacterInfo> botsToRespawn = new List<CharacterInfo>();
             for (int i = 0; i < requiredBots; i++)
             {
-                CharacterInfo botToRespawn = existingBots.Find(b => b.IsDead)?.Info;
+                CharacterInfo botToRespawn = botInfos.FirstOrDefault(b => b.Character == null || b.Character.IsDead);
                 if (botToRespawn == null)
                 {
-                    botToRespawn = new CharacterInfo(CharacterPrefab.HumanSpeciesName);
+                    botToRespawn = new CharacterInfo(CharacterPrefab.HumanSpeciesName)
+                    {
+                        TeamID = teamId
+                    };
                 }
                 else
                 {
+                    botInfos.Remove(botToRespawn);
                     existingBots.Remove(botToRespawn.Character);
                 }
                 botsToRespawn.Add(botToRespawn);
@@ -107,15 +137,34 @@ namespace Barotrauma.Networking
             return botsToRespawn;
         }
 
-        private bool ShouldStartRespawnCountdown()
+        private string GetRespawnShuttleText(CharacterTeamType team)
         {
-            int characterToRespawnCount = GetClientsToRespawn().Count();
+            if (teamSpecificStates.Count == 1)
+            {
+                return "respawn shuttle";
+            }
+            return team == CharacterTeamType.Team1 ? "respawn shuttle (team 1)" : "respawn shuttle (team 2)";
+        }
+        private string GetTeamNameText(CharacterTeamType team)
+        {
+            if (teamSpecificStates.Count == 1)
+            {
+                return "everyone";
+            }
+            return team == CharacterTeamType.Team1 ? "team 1" : "team 2";
+        }
+
+
+        private bool ShouldStartRespawnCountdown(TeamSpecificState teamSpecificState)
+        {
+            int characterToRespawnCount = GetClientsToRespawn(teamSpecificState.TeamID).Count();
             return ShouldStartRespawnCountdown(characterToRespawnCount);
         }
 
         private static int GetMinCharactersToRespawn()
         {
-            return Math.Max((int)(GameMain.Server.ConnectedClients.Count * GameMain.Server.ServerSettings.MinRespawnRatio), 1);
+            int respawnableClientCount = GameMain.Server.ConnectedClients.Count(c => c.InGame && (!c.AFK || !GameMain.Server.ServerSettings.AllowAFK));
+            return Math.Max((int)(respawnableClientCount * GameMain.Server.ServerSettings.MinRespawnRatio), 1);
         }
 
         private bool ShouldStartRespawnCountdown(int characterToRespawnCount)
@@ -127,117 +176,99 @@ namespace Barotrauma.Networking
             return characterToRespawnCount >= GetMinCharactersToRespawn();
         }
 
-        partial void UpdateWaiting(float _)
+        partial void UpdateWaiting(TeamSpecificState teamSpecificState)
         {
-            if (RespawnShuttle != null)
+            //no respawns in the first minute of the round - otherwise it can be that bots
+            //are respawned to "fill" the spots of players who are taking a long time to load in
+            if (GameMain.GameSession is { RoundDuration: < 60 })
             {
-                if (!GameMain.LuaCs.Game.overrideRespawnSub)
-                {
-                    RespawnShuttle.Velocity = Vector2.Zero;
-                }
+                return;
             }
 
-            pendingRespawnCount = GetClientsToRespawn().Count();
-            requiredRespawnCount = GetMinCharactersToRespawn();
-            if (pendingRespawnCount != prevPendingRespawnCount || 
-                requiredRespawnCount != prevRequiredRespawnCount)
+            var teamId = teamSpecificState.TeamID;
+            var respawnShuttle = GetShuttle(teamId);
+            if (respawnShuttle != null && !GameMain.LuaCs.Game.overrideRespawnSub)
             {
-                prevPendingRespawnCount = pendingRespawnCount;
-                prevRequiredRespawnCount = requiredRespawnCount;
+                respawnShuttle.Velocity = Vector2.Zero;
+            }
+
+            teamSpecificState.PendingRespawnCount = GetClientsToRespawn(teamId).Count();
+            if (GameMain.GameSession?.Campaign == null)
+            {
+                teamSpecificState.PendingRespawnCount += GetBotsToRespawn(teamId).Count;
+            }
+            teamSpecificState.RequiredRespawnCount = GetMinCharactersToRespawn();
+            if (teamSpecificState.PendingRespawnCount != teamSpecificState.PrevPendingRespawnCount ||
+                 teamSpecificState.RequiredRespawnCount != teamSpecificState.PrevRequiredRespawnCount)
+            {
+                teamSpecificState.PrevPendingRespawnCount = teamSpecificState.PendingRespawnCount;
+                teamSpecificState.PrevRequiredRespawnCount = teamSpecificState.RequiredRespawnCount;
                 GameMain.Server.CreateEntityEvent(this);
             }
 
-            if (RespawnCountdownStarted)
+            if (teamSpecificState.RespawnCountdownStarted)
             {
-                if (pendingRespawnCount == 0)
+                if (teamSpecificState.PendingRespawnCount == 0)
                 {
-                    RespawnCountdownStarted = false;
+                    teamSpecificState.RespawnCountdownStarted = false;
                     GameMain.Server.CreateEntityEvent(this);
                 }
             }
             else
             {
-                bool shouldStartCountdown = ShouldStartRespawnCountdown(pendingRespawnCount);       
+                bool shouldStartCountdown = ShouldStartRespawnCountdown(teamSpecificState.PendingRespawnCount);       
                 if (shouldStartCountdown)
                 {
-                    RespawnCountdownStarted = true;
-                    if (RespawnTime < DateTime.Now)
+                    teamSpecificState.RespawnCountdownStarted = true;
+                    if (teamSpecificState.RespawnTime < DateTime.Now)
                     {
-                        RespawnTime = DateTime.Now + new TimeSpan(0, 0, 0, 0, (int)(GameMain.Server.ServerSettings.RespawnInterval * 1000.0f));
+                        teamSpecificState.RespawnTime = DateTime.Now + new TimeSpan(0, 0, 0, 0, (int)(GameMain.Server.ServerSettings.RespawnInterval * 1000.0f));
                     }
                     GameMain.Server.CreateEntityEvent(this); 
-                }              
+                }
             }
 
-            if (RespawnCountdownStarted && DateTime.Now > RespawnTime)
+            if (teamSpecificState.RespawnCountdownStarted && DateTime.Now > teamSpecificState.RespawnTime)
             {
-                DispatchShuttle();
-                RespawnCountdownStarted = false;
+                DispatchShuttle(teamSpecificState);
+                teamSpecificState.RespawnCountdownStarted = false;
             }
         }
 
-        public void DispatchShuttle()
+        public void DispatchShuttle(TeamSpecificState teamSpecificState)
         {
-            if (RespawnShuttle != null)
+            if (RespawnShuttles.Any())
             {
+                ResetShuttle(teamSpecificState);
                 if (GameMain.LuaCs.Game.overrideRespawnSub)
 				{
-                    CurrentState = State.Waiting;
+                    teamSpecificState.CurrentState = State.Waiting;
                 }
                 else
 				{
-                    CurrentState = State.Transporting;
+                    teamSpecificState.CurrentState = State.Transporting;
                 }
                 GameMain.Server.CreateEntityEvent(this);
-
-                ResetShuttle();
-
-                if (shuttleSteering != null)
-                {
-                    shuttleSteering.TargetVelocity = Vector2.Zero;
-                }
-
-                GameServer.Log("Dispatching the respawn shuttle.", ServerLog.MessageType.Spawning);
-
-                Vector2 spawnPos = FindSpawnPos();
-
-                if (!GameMain.LuaCs.Game.overrideRespawnSub)
-                {
-                    RespawnCharacters(spawnPos);
-                }
-
-                CoroutineManager.StopCoroutines("forcepos");
-                if (spawnPos.Y > Level.Loaded.Size.Y)
-                {
-                    CoroutineManager.StartCoroutine(ForceShuttleToPos(Level.Loaded.StartPosition - Vector2.UnitY * Level.ShaftHeight, 100.0f), "forcepos");
-                }
-                else
-                {
-                    RespawnShuttle.SetPosition(spawnPos);
-                    RespawnShuttle.Velocity = Vector2.Zero;
-                    RespawnShuttle.NeutralizeBallast();
-                    RespawnShuttle.EnableMaintainPosition();
-                }
+                SetShuttleBodyType(teamSpecificState.TeamID, FarseerPhysics.BodyType.Dynamic);
             }
             else
             {
-                CurrentState = State.Waiting;
-                GameServer.Log("Respawning everyone in main sub.", ServerLog.MessageType.Spawning);
+                teamSpecificState.CurrentState = State.Waiting;
+                GameServer.Log($"Respawning {GetTeamNameText(teamSpecificState.TeamID)} in the main sub.", ServerLog.MessageType.Spawning);
                 GameMain.Server.CreateEntityEvent(this);
-
-                RespawnCharacters(null);
             }
+            RespawnCharacters(teamSpecificState);
         }
 
-        partial void UpdateReturningProjSpecific(float deltaTime)
+        partial void UpdateReturningProjSpecific(TeamSpecificState teamSpecificState, float deltaTime)
         {
             //speed up despawning if there's no-one inside the shuttle
-            if (despawnTime > DateTime.Now + new TimeSpan(0, 0, seconds: 30) && CheckShuttleEmpty(deltaTime))
+            if (teamSpecificState.DespawnTime > DateTime.Now + new TimeSpan(0, 0, seconds: 30) && CheckShuttleEmpty(deltaTime))
             {
-                despawnTime = DateTime.Now + new TimeSpan(0, 0, seconds: 30);
+                teamSpecificState.DespawnTime = DateTime.Now + new TimeSpan(0, 0, seconds: 30);
             }
 
-            foreach (Door door in shuttleDoors)
+            foreach (Door door in shuttleDoors[teamSpecificState.TeamID])
             {
                 if (door.IsOpen)
                 {
@@ -245,84 +276,71 @@ namespace Barotrauma.Networking
                 }
             }
 
-            var shuttleGaps = Gap.GapList.FindAll(g => g.Submarine == RespawnShuttle && g.ConnectedWall != null);
+            var shuttleGaps = Gap.GapList.FindAll(g => RespawnShuttles.Contains(g.Submarine) && g.ConnectedWall != null);
             shuttleGaps.ForEach(g => Spawner.AddEntityToRemoveQueue(g));
 
-            var dockingPorts = Item.ItemList.FindAll(i => i.Submarine == RespawnShuttle && i.GetComponent<DockingPort>() != null);
+            var dockingPorts = Item.ItemList.FindAll(i => RespawnShuttles.Contains(i.Submarine) && i.GetComponent<DockingPort>() != null);
             dockingPorts.ForEach(d => d.GetComponent<DockingPort>().Undock());
 
-            //shuttle has returned if the path has been traversed or the shuttle is close enough to the exit
-            if (!CoroutineManager.IsCoroutineRunning("forcepos"))
+            if (!IsShuttleInsideLevel || DateTime.Now > teamSpecificState.DespawnTime)
             {
-                if ((shuttleSteering?.SteeringPath != null && shuttleSteering.SteeringPath.Finished)
-                    || (RespawnShuttle.WorldPosition.Y + RespawnShuttle.Borders.Y > Level.Loaded.StartPosition.Y - Level.ShaftHeight &&
-                        Math.Abs(Level.Loaded.StartPosition.X - RespawnShuttle.WorldPosition.X) < 1000.0f))
-                {
-                    CoroutineManager.StopCoroutines("forcepos");
-                    CoroutineManager.StartCoroutine(
-                        ForceShuttleToPos(new Vector2(Level.Loaded.StartPosition.X, Level.Loaded.Size.Y + 1000.0f), 100.0f), "forcepos");
+                ResetShuttle(teamSpecificState);
 
-                }
-            }
-
-            if (RespawnShuttle.WorldPosition.Y > Level.Loaded.Size.Y || DateTime.Now > despawnTime)
-            {
-                CoroutineManager.StopCoroutines("forcepos");
-
-                ResetShuttle();
-
-                CurrentState = State.Waiting;
-                GameServer.Log("The respawn shuttle has left.", ServerLog.MessageType.Spawning);
+                teamSpecificState.CurrentState = State.Waiting;
+                GameServer.Log($"The {GetRespawnShuttleText(teamSpecificState.TeamID)} has left.", ServerLog.MessageType.Spawning);
                 GameMain.Server.CreateEntityEvent(this);
 
-                RespawnCountdownStarted = false;
-                ReturnCountdownStarted = false;
+                teamSpecificState.RespawnCountdownStarted = false;
+                teamSpecificState.ReturnCountdownStarted = false;
             }
         }
 
-        partial void UpdateTransportingProjSpecific(float deltaTime)
+        partial void UpdateTransportingProjSpecific(TeamSpecificState teamSpecificState, float deltaTime)
         {
-            if (!ReturnCountdownStarted)
+            if (!teamSpecificState.ReturnCountdownStarted)
             {
                 //if there are no living chracters inside, transporting can be stopped immediately
                 if (CheckShuttleEmpty(deltaTime))
                 {
-                    ReturnTime = DateTime.Now;
-                    ReturnCountdownStarted = true;
+                    teamSpecificState.ReturnTime = DateTime.Now;
+                    teamSpecificState.ReturnCountdownStarted = true;
                 }
-                else if (!ShouldStartRespawnCountdown())
+                else if (!ShouldStartRespawnCountdown(teamSpecificState))
                 {
                     //don't start counting down until someone else needs to respawn
-                    ReturnTime = DateTime.Now + new TimeSpan(0, 0, 0, 0, milliseconds: (int)(maxTransportTime * 1000));
-                    despawnTime = ReturnTime + new TimeSpan(0, 0, seconds: 30);
+                    teamSpecificState.ReturnTime = DateTime.Now + new TimeSpan(0, 0, 0, 0, milliseconds: (int)(maxTransportTime * 1000));
+                    teamSpecificState.DespawnTime = teamSpecificState.ReturnTime + new TimeSpan(0, 0, seconds: 30);
                     return;
                 }
                 else
                 {
-                    ReturnCountdownStarted = true;
+                    teamSpecificState.ReturnCountdownStarted = true;
                     GameMain.Server.CreateEntityEvent(this);
                 }
             }
             else if (CheckShuttleEmpty(deltaTime))
             {
-                ReturnTime = DateTime.Now;
+                teamSpecificState.ReturnTime = DateTime.Now;
             }
 
-            if (DateTime.Now > ReturnTime)
+            if (DateTime.Now > teamSpecificState.ReturnTime)
             {
-                GameServer.Log("The respawn shuttle is leaving.", ServerLog.MessageType.ServerMessage);
-                CurrentState = State.Returning;
+                if (IsShuttleInsideLevel)
+                {
+                    GameServer.Log($"The {GetRespawnShuttleText(teamSpecificState.TeamID)} is leaving.", ServerLog.MessageType.ServerMessage);
+                }
+                teamSpecificState.CurrentState = State.Returning;
 
                 GameMain.Server.CreateEntityEvent(this);
 
-                RespawnCountdownStarted = false;
+                teamSpecificState.RespawnCountdownStarted = false;
                 maxTransportTime = GameMain.Server.ServerSettings.MaxTransportTime;
             }
         }
 
         private bool CheckShuttleEmpty(float deltaTime)
         {
-            if (!Character.CharacterList.Any(c => c.Submarine == RespawnShuttle && !c.IsDead))
+            if (RespawnShuttles.All(respawnShuttle => Character.CharacterList.None(c => c.Submarine == respawnShuttle && !c.IsDead)))
             {
                 shuttleEmptyTimer += deltaTime;
             }
@@ -332,20 +350,23 @@ namespace Barotrauma.Networking
             }
             return shuttleEmptyTimer > 1.0f;
         }
-        
-        partial void RespawnCharactersProjSpecific(Vector2? shuttlePos)
-        {
-            respawnedCharacters.Clear();
 
-            var respawnSub = RespawnShuttle ?? Submarine.MainSub;
+        private void RespawnCharacters(TeamSpecificState teamSpecificState)
+        {
+            var teamID = teamSpecificState.TeamID;
+            int teamIndex = teamID == CharacterTeamType.Team1 ? 0 : 1;
+            bool anyCharacterSpawnedInShuttle = false;
+            teamSpecificState.RespawnedCharacters.Clear();
 
             MultiPlayerCampaign campaign = GameMain.GameSession.GameMode as MultiPlayerCampaign;
+            bool isPvPMode = GameMain.GameSession.GameMode is PvPMode;
+            int teamCount = isPvPMode ? 2 : 1;
 
-            var clients = GetClientsToRespawn().ToList();
+            var clients = GetClientsToRespawn(teamID).ToList();
             foreach (Client c in clients)
             {
-                //get rid of the existing character
-                c.Character?.DespawnNow();
+                // Get rid of the existing character
+                if (c.Character is Character character) { character.DespawnNow(); }
 
                 c.WaitForNextRoundRespawn = null;
 
@@ -355,18 +376,31 @@ namespace Barotrauma.Networking
                     c.CharacterInfo = matchingData.CharacterInfo;
                 }
 
-                //all characters are in Team 1 in game modes/missions with only one team.
-                //if at some point we add a game mode with multiple teams where respawning is possible, this needs to be reworked
-                c.TeamID = CharacterTeamType.Team1;
-                if (c.CharacterInfo == null) { c.CharacterInfo = new CharacterInfo(CharacterPrefab.HumanSpeciesName, c.Name); }
+                c.CharacterInfo ??= new CharacterInfo(CharacterPrefab.HumanSpeciesName, c.Name);
+
+                //force everyone to team 1 if there's just one team
+                if (teamCount == 1)
+                {
+                    c.TeamID = teamID;
+                }
+                else if (isPvPMode && c.TeamID == CharacterTeamType.None)
+                {
+                    GameMain.Server.AssignClientToPvpTeamMidgame(c);
+                }
+                c.CharacterInfo.TeamID = c.TeamID;
             }
             List<CharacterInfo> characterInfos = clients.Select(c => c.CharacterInfo).ToList();
 
             //bots don't respawn in the campaign
+            var botsToSpawn = GetBotsToRespawn(teamID);
             if (campaign == null)
             {
-                var botsToSpawn = GetBotsToRespawn();
                 characterInfos.AddRange(botsToSpawn);
+                foreach (var bot in botsToSpawn)
+                {
+                    // Get rid of the existing bots' corpses
+                    if (bot.Character is Character character) { character.DespawnNow(); }
+                }
             }
 
             GameMain.Server.AssignJobs(clients);
@@ -374,76 +408,103 @@ namespace Barotrauma.Networking
             {
                 if (campaign?.GetClientCharacterData(c) == null || c.CharacterInfo.Job == null)
                 {
-                    c.CharacterInfo.Job = new Job(c.AssignedJob.Prefab, Rand.RandSync.Unsynced, c.AssignedJob.Variant);
+                    c.CharacterInfo.Job = new Job(c.AssignedJob.Prefab, isPvPMode, Rand.RandSync.Unsynced, c.AssignedJob.Variant);
                 }
             }
 
-            //the spawnpoints where the characters will spawn
-            var shuttleSpawnPoints = WayPoint.SelectCrewSpawnPoints(characterInfos, respawnSub);
-            //the spawnpoints where they would spawn if they were spawned inside the main sub
-            //(in order to give them appropriate ID card tags)
-            var mainSubSpawnPoints = WayPoint.SelectCrewSpawnPoints(characterInfos, Submarine.MainSub);
+            System.Diagnostics.Debug.Assert(characterInfos.All(c => c.TeamID == teamID), 
+                "List of characters to respawn contained characters from the wrong team.");
+        
+            Submarine mainSub = Submarine.MainSubs[teamIndex];
+            Submarine respawnSub = null;
+
+            Submarine respawnShuttle = GetShuttle(teamID);
+            Vector2? shuttlePos = null;
+            if (respawnShuttle != null)
+            {
+                respawnSub = respawnShuttle;
+                shuttlePos = FindSpawnPos(respawnShuttle, mainSub);
+            }
+
+            respawnSub ??= mainSub ?? Level.Loaded.StartOutpost;
 
             ItemPrefab divingSuitPrefab = null;
             if ((shuttlePos != null && Level.Loaded.GetRealWorldDepth(shuttlePos.Value.Y) > Level.DefaultRealWorldCrushDepth) ||
-                Level.Loaded.GetRealWorldDepth(Submarine.MainSub.WorldPosition.Y) > Level.DefaultRealWorldCrushDepth)
+                (mainSub != null && Level.Loaded.GetRealWorldDepth(mainSub.WorldPosition.Y) > Level.DefaultRealWorldCrushDepth))
             {
                 divingSuitPrefab = ItemPrefab.Prefabs.FirstOrDefault(it => it.Tags.Any(t => t == "respawnsuitdeep"));
             }
-            if (divingSuitPrefab == null)
-            {
-                divingSuitPrefab = 
+            divingSuitPrefab ??=
                     ItemPrefab.Prefabs.FirstOrDefault(it => it.Tags.Any(t => t == "respawnsuit")) ??
                     ItemPrefab.Find(null, "divingsuit".ToIdentifier());
-            }
             ItemPrefab oxyPrefab = ItemPrefab.Find(null, "oxygentank".ToIdentifier());
             ItemPrefab scooterPrefab = ItemPrefab.Find(null, "underwaterscooter".ToIdentifier());
             ItemPrefab batteryPrefab = ItemPrefab.Find(null, "batterycell".ToIdentifier());
 
+            //the spawnpoints where the characters will spawn
+            var selectedSpawnPoints =
+                isPvPMode && Level.Loaded != null && Level.Loaded.ShouldSpawnCrewInsideOutpost() ? 
+                WayPoint.SelectOutpostSpawnPoints(characterInfos, teamID) :
+                WayPoint.SelectCrewSpawnPoints(characterInfos, respawnSub);
+
+            //the spawnpoints where they would spawn if they were spawned inside the main sub
+            //(in order to give them appropriate ID card tags)
+            var mainSubSpawnPoints = mainSub != null ? WayPoint.SelectCrewSpawnPoints(characterInfos, mainSub) : null;
             var cargoSp = WayPoint.WayPointList.Find(wp => wp.Submarine == respawnSub && wp.SpawnType == SpawnType.Cargo);
 
             for (int i = 0; i < characterInfos.Count; i++)
             {
-                bool bot = i >= clients.Count;
+                var characterInfo = characterInfos[i];
 
-                characterInfos[i].ClearCurrentOrders();
+                bool bot = botsToSpawn.Contains(characterInfo);
+                characterInfo.ClearCurrentOrders();
 
+                CharacterCampaignData characterCampaignData = null;
                 bool forceSpawnInMainSub = false;
                 if (!bot)
                 {
                     //the client has opted to change the name of their new character
                     //when the character spawns, set the client's name to match
-                    if (clients[i].PendingName == characterInfos[i].Name)
+                    if (clients[i].PendingName == characterInfo.Name)
                     {
-                        GameMain.Server?.TryChangeClientName(clients[i], clients[i].PendingName);
+                        GameMain.Server?.TryChangeClientName(clients[i], clients[i].PendingName, clientRenamingSelf: true);
                         clients[i].PendingName = null;
                     }
 
-                    var matchingData = campaign?.GetClientCharacterData(clients[i]);
-                    if (matchingData != null)
+                    characterCampaignData = campaign?.GetClientCharacterData(clients[i]);
+                    if (characterCampaignData != null)
                     {
-                        if (!matchingData.HasSpawned)
+                        if (!characterCampaignData.HasSpawned)
                         {
                             forceSpawnInMainSub = true;
                         }
                         else
                         {
-                            ReduceCharacterSkills(characterInfos[i]);
-                            characterInfos[i].RemoveSavedStatValuesOnDeath();
-                            characterInfos[i].CauseOfDeath = null;
+                            ReduceCharacterSkillsOnDeath(characterInfo);
+                            characterInfo.RemoveSavedStatValuesOnDeath();
+                            characterInfo.CauseOfDeath = null;
                         }
                     }
                 }
 
-                var character = Character.Create(characterInfos[i], (forceSpawnInMainSub ? mainSubSpawnPoints[i] : shuttleSpawnPoints[i]).WorldPosition, characterInfos[i].Name, isRemotePlayer: !bot, hasAi: bot);
-                character.TeamID = CharacterTeamType.Team1;
-                character.LoadTalents();
+                if (!forceSpawnInMainSub && respawnShuttle != null)
+                {
+                    anyCharacterSpawnedInShuttle = true;                        
+                }
 
-                respawnedCharacters.Add(character);
+                var character = Character.Create(characterInfo, (forceSpawnInMainSub ? mainSubSpawnPoints[i] : selectedSpawnPoints[i]).WorldPosition, characterInfo.Name, isRemotePlayer: !bot, hasAi: bot);
+                characterCampaignData?.ApplyWalletData(character);
+                character.LoadTalents();
+                if (characterInfo.LastRewardDistribution.TryUnwrap(out int salary))
+                {
+                    character.Wallet.SetRewardDistribution(salary);
+                }
+
+                teamSpecificState.RespawnedCharacters.Add(character);
 
                 if (bot)
                 {
-                    GameServer.Log(string.Format("Respawning bot {0} as {1}", character.Info.Name, characterInfos[i].Job.Name), ServerLog.MessageType.Spawning);
+                    GameServer.Log(string.Format("Respawning bot {0} as {1}.", character.Info.Name, characterInfo.Job.Name), ServerLog.MessageType.Spawning);
                 }
                 else
                 {
@@ -465,11 +526,18 @@ namespace Barotrauma.Networking
                     clients[i].Character = character;
                     character.SetOwnerClient(clients[i]);
                     GameServer.Log(
-                        $"Respawning {GameServer.ClientLogName(clients[i])} ({clients[i].Connection.Endpoint}) as {characterInfos[i].Job.Name}", ServerLog.MessageType.Spawning);
+                        $"Respawning {GameServer.ClientLogName(clients[i])} ({clients[i].Connection.Endpoint}) as {characterInfo.Job.Name}.", ServerLog.MessageType.Spawning);
                 }
 
-                if (RespawnShuttle != null)
+                if (respawnShuttle != null && anyCharacterSpawnedInShuttle)
                 {
+                    GameServer.Log($"Dispatching the {GetRespawnShuttleText(teamID)}.", ServerLog.MessageType.Spawning);
+                    respawnShuttle.SetPosition(shuttlePos.Value);
+                    respawnShuttle.Velocity = Vector2.Zero;
+                    respawnShuttle.NeutralizeBallast();
+                    respawnShuttle.EnableMaintainPosition();
+                    shuttleSteering[teamID].ForEach(s => s.TargetVelocity = Vector2.Zero);
+
                     List<Item> newRespawnItems = new List<Item>();
                     Vector2 pos = cargoSp?.Position ?? character.Position;
                     if (divingSuitPrefab != null)
@@ -503,39 +571,43 @@ namespace Barotrauma.Networking
                             }
                         }
                     }
-                    if (respawnContainer != null)
-                    {
-                        AutoItemPlacer.RegenerateLoot(RespawnShuttle, respawnContainer);
-                    }
-
                     //try to put the items in containers in the shuttle
                     foreach (var respawnItem in newRespawnItems)
                     {
                         System.Diagnostics.Debug.Assert(!respawnItem.Removed);
-                        foreach (Item shuttleItem in RespawnShuttle.GetItems(alsoFromConnectedSubs: false))
+                        //already in a container (a battery we just placed in a scooter?) -> don't move to a cabinet
+                        if (respawnItem.Container == null)
                         {
-                            if (shuttleItem.NonInteractable || shuttleItem.NonPlayerTeamInteractable) { continue; }
-                            var container = shuttleItem.GetComponent<ItemContainer>();
-                            if (container != null && container.Inventory.TryPutItem(respawnItem, user: null))
+                            foreach (Item shuttleItem in respawnShuttle.GetItems(alsoFromConnectedSubs: false))
                             {
-                                break;
+                                if (shuttleItem.NonInteractable || shuttleItem.NonPlayerTeamInteractable) { continue; }
+                                var container = shuttleItem.GetComponent<ItemContainer>();
+                                if (container != null && container.Inventory.TryPutItem(respawnItem, user: null))
+                                {
+                                    break;
+                                }
                             }
                         }
-                        respawnItems.Add(respawnItem);
+                        teamSpecificState.RespawnItems.Add(respawnItem);
+                    }
+
+                    foreach (var respawnContainer in respawnContainers[teamID])
+                    {
+                        teamSpecificState.RespawnItems.AddRange(AutoItemPlacer.RegenerateLoot(respawnShuttle, respawnContainer));
                     }
                 }
 
                 var characterData = campaign?.GetClientCharacterData(clients[i]);
+                // NOTE: This was where Reaper's tax got applied
                 if (characterData != null && Level.Loaded?.Type != LevelData.LevelType.Outpost && characterData.HasSpawned)
                 {
-                    //we need to reapply the previous respawn penalty affliction or successive deaths won't make it stack
-                    characterData.ApplyHealthData(character, (AfflictionPrefab ap) => ap == GetRespawnPenaltyAfflictionPrefab());
-                    GiveRespawnPenaltyAffliction(character);
+                    ReduceCharacterSkillsOnDeath(characterInfos[i], applyExtraSkillLoss: true);
                 }
+                WayPoint jobItemSpawnPoint = mainSubSpawnPoints != null ? mainSubSpawnPoints[i] : selectedSpawnPoints[i];
                 if (characterData == null || characterData.HasSpawned)
                 {
                     //give the character the items they would've gotten if they had spawned in the main sub
-                    character.GiveJobItems(mainSubSpawnPoints[i]);
+                    character.GiveJobItems(isPvPMode, jobItemSpawnPoint);
                     if (campaign != null)
                     {
                         characterData = campaign.SetClientCharacterData(clients[i]);
@@ -550,53 +622,77 @@ namespace Barotrauma.Networking
                     }
                     else
                     {
-                        character.GiveJobItems(mainSubSpawnPoints[i]);
+                        character.GiveJobItems(isPvPMode, jobItemSpawnPoint);
                     }
                     characterData.ApplyHealthData(character);
-                    character.GiveIdCardTags(mainSubSpawnPoints[i]);
+                    character.GiveIdCardTags(jobItemSpawnPoint);
                     characterData.HasSpawned = true;
                 }
 
                 //add the ID card tags they should've gotten when spawning in the shuttle
-                character.GiveIdCardTags(shuttleSpawnPoints[i], requireSpawnPointTagsNotGiven: false, createNetworkEvent: true);
+                character.GiveIdCardTags(selectedSpawnPoints[i], createNetworkEvent: true);
             }
+            
         }
 
-        public static void ReduceCharacterSkills(CharacterInfo characterInfo)
+        /// <summary>
+        /// Reduce any skill gains the character may have made over the job's default
+        /// skill levels by percentages defined in server settings. There are two
+        /// reductions, a base one that always applies, and an extra loss that only
+        /// applies when the player chooses to respawn ASAP rather than wait.
+        /// </summary>
+        public static void ReduceCharacterSkillsOnDeath(CharacterInfo characterInfo, bool applyExtraSkillLoss = false)
         {
             if (characterInfo?.Job == null) { return; }
+
+            float resistanceMultiplier;
+            float skillLossPercentage;
+            if (applyExtraSkillLoss)
+            {
+                DebugConsole.Log($"Calculating extra skill loss on respawn for {characterInfo.Name}:");
+                resistanceMultiplier = characterInfo.LastResistanceMultiplierSkillLossRespawn;
+                skillLossPercentage = SkillLossPercentageOnImmediateRespawn;
+            }
+            else
+            {
+                DebugConsole.Log($"Calculating base skill loss on death for {characterInfo.Name}:");
+                resistanceMultiplier = characterInfo.LastResistanceMultiplierSkillLossDeath;
+                skillLossPercentage = SkillLossPercentageOnDeath;
+            }
+            skillLossPercentage *= resistanceMultiplier;
+
             foreach (Skill skill in characterInfo.Job.GetSkills())
             {
-                var skillPrefab = characterInfo.Job.Prefab.Skills.Find(s => skill.Identifier == s.Identifier);
-                if (skillPrefab == null || skill.Level < skillPrefab.LevelRange.End) { continue; }
-                skill.Level = MathHelper.Lerp(skill.Level, skillPrefab.LevelRange.End, SkillLossPercentageOnDeath / 100.0f);
+                skill.Level = GetReducedSkill(characterInfo, skill, skillLossPercentage);
             }
         }
 
         public void ServerEventWrite(IWriteMessage msg, Client c, NetEntityEvent.IData extraData = null)
         {
-            msg.WriteRangedInteger((int)CurrentState, 0, Enum.GetNames(typeof(State)).Length);
-
-            switch (CurrentState)
+            msg.WriteByte((byte)c.TeamID);
+            foreach (var teamSpecificState in teamSpecificStates.Values)
             {
-                case State.Transporting:
-                    msg.WriteBoolean(ReturnCountdownStarted);
-                    msg.WriteSingle(GameMain.Server.ServerSettings.MaxTransportTime);
-                    msg.WriteSingle((float)(ReturnTime - DateTime.Now).TotalSeconds);
-                    break;
-                case State.Waiting:
-                    MultiPlayerCampaign campaign = GameMain.GameSession.GameMode as MultiPlayerCampaign;
-                    var matchingData = campaign?.GetClientCharacterData(c);
-                    bool forceSpawnInMainSub = matchingData != null && !matchingData.HasSpawned;
-                    msg.WriteUInt16((ushort)pendingRespawnCount);
-                    msg.WriteUInt16((ushort)requiredRespawnCount);
-                    msg.WriteBoolean(IsRespawnPromptPendingForClient(c));
-                    msg.WriteBoolean(RespawnCountdownStarted);
-                    msg.WriteBoolean(forceSpawnInMainSub);
-                    msg.WriteSingle((float)(RespawnTime - DateTime.Now).TotalSeconds);
-                    break;
-                case State.Returning:
-                    break;
+                msg.WriteByte((byte)teamSpecificState.TeamID);
+                msg.WriteRangedInteger((int)teamSpecificState.CurrentState, 0, Enum.GetNames(typeof(State)).Length);
+
+                switch (teamSpecificState.CurrentState)
+                {
+                    case State.Transporting:
+                        msg.WriteBoolean(teamSpecificState.ReturnCountdownStarted);
+                        msg.WriteSingle(GameMain.Server.ServerSettings.MaxTransportTime);
+                        msg.WriteSingle((float)(teamSpecificState.ReturnTime - DateTime.Now).TotalSeconds);
+                        break;
+                    case State.Waiting:
+                        msg.WriteUInt16((ushort)teamSpecificState.PendingRespawnCount);
+                        msg.WriteUInt16((ushort)teamSpecificState.RequiredRespawnCount);
+                        msg.WriteBoolean(IsRespawnDecisionPendingForClient(c));
+                        msg.WriteBoolean(ClientHasChosenNewBotViaShuttle(c));
+                        msg.WriteBoolean(teamSpecificState.RespawnCountdownStarted);
+                        msg.WriteSingle((float)(teamSpecificState.RespawnTime - DateTime.Now).TotalSeconds);
+                        break;
+                    case State.Returning:
+                        break;
+                }
             }
 
             msg.WritePadBits();

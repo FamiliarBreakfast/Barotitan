@@ -2,6 +2,9 @@
 
 namespace Barotrauma
 {
+    /// <summary>
+    /// Sets the state of the traitor event. Only valid in traitor events.
+    /// </summary>
     class SetTraitorEventStateAction : EventAction
     {
         private readonly TraitorEvent? traitorEvent;
@@ -14,11 +17,12 @@ namespace Barotrauma
             }
             else
             {
-                DebugConsole.ThrowError($"Cannot use the action {nameof(SetTraitorEventStateAction)} in the event \"{parentEvent.Prefab.Identifier}\" because it's not a traitor event.");
+                DebugConsole.ThrowError($"Cannot use the action {nameof(SetTraitorEventStateAction)} in the event \"{parentEvent.Prefab.Identifier}\" because it's not a traitor event.",
+                    contentPackage: element.ContentPackage);
             }
         }
 
-        [Serialize(TraitorEvent.State.Completed, IsPropertySaveable.Yes)]
+        [Serialize(TraitorEvent.State.Completed, IsPropertySaveable.Yes, description: "The state to set the traitor event to (Incomplete, Completed or Failed).")]
         public TraitorEvent.State State { get; set; }
 
         private bool isFinished;

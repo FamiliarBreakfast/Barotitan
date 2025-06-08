@@ -23,6 +23,11 @@ namespace Barotrauma.Items.Components
         private const float AIPilotMaxSpeed = 1.0f;
 
         /// <summary>
+        /// How many units before crush depth the pressure warning is shown
+        /// </summary>
+        public const float PressureWarningThreshold = 500.0f;
+
+        /// <summary>
         /// How fast the steering vector adjusts when the nav terminal is operated by something else than a character (= signals)
         /// </summary>
         const float DefaultSteeringAdjustSpeed = 0.2f;
@@ -56,6 +61,7 @@ namespace Barotrauma.Items.Components
         private Sonar sonar;
 
         private Submarine controlledSub;
+        public Submarine ControlledSub => controlledSub;
 
         // AI interfacing
         public Vector2 AITacticalTarget { get; set; }
@@ -70,6 +76,7 @@ namespace Barotrauma.Items.Components
 
         private double lastReceivedSteeringSignalTime;
 
+        [Serialize(defaultValue: false, isSaveable: IsPropertySaveable.Yes, AlwaysUseInstanceValues = true)]
         public bool AutoPilot
         {
             get { return autoPilot; }
@@ -293,7 +300,7 @@ namespace Barotrauma.Items.Components
                 controlledSub = sonar.ConnectedTransducers.Any() ? sonar.ConnectedTransducers.First().Item.Submarine : null;
             }
 
-            if (Voltage < MinVoltage) { return; }
+            if (!HasPower) { return; }
 
             if (user != null && user.Removed)
             {
@@ -306,7 +313,7 @@ namespace Barotrauma.Items.Components
             if (user != null && controlledSub != null &&
                 (user.SelectedItem == item || item.linkedTo.Contains(user.SelectedItem)))
             {
-                userSkill = user.GetSkillLevel("helm") / 100.0f;
+                userSkill = user.GetSkillLevel(Tags.HelmSkill) / 100.0f;
             }
 
             // override autopilot pathing while the AI rams, and go full speed ahead
@@ -336,8 +343,7 @@ namespace Barotrauma.Items.Components
             {
                 showIceSpireWarning = false;
                 if (user != null && user.Info != null && 
-                    user.SelectedItem == item && 
-                    controlledSub != null && controlledSub.Velocity.LengthSquared() > 0.01f)
+                    user.SelectedItem == item)
                 {
                     IncreaseSkillLevel(user, deltaTime);
                 }
@@ -402,14 +408,15 @@ namespace Barotrauma.Items.Components
 
         private void IncreaseSkillLevel(Character user, float deltaTime)
         {
+            if (controlledSub == null) { return; }
+            if (controlledSub.Velocity.LengthSquared() < 0.01f) { return; }
             if (user?.Info == null) { return; }
             // Do not increase the helm skill when "steering" the sub while docked into something static (e.g. outpost or wreck)
-            if (GameMain.GameSession?.Campaign != null && controlledSub != null && controlledSub.DockedTo.Any(d => d.PhysicsBody.BodyType == BodyType.Static)) { return; }
+            if (GameMain.GameSession?.Campaign != null&& controlledSub.DockedTo.Any(d => d.PhysicsBody.BodyType == BodyType.Static)) { return; }
 
-            float userSkill = Math.Max(user.GetSkillLevel("helm"), 1.0f) / 100.0f;
-            user.Info.IncreaseSkillLevel(
-                "helm".ToIdentifier(),
-                SkillSettings.Current.SkillIncreasePerSecondWhenSteering / userSkill * deltaTime);
+            float speedMultiplier = MathHelper.Clamp(TargetVelocity.Length() / 100.0f, 0.0f, 1.0f);
+            user.Info.ApplySkillGain(Tags.HelmSkill,
+                SkillSettings.Current.SkillIncreasePerSecondWhenSteering * speedMultiplier * deltaTime);
         }
 
         private void UpdateAutoPilot(float deltaTime)

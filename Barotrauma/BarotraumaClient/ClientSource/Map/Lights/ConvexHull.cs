@@ -1,5 +1,4 @@
-﻿using Barotrauma.Items.Components;
-using Microsoft.Xna.Framework;
+﻿using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using System;
 using System.Collections.Generic;
@@ -13,6 +12,7 @@ namespace Barotrauma.Lights
 
         public readonly Submarine Submarine;
         public HashSet<ConvexHull> IsHidden = new HashSet<ConvexHull>();
+        public HashSet<ConvexHull> HasBeenVisible = new HashSet<ConvexHull>();
         public readonly List<ConvexHull> List = new List<ConvexHull>();
 
         public ConvexHullList(Submarine submarine)
@@ -133,6 +133,8 @@ namespace Barotrauma.Lights
 
         public Rectangle BoundingBox { get; private set; }
 
+        public bool IsInvalid { get; private set; }
+
         public ConvexHull(Rectangle rect, bool isHorizontal, MapEntity parent)
         {
             shadowEffect ??= new BasicEffect(GameMain.Instance.GraphicsDevice)
@@ -154,17 +156,7 @@ namespace Barotrauma.Lights
             BoundingBox = rect;
 
             this.isHorizontal = isHorizontal;
-            if (ParentEntity is Structure structure)
-            {
-                Debug.Assert(!structure.Removed);
-                isHorizontal = structure.IsHorizontal;
-            }
-            else if (ParentEntity is Item item)
-            {
-                Debug.Assert(!item.Removed);
-                var door = item.GetComponent<Door>();
-                if (door != null) { isHorizontal = door.IsHorizontal; }
-            }
+            Debug.Assert(!ParentEntity.Removed);     
 
             Vector2[] verts = new Vector2[]
             {
@@ -451,10 +443,10 @@ namespace Barotrauma.Lights
 
         public bool Intersects(Rectangle rect)
         {
-            if (!Enabled) return false;
+            if (!Enabled) { return false; }
 
             Rectangle transformedBounds = BoundingBox;
-            if (ParentEntity != null && ParentEntity.Submarine != null)
+            if (ParentEntity is { Submarine: not null })
             {
                 transformedBounds.X += (int)ParentEntity.Submarine.Position.X;
                 transformedBounds.Y += (int)ParentEntity.Submarine.Position.Y;
@@ -481,15 +473,34 @@ namespace Barotrauma.Lights
             for (int i = 0; i < 4; i++)
             {
                 vertices[i].WorldPos = vertices[i].Pos;
+                ValidateVertex(vertices[i].WorldPos, "vertices[i].Pos");
                 segments[i].Start.WorldPos = segments[i].Start.Pos;
+                ValidateVertex(segments[i].Start.WorldPos, "segments[i].Start.Pos");
                 segments[i].End.WorldPos = segments[i].End.Pos;
+                ValidateVertex(segments[i].End.WorldPos, "segments[i].End.Pos");
             }
             if (ParentEntity == null || ParentEntity.Submarine == null) { return; }
             for (int i = 0; i < 4; i++)
             {
                 vertices[i].WorldPos += ParentEntity.Submarine.DrawPosition;
+                ValidateVertex(vertices[i].WorldPos, "vertices[i].WorldPos");
                 segments[i].Start.WorldPos += ParentEntity.Submarine.DrawPosition;
+                ValidateVertex(segments[i].Start.WorldPos, "segments[i].Start.WorldPos");
                 segments[i].End.WorldPos += ParentEntity.Submarine.DrawPosition;
+                ValidateVertex(segments[i].End.WorldPos, "segments[i].End.WorldPos");
+            }
+
+            void ValidateVertex(Vector2 vertex, string debugName)
+            {
+                if (!MathUtils.IsValid(vertex))
+                {
+                    IsInvalid = true;
+                    string errorMsg = $"Invalid vertex on convex hull ({debugName}: {vertex}, parent entity: {ParentEntity?.ToString() ?? "null"}).";
+#if DEBUG
+                    DebugConsole.ThrowError(errorMsg);
+#endif
+                    GameAnalyticsManager.AddErrorEventOnce("ConvexHull.RefreshWorldPositions:InvalidVertex", GameAnalyticsManager.ErrorSeverity.Error, errorMsg);
+                }
             }
         }
 

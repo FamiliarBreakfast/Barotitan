@@ -1,62 +1,144 @@
+﻿using Barotrauma.Extensions;
+using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Xml.Linq;
 
 namespace Barotrauma
 {
+
+    /// <summary>
+    /// Checks whether an arbitrary condition is met. The conditionals work the same way as they do in StatusEffects.
+    /// </summary>
     class CheckConditionalAction : BinaryOptionAction
     {
-        [Serialize("", IsPropertySaveable.Yes)]
+        [Serialize("", IsPropertySaveable.Yes, description: "Tag of the target to check.")]
         public Identifier TargetTag { get; set; }
 
-        private PropertyConditional Conditional { get; }
+        [Serialize(PropertyConditional.LogicalOperatorType.Or, IsPropertySaveable.Yes, description: "Do all of the conditions need to be met, or is it enough if at least one is? Only valid if there are multiple conditionals.")]
+        public PropertyConditional.LogicalOperatorType LogicalOperator { get; set; }
+
+        private ImmutableArray<PropertyConditional> Conditionals { get; }
+
+        [Serialize("", IsPropertySaveable.Yes, description: "A tag to apply to the hull the target is currently in when the check succeeds, as well as all the hulls linked to it.")]
+        public Identifier ApplyTagToLinkedHulls { get; set; }
+
+        [Serialize("", IsPropertySaveable.Yes, description: "A tag to apply to the hull the target is currently in when the check succeeds.")]
+        public Identifier ApplyTagToHull { get; set; }
+        
+        [Serialize("", IsPropertySaveable.Yes, description: "Tag to apply to the target (or all targets if there's multiple) when the check succeeds.")]
+        public Identifier ApplyTagToTarget { get; set; }
 
         public CheckConditionalAction(ScriptedEvent parentEvent, ContentXElement element) : base(parentEvent, element)
         {
             if (TargetTag.IsEmpty)
             {
-                DebugConsole.LogError($"CheckConditionalAction error: {GetEventName()} uses a CheckConditionalAction with no target tag! This will cause the check to automatically succeed.");
+                DebugConsole.LogError($"CheckConditionalAction error: {GetEventDebugName()} uses a CheckConditionalAction with no target tag! This will cause the check to automatically succeed.",
+                    contentPackage: parentEvent.Prefab.ContentPackage);
             }
-            Conditional = PropertyConditional.FromXElement(element, IsNotTargetTagAttribute).FirstOrDefault();
-            if (Conditional == null)
+            var conditionalElements = element.GetChildElements("Conditional");
+            if (conditionalElements.None())
             {
-                DebugConsole.LogError($"CheckConditionalAction error: {GetEventName()} uses a CheckConditionalAction with no valid PropertyConditional! This will cause the check to automatically succeed.");
+                //backwards compatibility
+                Conditionals = PropertyConditional.FromXElement(element, IsConditionalAttribute).ToImmutableArray();
+            }
+            else
+            {
+                var conditionalList = new List<PropertyConditional>();
+                foreach (ContentXElement subElement in conditionalElements)
+                {
+                    conditionalList.AddRange(PropertyConditional.FromXElement(subElement));
+                }
+                Conditionals = conditionalList.ToImmutableArray();
             }
 
-            static bool IsNotTargetTagAttribute(XAttribute attribute) => attribute.NameAsIdentifier() != "targettag";
-        }
+            if (Conditionals.None())
+            {
+                DebugConsole.LogError($"CheckConditionalAction error: {GetEventDebugName()} uses a CheckConditionalAction with no valid PropertyConditional! This will cause the check to automatically succeed.",
+                    contentPackage: parentEvent.Prefab.ContentPackage);
+            }
 
-        private string GetEventName()
-        {
-            return ParentEvent?.Prefab?.Identifier is { IsEmpty: false } identifier ? $"the event \"{identifier}\"" : "an unknown event";
+            static bool IsConditionalAttribute(XAttribute attribute)
+            {
+                var nameAsIdentifier = attribute.NameAsIdentifier();
+                return 
+                    nameAsIdentifier != nameof(TargetTag) &&
+                    nameAsIdentifier != nameof(LogicalOperator) &&
+                    nameAsIdentifier != nameof(ApplyTagToLinkedHulls) &&
+                    nameAsIdentifier != nameof(ApplyTagToHull);
+            }
         }
 
         protected override bool? DetermineSuccess()
         {
-            ISerializableEntity target = null;
+            IEnumerable<ISerializableEntity> targets = null;
             if (!TargetTag.IsEmpty)
             {
-                foreach (var t in ParentEvent.GetTargets(TargetTag))
+                targets = ParentEvent.GetTargets(TargetTag).OfType<ISerializableEntity>();
+            }
+
+            if (targets.None())
+            {
+                DebugConsole.LogError($"{nameof(CheckConditionalAction)} error: {GetEventDebugName()} uses a {nameof(CheckConditionalAction)} but no valid target was found for tag \"{TargetTag}\"! This will cause the check to automatically succeed.",
+                    contentPackage: ParentEvent.Prefab.ContentPackage);
+            }
+
+            if (targets.None() || Conditionals.None())
+            {
+                foreach (var target in targets)
                 {
-                    if (t is ISerializableEntity e)
-                    {
-                        target = e;
-                        break;
-                    }
+                    ApplyTagsToTarget(target);
                 }
-            }
-            if (target == null)
-            {
-                DebugConsole.LogError($"{nameof(CheckConditionalAction)} error: {GetEventName()} uses a {nameof(CheckConditionalAction)} but no valid target was found for tag \"{TargetTag}\"! This will cause the check to automatically succeed.");
-            }
-            if (target == null || Conditional == null)
-            {
                 return true;
             }
+            else
+            {
+                bool success = false;
+                foreach (var target in targets)
+                {
+                    if (ConditionalsMatch(target))
+                    {
+                        ApplyTagsToTarget(target);
+                        success = true;
+                    }
+                }
+                return success;
+            }
+
+            void ApplyTagsToTarget(ISerializableEntity target)
+            {
+                if (!ApplyTagToTarget.IsEmpty)
+                {
+                    ParentEvent.AddTarget(ApplyTagToTarget, target as Entity);
+                }
+                ApplyTagsToHulls(target as Entity, ApplyTagToHull, ApplyTagToLinkedHulls);
+            }
+        }
+
+        private bool ConditionalsMatch(ISerializableEntity target)
+        {
+            if (LogicalOperator == PropertyConditional.LogicalOperatorType.And)
+            {
+                return Conditionals.All(c => ConditionalMatches(target, c));
+            }
+            else
+            {
+                return Conditionals.Any(c => ConditionalMatches(target, c));
+            }
+        }
+
+        private static bool ConditionalMatches(ISerializableEntity target, PropertyConditional conditional)
+        {
             if (target is Item item)
             {
-                return item.ConditionalMatches(Conditional);
+                if (!conditional.TargetItemComponent.IsNullOrEmpty() &&
+                    item.Components.None(ic => ic.Name == conditional.TargetItemComponent))
+                {
+                    return false;
+                }
+                return item.ConditionalMatches(conditional);
             }
-            return Conditional.Matches(target);
+            return conditional.Matches(target);            
         }
     }
 }

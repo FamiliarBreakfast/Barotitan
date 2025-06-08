@@ -1,22 +1,23 @@
-﻿using System;
+﻿using NVorbis;
 using OpenAL;
-using NVorbis;
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using System.Xml.Linq;
 
 namespace Barotrauma.Sounds
 {
     sealed class OggSound : Sound
     {
-        private VorbisReader streamReader;
+        private readonly VorbisReader streamReader;
+
+        public long MaxStreamSamplePos => streamReader == null ? 0 : streamReader.TotalSamples * streamReader.Channels * 2;
 
         private List<float> playbackAmplitude;
         private const int AMPLITUDE_SAMPLE_COUNT = 4410; //100ms in a 44100hz file
 
         private short[] sampleBuffer = Array.Empty<short>();
         private short[] muffleBuffer = Array.Empty<short>();
-        public OggSound(SoundManager owner, string filename, bool stream, XElement xElement) : base(owner, filename,
+        public OggSound(SoundManager owner, string filename, bool stream, ContentXElement xElement) : base(owner, filename,
             stream, true, xElement)
         {
             var reader = new VorbisReader(Filename);
@@ -30,6 +31,7 @@ namespace Barotrauma.Sounds
                 return;
             }
 
+            Loading = true;
             TaskPool.Add(
                 $"LoadSamples {filename}",
                 LoadSamples(reader),
@@ -45,6 +47,7 @@ namespace Barotrauma.Sounds
                     playbackAmplitude = result.PlaybackAmplitude;
                     Owner.KillChannels(this); // prevents INVALID_OPERATION error
                     buffers?.Dispose(); buffers = null;
+                    Loading = false;
                 });
         }
 
@@ -101,7 +104,7 @@ namespace Barotrauma.Sounds
             if (!Stream) { throw new Exception("Called FillStreamBuffer on a non-streamed sound!"); }
             if (streamReader == null) { throw new Exception("Called FillStreamBuffer when the reader is null!"); }
 
-            if (samplePos >= streamReader.TotalSamples * streamReader.Channels * 2) return 0;
+            if (samplePos >= MaxStreamSamplePos) { return 0; }
 
             samplePos /= streamReader.Channels * 2;
             streamReader.DecodedPosition = samplePos;
@@ -119,7 +122,7 @@ namespace Barotrauma.Sounds
 
         static void MuffleBuffer(float[] buffer, int sampleRate)
         {
-            var filter = new LowpassFilter(sampleRate, 1600);
+            var filter = new LowpassFilter(sampleRate, SoundPlayer.MuffleFilterFrequency);
             filter.Process(buffer);
         }
 

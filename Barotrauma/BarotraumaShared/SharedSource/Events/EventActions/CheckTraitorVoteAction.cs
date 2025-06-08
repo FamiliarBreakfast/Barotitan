@@ -9,14 +9,15 @@ namespace Barotrauma
     /// </summary>
     class CheckTraitorVoteAction : BinaryOptionAction
     {
-        [Serialize("", IsPropertySaveable.Yes)]
+        [Serialize("", IsPropertySaveable.Yes, description: "Tag of the character to check.")]
         public Identifier Target { get; set; }
 
         public CheckTraitorVoteAction(ScriptedEvent parentEvent, ContentXElement element) : base(parentEvent, element) 
         { 
             if (parentEvent is not TraitorEvent)
             {
-                DebugConsole.ThrowError($"Error in event \"{parentEvent.Prefab.Identifier}\" - {nameof(CheckTraitorVoteAction)} can only be used in traitor events.");
+                DebugConsole.ThrowError($"Error in event \"{parentEvent.Prefab.Identifier}\" - {nameof(CheckTraitorVoteAction)} can only be used in traitor events.",
+                    contentPackage: element.ContentPackage);
             }
         }
 

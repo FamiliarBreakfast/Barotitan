@@ -67,10 +67,11 @@ namespace Barotrauma
 
             var buttonContainer = new GUILayoutGroup(new RectTransform(new Vector2(1.0f, 0.07f), layout.RectTransform) { RelativeOffset = new Vector2(0.0f, 0.1f) }, isHorizontal: true)
             {
+                Stretch = true,
                 RelativeSpacing = 0.02f
             };
 
-            var campaignContainer = new GUIFrame(new RectTransform(new Vector2(1.0f, 0.9f), layout.RectTransform, Anchor.BottomLeft), style: "InnerFrame")
+            var campaignContainer = new GUIFrame(new RectTransform(new Vector2(1.0f, 0.9f), layout.RectTransform, Anchor.BottomLeft), style: "GUIFrameListBox")
             {
                 CanBeFocused = false
             };
@@ -95,6 +96,7 @@ namespace Barotrauma
                 loadCampaignButton.Selected = false;
                 newCampaignContainer.Visible = true;
                 loadCampaignContainer.Visible = false;
+                GameMain.NetLobbyScreen?.RefreshStartButtonVisibility();
                 return true;
             };
             loadCampaignButton.OnClicked = (btn, obj) =>
@@ -103,6 +105,7 @@ namespace Barotrauma
                 loadCampaignButton.Selected = true;
                 newCampaignContainer.Visible = false;
                 loadCampaignContainer.Visible = true;
+                GameMain.NetLobbyScreen?.RefreshStartButtonVisibility();
                 return true;
             };
             loadCampaignContainer.Visible = false;
@@ -159,7 +162,7 @@ namespace Barotrauma
             };
         }
 
-        private void InitCampaignUI()
+        public void InitCampaignUI()
         {
             campaignUIContainer = new GUIFrame(new RectTransform(Vector2.One, GUI.Canvas, Anchor.Center), style: "InnerGlow", color: Color.Black);
             CampaignUI = new CampaignUI(this, campaignUIContainer)
@@ -297,7 +300,7 @@ namespace Barotrauma
             Level prevLevel = Level.Loaded;
 
             bool success = CrewManager.GetCharacters().Any(c => !c.IsDead);
-            crewDead = false;
+            CrewDead = false;
 
             var continueButton = GameMain.GameSession.RoundSummary?.ContinueButton;
             if (continueButton != null)
@@ -480,7 +483,6 @@ namespace Barotrauma
             GameMain.CampaignEndScreen.OnFinished = () =>
             {
                 GameMain.NetLobbyScreen.Select();
-                if (GameMain.NetLobbyScreen.ContinueCampaignButton != null) { GameMain.NetLobbyScreen.ContinueCampaignButton.Enabled = false; }
                 if (GameMain.NetLobbyScreen.QuitCampaignButton != null) { GameMain.NetLobbyScreen.QuitCampaignButton.Enabled = false; }
             };
         }
@@ -530,16 +532,17 @@ namespace Barotrauma
 
             bool isFirstRound   =  msg.ReadBoolean();
             byte campaignID     = msg.ReadByte();
+            byte roundId        = msg.ReadByte();
             UInt16 saveID       = msg.ReadUInt16();
             string mapSeed      = msg.ReadString();
 
             bool refreshCampaignUI = false;
 
-            if (!(GameMain.GameSession?.GameMode is MultiPlayerCampaign campaign) || campaignID != campaign.CampaignID)
+            if (GameMain.GameSession?.GameMode is not MultiPlayerCampaign campaign || campaignID != campaign.CampaignID)
             {
                 string savePath = SaveUtil.CreateSavePath(SaveUtil.SaveType.Multiplayer);
 
-                GameMain.GameSession = new GameSession(null, savePath, GameModePreset.MultiPlayerCampaign, CampaignSettings.Empty, mapSeed);
+                GameMain.GameSession = new GameSession(null, Option.None, CampaignDataPath.CreateRegular(savePath), GameModePreset.MultiPlayerCampaign, CampaignSettings.Empty, mapSeed);
                 campaign = (MultiPlayerCampaign)GameMain.GameSession.GameMode;
                 campaign.CampaignID = campaignID;
                 GameMain.NetLobbyScreen.ToggleCampaignMode(true);
@@ -551,7 +554,7 @@ namespace Barotrauma
 
             if (requiredFlags.HasFlag(NetFlags.Misc))
             {
-                DebugConsole.Log("Received campaign update (Misc)");
+                DebugConsole.Log("Received campaign update (Misc), round id: " + roundId);
                 UInt16 id           = msg.ReadUInt16();
                 bool purchasedHullRepairs = msg.ReadBoolean();
                 bool purchasedItemRepairs = msg.ReadBoolean();
@@ -569,7 +572,7 @@ namespace Barotrauma
 
             if (requiredFlags.HasFlag(NetFlags.MapAndMissions))
             {
-                DebugConsole.Log("Received campaign update (MapAndMissions)");
+                DebugConsole.Log("Received campaign update (MapAndMissions), round id: " + roundId);
                 UInt16 id = msg.ReadUInt16();
                 bool forceMapUI = msg.ReadBoolean();
                 bool allowDebugTeleport = msg.ReadBoolean();
@@ -614,7 +617,7 @@ namespace Barotrauma
                         {
                             if (availableMission.ConnectionIndex < 0 || availableMission.ConnectionIndex >= campaign.Map.CurrentLocation.Connections.Count)
                             {
-                                DebugConsole.ThrowError($"Error when receiving campaign data from the server: connection index for mission \"{availableMission.Identifier}\" out of range (index: {availableMission.ConnectionIndex}, current location: {campaign.Map.CurrentLocation.Name}, connections: {campaign.Map.CurrentLocation.Connections.Count}).");
+                                DebugConsole.ThrowError($"Error when receiving campaign data from the server: connection index for mission \"{availableMission.Identifier}\" out of range (index: {availableMission.ConnectionIndex}, current location: {campaign.Map.CurrentLocation.DisplayName}, connections: {campaign.Map.CurrentLocation.Connections.Count}).");
                                 continue;
                             }
                             LocationConnection connection = campaign.Map.CurrentLocation.Connections[availableMission.ConnectionIndex];
@@ -632,7 +635,7 @@ namespace Barotrauma
 
             if (requiredFlags.HasFlag(NetFlags.SubList))
             {
-                DebugConsole.Log("Received campaign update (SubList)");
+                DebugConsole.Log("Received campaign update (SubList), round id: " + roundId);
                 UInt16 id = msg.ReadUInt16();
                 ushort ownedSubCount = msg.ReadUInt16();
                 List<ushort> ownedSubIndices = new List<ushort>();
@@ -647,7 +650,15 @@ namespace Barotrauma
                     {
                         if (ownedSubIndex >= GameMain.Client.ServerSubmarines.Count)
                         {
-                            string errorMsg = $"Error in {nameof(MultiPlayerCampaign.ClientRead)}. Owned submarine index was out of bounds. Index: {ownedSubIndex}, submarines: {string.Join(", ", GameMain.Client.ServerSubmarines.Select(s => s.Name))}";
+                            string errorMsg;
+                            if (GameMain.Client.ServerSubmarines.None())
+                            {
+                                errorMsg = $"Error in {nameof(MultiPlayerCampaign.ClientRead)}. Owned submarine index was out of bounds (list of server submarines is empty).";
+                            }
+                            else
+                            {
+                                errorMsg = $"Error in {nameof(MultiPlayerCampaign.ClientRead)}. Owned submarine index was out of bounds. Index: {ownedSubIndex}, submarines: {string.Join(", ", GameMain.Client.ServerSubmarines.Select(s => s.Name))}";
+                            }
                             DebugConsole.ThrowError(errorMsg);
                             GameAnalyticsManager.AddErrorEventOnce(
                                 "MultiPlayerCampaign.ClientRead.OwnerSubIndexOutOfBounds" + ownedSubIndex,
@@ -669,7 +680,7 @@ namespace Barotrauma
 
             if (requiredFlags.HasFlag(NetFlags.UpgradeManager))
             {
-                DebugConsole.Log("Received campaign update (UpgradeManager)");
+                DebugConsole.Log("Received campaign update (UpgradeManager), round id: " + roundId);
                 UInt16 id = msg.ReadUInt16();
 
                 ushort pendingUpgradeCount = msg.ReadUInt16();
@@ -710,7 +721,7 @@ namespace Barotrauma
                         }
                         else
                         {
-                            campaign.UpgradeManager.PurchaseItemSwap(purchasedItemSwap.ItemToRemove, purchasedItemSwap.ItemToInstall, force: true);
+                            campaign.UpgradeManager.PurchaseItemSwap(purchasedItemSwap.ItemToRemove, purchasedItemSwap.ItemToInstall, isNetworkMessage: true);
                         }
                     }
                     foreach (Item item in Item.ItemList.ToList())
@@ -727,7 +738,7 @@ namespace Barotrauma
 
             if (requiredFlags.HasFlag(NetFlags.ItemsInBuyCrate))
             {
-                DebugConsole.Log("Received campaign update (ItemsInBuyCrate)");
+                DebugConsole.Log("Received campaign update (ItemsInBuyCrate), round id: " + roundId);
                 UInt16 id = msg.ReadUInt16();
                 var buyCrateItems = ReadPurchasedItems(msg, sender: null);
                 if (ShouldApply(NetFlags.ItemsInBuyCrate, id, requireUpToDateSave: true))
@@ -743,7 +754,7 @@ namespace Barotrauma
             }
             if (requiredFlags.HasFlag(NetFlags.ItemsInSellFromSubCrate))
             {
-                DebugConsole.Log("Received campaign update (ItemsInSellFromSubCrate)");
+                DebugConsole.Log("Received campaign update (ItemsInSellFromSubCrate), round id: " + roundId);
                 UInt16 id = msg.ReadUInt16();
                 var subSellCrateItems = ReadPurchasedItems(msg, sender: null);
                 if (ShouldApply(NetFlags.ItemsInSellFromSubCrate, id, requireUpToDateSave: true))
@@ -759,7 +770,7 @@ namespace Barotrauma
             }
             if (requiredFlags.HasFlag(NetFlags.PurchasedItems))
             {
-                DebugConsole.Log("Received campaign update (PuchasedItems)");
+                DebugConsole.Log("Received campaign update (PuchasedItems), round id: " + roundId);
                 UInt16 id = msg.ReadUInt16();
                 var purchasedItems = ReadPurchasedItems(msg, sender: null);
                 if (ShouldApply(NetFlags.PurchasedItems, id, requireUpToDateSave: true))
@@ -775,7 +786,7 @@ namespace Barotrauma
             }
             if (requiredFlags.HasFlag(NetFlags.SoldItems))
             {
-                DebugConsole.Log("Received campaign update (SoldItems)");
+                DebugConsole.Log("Received campaign update (SoldItems), round id: " + roundId);
                 UInt16 id = msg.ReadUInt16();
                 var soldItems = ReadSoldItems(msg);
                 if (ShouldApply(NetFlags.SoldItems, id, requireUpToDateSave: true))
@@ -791,7 +802,7 @@ namespace Barotrauma
             }
             if (requiredFlags.HasFlag(NetFlags.Reputation))
             {
-                DebugConsole.Log("Received campaign update (Reputation)");
+                DebugConsole.Log("Received campaign update (Reputation), round id: " + roundId);
                 UInt16 id = msg.ReadUInt16();
                 Dictionary<Identifier, float> factionReps = new Dictionary<Identifier, float>();
                 byte factionsCount = msg.ReadByte();
@@ -818,24 +829,36 @@ namespace Barotrauma
             }
             if (requiredFlags.HasFlag(NetFlags.CharacterInfo))
             {
-                DebugConsole.Log("Received campaign update (CharacterInfo)");
+                DebugConsole.Log("Received campaign update (CharacterInfo), round id: " + roundId);
                 UInt16 id = msg.ReadUInt16();
                 bool hasCharacterData = msg.ReadBoolean();
                 CharacterInfo myCharacterInfo = null;
+                bool waitForModsDownloaded = Screen.Selected is ModDownloadScreen;
                 if (hasCharacterData)
                 {
-                    myCharacterInfo = CharacterInfo.ClientRead(CharacterPrefab.HumanSpeciesName, msg);
+                    myCharacterInfo = CharacterInfo.ClientRead(CharacterPrefab.HumanSpeciesName, msg, requireJobPrefabFound: !waitForModsDownloaded);
                 }
-                if (ShouldApply(NetFlags.CharacterInfo, id, requireUpToDateSave: true))
+                //don't require the correct round ID for the character info if we're in the lobby
+                // = allow updating the character to the latest one in the lobby, even though we've not loaded to the same round as the server
+                if (!waitForModsDownloaded && ShouldApply(NetFlags.CharacterInfo, id, requireUpToDateSave: true, requireCorrectRoundId: Screen.Selected != GameMain.NetLobbyScreen))
                 {
                     if (myCharacterInfo != null)
                     {
                         GameMain.Client.CharacterInfo = myCharacterInfo;
                         GameMain.NetLobbyScreen.SetCampaignCharacterInfo(myCharacterInfo);
+                        GameMain.GameSession.RefreshAnyOpenPlayerInfo();
                     }
                     else
                     {
+                        //don't reset the character info nor the open UI here here,
+                        //the client needs it to be able to customize the character they want to next spawn as
                         GameMain.NetLobbyScreen.SetCampaignCharacterInfo(null);
+                        //if we've already discarded our current character and the server is just "verifying" that,
+                        //no need to refresh the UI (no changes, refreshing would just throw the client out of the character settings panel)
+                        if (!GameMain.NetLobbyScreen.CampaignCharacterDiscarded)
+                        {
+                            GameMain.GameSession.RefreshAnyOpenPlayerInfo();
+                        }
                     }
                 }
             }
@@ -852,8 +875,14 @@ namespace Barotrauma
             }
             campaign.SuppressStateSending = false;            
 
-            bool ShouldApply(NetFlags flag, UInt16 id, bool requireUpToDateSave)
+            bool ShouldApply(NetFlags flag, UInt16 id, bool requireUpToDateSave, bool requireCorrectRoundId = true)
             {
+                if (requireCorrectRoundId && roundId != campaign.RoundID)
+                {
+                    DebugConsole.Log($"Received campaing update for a different round (client: {campaign.RoundID}, server: {roundId}), ignoring...");                    
+                    return false;
+                }
+
                 if (NetIdUtils.IdMoreRecent(id, campaign.GetLastUpdateIdForFlag(flag)) &&
                      (!requireUpToDateSave || saveID == campaign.LastSaveID))
                 {
@@ -895,6 +924,8 @@ namespace Barotrauma
 
         public void ClientReadCrew(IReadMessage msg)
         {
+            bool createNotification = msg.ReadBoolean();
+
             ushort availableHireLength = msg.ReadUInt16();
             List<CharacterInfo> availableHires = new List<CharacterInfo>();
             for (int i = 0; i < availableHireLength; i++)
@@ -905,47 +936,87 @@ namespace Barotrauma
             }
 
             ushort pendingHireLength = msg.ReadUInt16();
-            List<int> pendingHires = new List<int>();
+            List<UInt16> pendingHires = new List<UInt16>();
+            bool[] pendingHiresToReserveBench = new bool[pendingHireLength];
             for (int i = 0; i < pendingHireLength; i++)
             {
-                pendingHires.Add(msg.ReadInt32());
+                pendingHires.Add(msg.ReadUInt16());
+                pendingHiresToReserveBench[i] = msg.ReadBoolean();
             }
 
-            ushort hiredLength = msg.ReadUInt16();
             List<CharacterInfo> hiredCharacters = new List<CharacterInfo>();
-            for (int i = 0; i < hiredLength; i++)
+            List<CharacterInfo> updatedCrewManager = new List<CharacterInfo>();
+            ushort crewLength = msg.ReadUInt16();
+            for (int i = 0; i < crewLength; i++)
             {
-                CharacterInfo hired = CharacterInfo.ClientRead(CharacterPrefab.HumanSpeciesName, msg);
-                hired.Salary = msg.ReadInt32();
-                hiredCharacters.Add(hired);
+                CharacterInfo crewMember = CharacterInfo.ClientRead(CharacterPrefab.HumanSpeciesName, msg);
+                if (crewMember.IsNewHire)
+                {
+                    hiredCharacters.Add(crewMember);
+                }
+                updatedCrewManager.Add(crewMember);
             }
-
+            bool crewManagerUpdated = GameMain.GameSession.CrewManager?.UpdateCrewManagerIfNecessary(updatedCrewManager) ?? false;
+            
+            ushort reserveBenchLength = msg.ReadUInt16();
+            List<CharacterInfo> updatedReserveBench = new List<CharacterInfo>();
+            for (int i = 0; i < reserveBenchLength; i++)
+            {
+                CharacterInfo info = CharacterInfo.ClientRead(CharacterPrefab.HumanSpeciesName, msg);
+                updatedReserveBench.Add(info);
+            }
+            bool reserveBenchUpdated = GameMain.GameSession.CrewManager?.UpdateReserveBenchIfNeeded(updatedReserveBench) ?? false;
+            
             bool renameCrewMember = msg.ReadBoolean();
             if (renameCrewMember)
             {
-                int renamedIdentifier = msg.ReadInt32();
+                UInt16 renamedIdentifier = msg.ReadUInt16();
                 string newName = msg.ReadString();
-                CharacterInfo renamedCharacter = CrewManager.CharacterInfos.FirstOrDefault(info => info.GetIdentifierUsingOriginalName() == renamedIdentifier);
-                if (renamedCharacter != null) { CrewManager.RenameCharacter(renamedCharacter, newName); }
+                CharacterInfo renamedCharacter = CrewManager.GetCharacterInfos(includeReserveBench: true).FirstOrDefault(info => info.ID == renamedIdentifier);
+                if (renamedCharacter != null)
+                {
+                    CrewManager.RenameCharacter(renamedCharacter, newName);
+                    // Since renaming can only be done once in permadeath, we can safely set this to false to disable the renaming in the UI.
+                    renamedCharacter.RenamingEnabled = false;
+                }
+                else
+                {
+                    DebugConsole.ThrowError($"Could not find a character to rename with the ID {renamedIdentifier}.");
+                }
             }
 
             bool fireCharacter = msg.ReadBoolean();
             if (fireCharacter)
             {
-                int firedIdentifier = msg.ReadInt32();
-                CharacterInfo firedCharacter = CrewManager.CharacterInfos.FirstOrDefault(info => info.GetIdentifier() == firedIdentifier);
+                UInt16 firedIdentifier = msg.ReadUInt16();
+                CharacterInfo firedCharacter = CrewManager.GetCharacterInfos(includeReserveBench: true).FirstOrDefault(info => info.ID == firedIdentifier);
                 // this one might and is allowed to be null since the character is already fired on the original sender's game
                 if (firedCharacter != null) { CrewManager.FireCharacter(firedCharacter); }
             }
 
-            if (map?.CurrentLocation?.HireManager != null && CampaignUI?.CrewManagement != null && 
-                /*can't apply until we have the latest save file*/
-                !NetIdUtils.IdMoreRecent(pendingSaveID, LastSaveID))
+            if (map?.CurrentLocation?.HireManager != null && CampaignUI?.HRManagerUI != null)
             {
-                CampaignUI.CrewManagement.SetHireables(map.CurrentLocation, availableHires);
-                if (hiredCharacters.Any()) { CampaignUI.CrewManagement.ValidateHires(hiredCharacters); }
-                CampaignUI.CrewManagement.SetPendingHires(pendingHires, map.CurrentLocation);
-                if (renameCrewMember || fireCharacter) { CampaignUI.CrewManagement.UpdateCrew(); }
+                //can't apply until we have the latest save file
+                if (!NetIdUtils.IdMoreRecent(pendingSaveID, LastSaveID))
+                {
+                    CampaignUI.HRManagerUI.SetHireables(map.CurrentLocation, availableHires);
+                    if (hiredCharacters.Any()) { CampaignUI.HRManagerUI.ValidateHires(hiredCharacters, takeMoney: false, createNotification: createNotification); }
+                    //don't check the crew size limit: if the server says someone's hired, then it's so
+                    CampaignUI.HRManagerUI.SetPendingHires(pendingHires, pendingHiresToReserveBench, map.CurrentLocation, checkCrewSizeLimit: false);
+                }
+            }
+            else
+            {
+                //This is pretty nasty: setting hireables is handled through CrewManagement,
+                //which is part of the Campaign UI that might not exist when the client is still initializing the round.
+                //If that's the case, let's force the available hires here so they're available when the UI is created
+                CurrentLocation?.ForceHireableCharacters(availableHires);
+            }
+            
+            if (fireCharacter || renameCrewMember || crewManagerUpdated || reserveBenchUpdated)
+            {
+                CampaignUI?.HRManagerUI?.RefreshHRView();
+                GameMain.GameSession?.DeathPrompt?.UpdateBotList();
             }
         }
 
@@ -968,6 +1039,7 @@ namespace Barotrauma
                 else
                 {
                     Bank.Balance = info.Balance;
+                    Bank.RewardDistribution = info.RewardDistribution;
                     TryInvokeEvent(Bank, transaction.ChangedData, info);
                 }
             }
@@ -983,6 +1055,11 @@ namespace Barotrauma
 
         public override bool TryPurchase(Client client, int price)
         {
+            if (price == 0)
+            {
+                return true;
+            }
+
             if (!AllowedToManageCampaign(ClientPermissions.ManageMoney))
             {
                 return PersonalWallet.TryDeduct(price);
@@ -1006,7 +1083,7 @@ namespace Barotrauma
             return false;
         }
 
-        public override void Save(XElement element)
+        public override void Save(XElement element, bool isSavingOnLoading)
         {
             //do nothing, the clients get the save files from the server
         }

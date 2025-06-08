@@ -130,7 +130,7 @@ namespace Barotrauma
             };
 
             content = new GUILayoutGroup(new RectTransform(new Point(background.Rect.Width - HUDLayoutSettings.Padding * 4, background.Rect.Height - HUDLayoutSettings.Padding * 4), background.RectTransform, Anchor.Center)) { AbsoluteSpacing = (int)(HUDLayoutSettings.Padding * 1.5f) };
-            GUITextBlock header = new GUITextBlock(new RectTransform(new Vector2(1f, 0.0f), content.RectTransform), transferService ? TextManager.Get("switchsubmarineheader") : TextManager.GetWithVariable("outpostshipyard", "[location]", GameMain.GameSession.Map.CurrentLocation.Name), font: GUIStyle.LargeFont);
+            GUITextBlock header = new GUITextBlock(new RectTransform(new Vector2(1f, 0.0f), content.RectTransform), transferService ? TextManager.Get("switchsubmarineheader") : TextManager.GetWithVariable("outpostshipyard", "[location]", GameMain.GameSession.Map.CurrentLocation.DisplayName), font: GUIStyle.LargeFont);
             header.CalculateHeightFromText(0, true);
             playerBalanceElement = CampaignUI.AddBalanceElement(header, new Vector2(1.0f, 1.5f));
 
@@ -255,7 +255,7 @@ namespace Barotrauma
             pageIndicators = new GUIImage[pageCount];
             for (int i = 0; i < pageCount; i++)
             {
-                pageIndicators[i] = new GUIImage(new RectTransform(indicatorSize, pageIndicatorHolder.RectTransform) { AbsoluteOffset = new Point(xPos, yPos) }, pageIndicator, null, true);
+                pageIndicators[i] = new GUIImage(new RectTransform(indicatorSize, pageIndicatorHolder.RectTransform) { AbsoluteOffset = new Point(xPos, yPos) }, pageIndicator, scaleToFit: true);
                 xPos += indicatorSize.X + HUDLayoutSettings.Padding;
             }
 
@@ -742,8 +742,8 @@ namespace Barotrauma
 
         private (LocalizedString header, LocalizedString body) GetItemTransferWarningText()
         {
-            var header = TextManager.Get("itemtransferheader").Fallback("lowfuelheader");
-            var body = TextManager.Get("itemtransferwarning").Fallback("lowfuelwarning");
+            var header = TextManager.Get("itemtransferheader").Fallback(TextManager.Get("lowfuelheader"), useDefaultLanguageIfFound: false);
+            var body = TextManager.Get("itemtransferwarning").Fallback(TextManager.Get("lowfuelwarning"), useDefaultLanguageIfFound: false);
             return (header, body);
         }
 

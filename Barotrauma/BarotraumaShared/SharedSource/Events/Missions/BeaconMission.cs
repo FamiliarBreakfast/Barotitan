@@ -1,4 +1,4 @@
-using Barotrauma.Items.Components;
+﻿using Barotrauma.Items.Components;
 using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
@@ -46,6 +46,7 @@ namespace Barotrauma
             }
 
             sonarLabel = TextManager.Get("beaconstationsonarlabel");
+            DebugConsole.NewMessage("Initialized beacon mission: " + prefab.Identifier, Color.LightSkyBlue, debugOnly: true);
         }
 
         private void LoadMonsters(XElement monsterElement, MonsterSet set)
@@ -65,7 +66,8 @@ namespace Barotrauma
             }
             else
             {
-                DebugConsole.ThrowError($"Error in beacon mission \"{Prefab.Identifier}\". Could not find a character prefab with the name \"{speciesName}\".");
+                DebugConsole.ThrowError($"Error in beacon mission \"{Prefab.Identifier}\". Could not find a character prefab with the name \"{speciesName}\".",
+                    contentPackage: Prefab.ContentPackage);
             }
         }
 
@@ -135,18 +137,21 @@ namespace Barotrauma
                     }
                 }
 
-                var monsterSet = ToolBox.SelectWeightedRandom(monsterSets, m => m.Commonness, Rand.RandSync.Unsynced);
-                foreach ((CharacterPrefab monsterSpecies, Point monsterCountRange) in monsterSet.MonsterPrefabs)
+                if (monsterSets.Any())
                 {
-                    int amount = Rand.Range(monsterCountRange.X, monsterCountRange.Y + 1);
-                    for (int i = 0; i < amount; i++)
+                    var monsterSet = ToolBox.SelectWeightedRandom(monsterSets, m => m.Commonness, Rand.RandSync.Unsynced);
+                    foreach ((CharacterPrefab monsterSpecies, Point monsterCountRange) in monsterSet.MonsterPrefabs)
                     {
-                        CoroutineManager.Invoke(() =>
+                        int amount = Rand.Range(monsterCountRange.X, monsterCountRange.Y + 1);
+                        for (int i = 0; i < amount; i++)
                         {
-                            //round ended before the coroutine finished
-                            if (GameMain.GameSession == null || Level.Loaded == null) { return; }
-                            Entity.Spawner.AddCharacterToSpawnQueue(monsterSpecies.Identifier, spawnPos);
-                        }, Rand.Range(0f, amount));
+                            CoroutineManager.Invoke(() =>
+                            {
+                                //round ended before the coroutine finished
+                                if (GameMain.GameSession == null || Level.Loaded == null) { return; }
+                                Entity.Spawner.AddCharacterToSpawnQueue(monsterSpecies.Identifier, spawnPos);
+                            }, Rand.Range(0f, amount));
+                        }
                     }
                 }
 
@@ -155,7 +160,9 @@ namespace Barotrauma
 #if DEBUG || UNSTABLE
             if (State == 1 && !level.CheckBeaconActive())
             {
-                DebugConsole.ThrowError("Beacon became inactive!");
+                DebugConsole.ThrowError(
+                    "Debug/unstable only error message: beacon became inactive mid-mission after it had been activated! If this happened unexpectedly while you were away from the beacon, it may be a sign of a bug."+
+                    " If possible, please try to check what caused the beacon to go inactive.");
                 State = 2;
             }
 #endif

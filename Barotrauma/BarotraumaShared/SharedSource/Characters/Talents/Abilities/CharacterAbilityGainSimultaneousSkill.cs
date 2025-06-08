@@ -14,7 +14,8 @@
             targetAllies = abilityElement.GetAttributeBool("targetallies", false);
             if (skillIdentifier.IsEmpty)
             {
-                DebugConsole.ThrowError($"Error in talent {CharacterTalent.DebugIdentifier}: skill identifier not defined.");
+                DebugConsole.ThrowError($"Error in talent {CharacterTalent.DebugIdentifier}: skill identifier not defined.",
+                    contentPackage: abilityElement.ContentPackage);
             }
         }
 
@@ -29,7 +30,7 @@
                     foreach (Character otherCharacter in Character.GetFriendlyCrew(Character))
                     {
                         if (otherCharacter == Character) { continue; }
-                        otherCharacter.Info?.IncreaseSkillLevel(identifier, abilitySkillGain.Value, gainedFromAbility: true);
+                        otherCharacter.Info.IncreaseSkillLevel(identifier, abilitySkillGain.Value, gainedFromAbility: true);
                     }
                 }
                 else

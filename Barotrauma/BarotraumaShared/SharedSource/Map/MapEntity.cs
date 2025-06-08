@@ -200,6 +200,16 @@ namespace Barotrauma
             set;
         }
 
+        /// <summary>
+        /// Is the layer this entity is in currently hidden? If it is, the entity is not updated and should do nothing.
+        /// </summary>
+        public bool IsLayerHidden { get; set; }
+
+        /// <summary>
+        /// Is the entity hidden due to <see cref="HiddenInGame"/> being enabled or the layer the entity is in being hidden?
+        /// </summary>
+        public bool IsHidden => HiddenInGame || IsLayerHidden;
+
         public override Vector2 Position
         {
             get
@@ -539,7 +549,24 @@ namespace Barotrauma
                 return;
             }
 
+            //sort damageable walls by sprite depth:
+            //necessary because rendering the damage effect starts a new sprite batch and breaks the order otherwise
             int i = 0;
+            if (this is Structure { DrawDamageEffect: true } structure)
+            {
+                //insertion sort according to draw depth
+                float drawDepth = structure.SpriteDepth;
+                while (i < MapEntityList.Count)
+                {
+                    float otherDrawDepth = (MapEntityList[i] as Structure)?.SpriteDepth ?? 1.0f;
+                    if (otherDrawDepth < drawDepth) { break; }
+                    i++;
+                }
+                MapEntityList.Insert(i, this);
+                return;
+            }
+
+            i = 0;
             while (i < MapEntityList.Count)
             {
                 i++;
@@ -580,15 +607,10 @@ namespace Barotrauma
             base.Remove();
 
             MapEntityList.Remove(this);
-
 #if CLIENT
             Submarine.ForceRemoveFromVisibleEntities(this);
-            if (SelectedList.Contains(this))
-            {
-                SelectedList = SelectedList.Where(e => e != this).ToHashSet();
-            }
+            SelectedList.Remove(this);
 #endif
-
             if (aiTarget != null)
             {
                 aiTarget.Remove();
@@ -656,10 +678,24 @@ namespace Barotrauma
             Item.UpdatePendingConditionUpdates(deltaTime);
             if (mapEntityUpdateTick % MapEntityUpdateInterval == 0)
             {
-                foreach (Item item in Item.ItemList)
+                Item lastUpdatedItem = null;
+
+                try
                 {
-                    if (GameMain.LuaCs.Game.UpdatePriorityItems.Contains(item)) continue;
-                    item.Update(deltaTime * MapEntityUpdateInterval, cam);
+                    foreach (Item item in Item.ItemList)
+                    {
+                        if (GameMain.LuaCs.Game.UpdatePriorityItems.Contains(item)) { continue; }
+                        lastUpdatedItem = item;
+                        item.Update(deltaTime * MapEntityUpdateInterval, cam);
+                    }
+                }
+                catch (InvalidOperationException e)
+                {
+                    GameAnalyticsManager.AddErrorEventOnce(
+                        "MapEntity.UpdateAll:ItemUpdateInvalidOperation", 
+                        GameAnalyticsManager.ErrorSeverity.Critical, 
+                        $"Error while updating item {lastUpdatedItem?.Name ?? "null"}: {e.Message}");
+                    throw new InvalidOperationException($"Error while updating item {lastUpdatedItem?.Name ?? "null"}", innerException: e);
                 }
             }
 
@@ -715,6 +751,9 @@ namespace Barotrauma
             relative.X = 0.0f;
             Move(-relative * 2.0f);
         }
+
+        public virtual Quad2D GetTransformedQuad()
+            => Quad2D.FromSubmarineRectangle(rect);
 
         public static List<MapEntity> LoadAll(Submarine submarine, XElement parentElement, string filePath, int idOffset)
         {

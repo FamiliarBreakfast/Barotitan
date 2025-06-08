@@ -1,4 +1,4 @@
-using Barotrauma.Extensions;
+﻿using Barotrauma.Extensions;
 using Barotrauma.Items.Components;
 using Microsoft.Xna.Framework;
 using System;
@@ -44,8 +44,13 @@ namespace Barotrauma
         public readonly Identifier MenuCategoryVar;
         public readonly Identifier Pronouns;
 
-        public CharacterInfoPrefab(ContentXElement headsElement, XElement varsElement, XElement menuCategoryElement, XElement pronounsElement)
+        public CharacterInfoPrefab(CharacterPrefab characterPrefab, ContentXElement headsElement, XElement varsElement, XElement menuCategoryElement, XElement pronounsElement)
         {
+            if (headsElement == null)
+            {
+                throw new Exception($"No heads configured for the character \"{characterPrefab.Identifier}\". Characters with CharacterInfo must have head sprites. Please add a <Heads> element to the character's config.");
+            }
+
             Heads = headsElement.Elements().Select(e => new CharacterInfo.HeadPreset(this, e)).ToImmutableArray();
             if (varsElement != null)
             {
@@ -82,6 +87,10 @@ namespace Barotrauma
         }
     }
 
+    /// <summary>
+    /// Stores information about the Character that is needed between rounds in the
+    /// menu etc., whereas Character itself is the object actually spawned in-game.
+    /// </summary>
     partial class CharacterInfo
     {
         public class HeadInfo
@@ -289,7 +298,29 @@ namespace Barotrauma
         public XElement HealthData;
         public XElement OrderData;
 
-        private static ushort idCounter;
+        public bool PermanentlyDead;
+        public bool RenamingEnabled = false;
+
+        private BotStatus botStatus = BotStatus.ActiveService;
+        
+        public BotStatus BotStatus
+        {
+            get => botStatus;
+            set
+            {
+                botStatus = value;
+                if (botStatus == BotStatus.ActiveService && character == null)
+                {
+                    //no character yet -> spawn is pending
+                    PendingSpawnToActiveService = true;
+                }
+            }
+        }
+
+        public bool IsOnReserveBench => BotStatus == BotStatus.ReserveBench;
+        public bool PendingSpawnToActiveService;
+
+        private static ushort idCounter = 1;
         private const string disguiseName = "???";
 
         public bool HasNickname => Name != OriginalName;
@@ -300,7 +331,18 @@ namespace Barotrauma
         public LocalizedString Title;
 
         public (Identifier NpcSetIdentifier, Identifier NpcIdentifier) HumanPrefabIds;
-
+        
+        private HumanPrefab _humanPrefab;
+        public HumanPrefab HumanPrefab
+        {
+            get
+            {
+                if (HumanPrefabIds == default) { return null; }
+                _humanPrefab ??= NPCSet.Get(HumanPrefabIds.NpcSetIdentifier, HumanPrefabIds.NpcIdentifier);
+                return _humanPrefab;
+            }
+        }
+        
         public string DisplayName
         {
             get
@@ -328,18 +370,54 @@ namespace Barotrauma
 
         public Identifier SpeciesName { get; }
 
+        private Character character;
         /// <summary>
         /// Note: Can be null.
         /// </summary>
-        public Character Character;
-        
+        public Character Character
+        {
+            get => character;
+            set
+            {
+                character = value;
+                if (character != null) 
+                { 
+                    //character spawned -> spawn no longer pending
+                    PendingSpawnToActiveService = false;
+                }
+            }
+
+        }
+
         public Job Job;
-        
+
         public int Salary;
 
         public int ExperiencePoints { get; private set; }
 
+        private int talentRefundPoints;
+
+        /// <summary>
+        /// How many times the player is eligible to refund talents
+        /// </summary>
+        public int TalentRefundPoints
+        {
+            get => talentRefundPoints;
+            set => talentRefundPoints = MathHelper.Max(value, 0);
+        }
+
         public HashSet<Identifier> UnlockedTalents { get; private set; } = new HashSet<Identifier>();
+
+        private int talentResetCount;
+
+        /// <summary>
+        /// How many times have the characters' talents been reset?
+        /// </summary>
+        public int TalentResetCount
+        {
+            get => talentResetCount;
+            set => talentResetCount = MathHelper.Max(value, 0);
+        }
 
         public (Identifier factionId, float reputation) MinReputationToHire;
 
@@ -490,10 +568,11 @@ namespace Barotrauma
 
         public ContentXElement CharacterConfigElement { get; set; }
 
-        public readonly string ragdollFileName = string.Empty;
-
         public bool StartItemsGiven;
 
+        /// <summary>
+        /// Newly hired bot that hasn't spawned yet
+        /// </summary>
         public bool IsNewHire;
 
         public CauseOfDeath CauseOfDeath;
@@ -553,12 +632,11 @@ namespace Barotrauma
             {
                 if (ragdoll == null)
                 {
-                    // TODO: support for variants
                     Identifier speciesName = SpeciesName;
                     bool isHumanoid = CharacterConfigElement.GetAttributeBool("humanoid", speciesName == CharacterPrefab.HumanSpeciesName);
                     ragdoll = isHumanoid 
-                        ? HumanRagdollParams.GetRagdollParams(speciesName, ragdollFileName)
-                        : RagdollParams.GetRagdollParams<FishRagdollParams>(speciesName, ragdollFileName) as RagdollParams;
+                        ? RagdollParams.GetDefaultRagdollParams<HumanRagdollParams>(SpeciesName, CharacterConfigElement, CharacterConfigElement.ContentPackage)
+                        : RagdollParams.GetDefaultRagdollParams<FishRagdollParams>(SpeciesName, CharacterConfigElement, CharacterConfigElement.ContentPackage);
                 }
                 return ragdoll;
             }
@@ -645,6 +723,15 @@ namespace Barotrauma
             => element.GetAttributeBool("specifiertags",
                 element.GetAttributeBool("genders",
                     element.GetAttributeBool("races", false)));
+
+        /// <summary>
+        /// Keeps track of the last reward distribution that was set on the character's wallet.
+        /// Is used to keep salary when the character respawns since CharacterInfo is preserved between deaths.
+        /// </summary>
+        /// <remarks>
+        /// None means the salary has not been set yet, which is not always 0 if default salary is set.
+        /// </remarks>
+        public Option<int> LastRewardDistribution = Option.None;
         
         // Used for creating the data
         public CharacterInfo(
@@ -652,7 +739,6 @@ namespace Barotrauma
             string name = "",
             string originalName = "",
             Either<Job, JobPrefab> jobOrJobPrefab = null,
-            string ragdollFileName = null,
             int variant = 0,
             Rand.RandSync randSync = Rand.RandSync.Unsynced,
             Identifier npcIdentifier = default)
@@ -666,6 +752,7 @@ namespace Barotrauma
             }
             ID = idCounter;
             idCounter++;
+            if (idCounter == 0) { idCounter++; }
             SpeciesName = speciesName;
             SpriteTags = new List<Identifier>();
             CharacterConfigElement = CharacterPrefab.FindBySpeciesName(SpeciesName)?.ConfigElement;
@@ -687,7 +774,9 @@ namespace Barotrauma
                 SetAttachments(randSync);
                 SetColors(randSync);
 
-                Job = job ?? ((jobPrefab == null) ? Job.Random(Rand.RandSync.Unsynced) : new Job(jobPrefab, randSync, variant));
+                Job = job ?? ((jobPrefab == null) ? 
+                    Job.Random(isPvP: false, Rand.RandSync.Unsynced) : 
+                    new Job(jobPrefab, isPvP: false, randSync, variant));
 
                 if (!string.IsNullOrEmpty(name))
                 {
@@ -703,20 +792,31 @@ namespace Barotrauma
                 Salary = CalculateSalary();
             }
             OriginalName = !string.IsNullOrEmpty(originalName) ? originalName : Name;
-            if (ragdollFileName != null)
+
+            TalentRefundPoints = CharacterConfigElement.GetAttributeInt("refundpoints", 0);
+
+            int loadedLastRewardDistribution = CharacterConfigElement.GetAttributeInt("lastrewarddistribution", -1);
+            if (loadedLastRewardDistribution >= 0)
             {
-                this.ragdollFileName = ragdollFileName;
+                LastRewardDistribution = Option.Some(loadedLastRewardDistribution);
             }
         }
 
         private void SetPersonalityTrait()
-            => PersonalityTrait = NPCPersonalityTrait.GetRandom(Name + string.Concat(Head.Preset.TagSet));
+            => PersonalityTrait = NPCPersonalityTrait.GetRandom(Name + string.Concat(Head.Preset.TagSet.OrderBy(tag => tag)));
 
         public string GetRandomName(Rand.RandSync randSync)
         {
             GetName(randSync, out string name);
 
             return name;
+        }
+
+        public void SetNameBasedOnJob()
+        {
+            if (Job == null) { return; }
+            Name = Job.Name.Value;
+            OriginalName = Name;
         }
 
         public static Color SelectRandomColor(in ImmutableArray<(Color Color, float Commonness)> array, Rand.RandSync randSync)
@@ -767,7 +867,7 @@ namespace Barotrauma
         }
 
         // Used for loading the data
-        public CharacterInfo(XElement infoElement, Identifier npcIdentifier = default)
+        public CharacterInfo(ContentXElement infoElement, Identifier npcIdentifier = default)
         {
             ID = idCounter;
             idCounter++;
@@ -776,9 +876,13 @@ namespace Barotrauma
             Salary = infoElement.GetAttributeInt("salary", 1000);
             ExperiencePoints = infoElement.GetAttributeInt("experiencepoints", 0);
             AdditionalTalentPoints = infoElement.GetAttributeInt("additionaltalentpoints", 0);
+            TalentResetCount = infoElement.GetAttributeInt(nameof(talentResetCount), 0);
             HashSet<Identifier> tags = infoElement.GetAttributeIdentifierArray("tags", Array.Empty<Identifier>()).ToHashSet();
             LoadTagsBackwardsCompatibility(infoElement, tags);
             SpeciesName = infoElement.GetAttributeIdentifier("speciesname", "");
+            PermanentlyDead = infoElement.GetAttributeBool("permanentlydead", false);
+            BotStatus = infoElement.GetAttributeBool(nameof(IsOnReserveBench), false) ? BotStatus.ReserveBench : BotStatus.ActiveService;
+            RenamingEnabled = infoElement.GetAttributeBool("renamingenabled", false);
             ContentXElement element;
             if (!SpeciesName.IsEmpty)
             {
@@ -832,7 +936,6 @@ namespace Barotrauma
 
             StartItemsGiven = infoElement.GetAttributeBool("startitemsgiven", false);
             Identifier personalityName = infoElement.GetAttributeIdentifier("personality", "");
-            ragdollFileName = infoElement.GetAttributeString("ragdoll", string.Empty);
             if (personalityName != Identifier.Empty)
             {
                 if (NPCPersonalityTrait.Traits.TryGet(personalityName, out var trait) ||
@@ -960,7 +1063,7 @@ namespace Barotrauma
         }
 
         /// <summary>
-        /// Returns a presumably (not guaranteed) unique hash using the (current) Name, appearence, and job.
+        /// Returns a presumably (not guaranteed) unique and persistent hash using the (current) Name, appearence, and job.
         /// So unless there's another character with the exactly same name, job, and appearance, the hash should be unique.
         /// </summary>
         public int GetIdentifier()
@@ -969,7 +1072,7 @@ namespace Barotrauma
         }
 
         /// <summary>
-        /// Returns a presumably (not guaranteed) unique hash using the OriginalName, appearence, and job.
+        /// Returns a presumably (not guaranteed) unique hash and persistent using the OriginalName, appearence, and job.
         /// So unless there's another character with the exactly same name, job, and appearance, the hash should be unique.
         /// </summary>
         public int GetIdentifierUsingOriginalName()
@@ -1023,6 +1126,7 @@ namespace Barotrauma
 
         public string ReplaceVars(string str)
         {
+            if (Head == null) { return str; }
             return Prefab.ReplaceVars(str, Head.Preset);
         }
 
@@ -1086,7 +1190,26 @@ namespace Barotrauma
 
         partial void LoadHeadSpriteProjectSpecific(ContentXElement limbElement);
         
+        private bool spriteTagsLoaded;
+        public void VerifySpriteTagsLoaded()
+        {
+            if (!spriteTagsLoaded)
+            {
+                LoadSpriteTags();
+            }
+        }
+
         private void LoadHeadSprite()
+        {
+            LoadHeadElement(loadHeadSprite: true, loadHeadSpriteTags: true);
+        }
+
+        private void LoadSpriteTags()
+        {
+            LoadHeadElement(loadHeadSprite: false, loadHeadSpriteTags: true);            
+        }
+
+        private void LoadHeadElement(bool loadHeadSprite, bool loadHeadSpriteTags)
         {
             if (Ragdoll?.MainElement == null) { return; }
             foreach (var limbElement in Ragdoll.MainElement.Elements())
@@ -1116,20 +1239,30 @@ namespace Barotrauma
                     fileWithoutTags = fileWithoutTags.Split('[', ']').First();
                     if (fileWithoutTags != fileName) { continue; }
 
-                    HeadSprite = new Sprite(spriteElement, "", file);
-                    Portrait = new Sprite(spriteElement, "", file) { RelativeOrigin = Vector2.Zero };
-
-                    //extract the tags out of the filename
-                    SpriteTags = file.Split('[', ']').Skip(1).Select(id => id.ToIdentifier()).ToList();
-                    if (SpriteTags.Any())
+                    if (loadHeadSprite)
                     {
-                        SpriteTags.RemoveAt(SpriteTags.Count - 1);
+                        HeadSprite = new Sprite(spriteElement, "", file);
+                        Portrait = new Sprite(spriteElement, "", file) { RelativeOrigin = Vector2.Zero };
+                    }
+
+                    if (loadHeadSpriteTags)
+                    {
+                        //extract the tags out of the filename
+                        SpriteTags = file.Split('[', ']').Skip(1).Select(id => id.ToIdentifier()).ToList();
+                        if (SpriteTags.Any())
+                        {
+                            SpriteTags.RemoveAt(SpriteTags.Count - 1);
+                        }
+                        spriteTagsLoaded = true;
                     }
 
                     break;
                 }
 
-                LoadHeadSpriteProjectSpecific(limbElement);
+                if (loadHeadSprite)
+                {
+                    LoadHeadSpriteProjectSpecific(limbElement);
+                }
 
                 break;
             }
@@ -1201,7 +1334,7 @@ namespace Barotrauma
 
         partial void LoadAttachmentSprites();
         
-        public int CalculateSalary()
+        public int CalculateSalary(int baseSalary = 0, float salaryMultiplier = 1.0f)
         {
             if (Name == null || Job == null) { return 0; }
 
@@ -1211,10 +1344,25 @@ namespace Barotrauma
                 salary += (int)(skill.Level * skill.PriceMultiplier);
             }
 
-            return (int)(salary * Job.Prefab.PriceMultiplier);
+            return (int)(baseSalary + (salary * Job.Prefab.PriceMultiplier * salaryMultiplier));
         }
 
-        public void IncreaseSkillLevel(Identifier skillIdentifier, float increase, bool gainedFromAbility = false)
+        /// <summary>
+        /// Increases the characters skill at a rate proportional to their current skill. 
+        /// If you want to increase the skill level by a specific amount instead, use <see cref="IncreaseSkillLevel"/>
+        /// </summary>
+        public void ApplySkillGain(Identifier skillIdentifier, float baseGain, bool gainedFromAbility = false, float maxGain = 2f, bool forceNotification = false)
+        {
+            float skillLevel = Job.GetSkillLevel(skillIdentifier);
+            // The formula is too generous on low skill levels, hence the minimum divider.
+            float skillDivider = MathF.Pow(Math.Max(skillLevel, 15f), SkillSettings.Current.SkillIncreaseExponent);
+            IncreaseSkillLevel(skillIdentifier, Math.Min(baseGain / skillDivider, maxGain), gainedFromAbility, forceNotification);
+        }
+
+        /// <summary>
+        /// Increase the skill by a specific amount. Talents may affect the actual, final skill increase.
+        /// </summary>
+        public void IncreaseSkillLevel(Identifier skillIdentifier, float increase, bool gainedFromAbility = false, bool forceNotification = false)
         {
             if (Job == null || (GameMain.NetworkMember != null && GameMain.NetworkMember.IsClient) || Character == null) { return; }
 
@@ -1222,9 +1370,7 @@ namespace Barotrauma
             {
                 increase *= SkillSettings.Current.AssistantSkillIncreaseMultiplier;
             }
-
             increase *= 1f + Character.GetStatValue(StatTypes.SkillGainSpeed);
-
             increase = GetSkillSpecificGain(increase, skillIdentifier);
 
             float prevLevel = Job.GetSkillLevel(skillIdentifier);
@@ -1246,14 +1392,14 @@ namespace Barotrauma
                 }
             }
 
-            OnSkillChanged(skillIdentifier, prevLevel, newLevel);
+            OnSkillChanged(skillIdentifier, prevLevel, newLevel, forceNotification);
         }
 
         private static readonly ImmutableDictionary<Identifier, StatTypes> skillGainStatValues = new Dictionary<Identifier, StatTypes>
         {
             { new("helm"), StatTypes.HelmSkillGainSpeed },
-            { new("medical"), StatTypes.WeaponsSkillGainSpeed },
-            { new("weapons"), StatTypes.MedicalSkillGainSpeed },
+            { new("weapons"), StatTypes.WeaponsSkillGainSpeed },
+            { new("medical"), StatTypes.MedicalSkillGainSpeed },
             { new("electrical"), StatTypes.ElectricalSkillGainSpeed },
             { new("mechanical"), StatTypes.MechanicalSkillGainSpeed }
         }.ToImmutableDictionary();
@@ -1268,7 +1414,7 @@ namespace Barotrauma
             return increase;
         }
 
-        public void SetSkillLevel(Identifier skillIdentifier, float level)
+        public void SetSkillLevel(Identifier skillIdentifier, float level, bool forceNotification = false)
         {
             if (Job == null) { return; }
 
@@ -1276,17 +1422,17 @@ namespace Barotrauma
             if (skill == null)
             {
                 Job.IncreaseSkillLevel(skillIdentifier, level, increasePastMax: false);
-                OnSkillChanged(skillIdentifier, 0.0f, level);
+                OnSkillChanged(skillIdentifier, 0.0f, level, forceNotification);
             }
             else
             {
                 float prevLevel = skill.Level;
                 skill.Level = level;
-                OnSkillChanged(skillIdentifier, prevLevel, skill.Level);
+                OnSkillChanged(skillIdentifier, prevLevel, skill.Level, forceNotification);
             }
         }
 
-        partial void OnSkillChanged(Identifier skillIdentifier, float prevLevel, float newLevel);
+        partial void OnSkillChanged(Identifier skillIdentifier, float prevLevel, float newLevel, bool forceNotification);
 
         public void GiveExperience(int amount)
         {
@@ -1311,12 +1457,12 @@ namespace Barotrauma
             OnExperienceChanged(prevAmount, ExperiencePoints);
         }
 
-        const int BaseExperienceRequired = -50;
+        const int BaseExperienceRequired = 450;
         const int AddedExperienceRequiredPerLevel = 500;
 
         public int GetTotalTalentPoints()
         {
-            return GetCurrentLevel() + AdditionalTalentPoints - 1;
+            return GetCurrentLevel() + AdditionalTalentPoints;
         }
 
         public int GetAvailableTalentPoints()
@@ -1342,16 +1488,19 @@ namespace Barotrauma
             return experienceRequired + ExperienceRequiredPerLevel(level);
         }
 
+        /// <summary>
+        /// How much more experience does the character need to reach the specified level?
+        /// </summary>
         public int GetExperienceRequiredForLevel(int level)
         {
-            int currentLevel = GetCurrentLevel(out int experienceRequired);
+            int currentLevel = GetCurrentLevel();
             if (currentLevel >= level) { return 0; }
-            int required = experienceRequired;
-            for (int i = currentLevel + 1; i <= level; i++)
+            int required = 0;
+            for (int i = 0; i < level; i++)
             {
                 required += ExperienceRequiredPerLevel(i);
             }
-            return required;
+            return required - ExperiencePoints;
         }
 
         public int GetCurrentLevel()
@@ -1361,17 +1510,18 @@ namespace Barotrauma
 
         private int GetCurrentLevel(out int experienceRequired)
         {
-            int level = 1;
+            int level = 0;
             experienceRequired = 0;
             while (experienceRequired + ExperienceRequiredPerLevel(level) <= ExperiencePoints)
             {
                 experienceRequired += ExperienceRequiredPerLevel(level);
                 level++;
             }
-            return level;
+
+            return Math.Max(level, 0);
         }
 
-        private static int ExperienceRequiredPerLevel(int level)
+        public static int ExperienceRequiredPerLevel(int level)
         {
             return BaseExperienceRequired + AddedExperienceRequiredPerLevel * level;
         }
@@ -1379,6 +1529,43 @@ namespace Barotrauma
         partial void OnExperienceChanged(int prevAmount, int newAmount);
 
         partial void OnPermanentStatChanged(StatTypes statType);
+
+        public void RefundTalents()
+        {
+            if (TalentRefundPoints <= 0) { return; }
+
+            //e.g. talents from endocrine booster or extra talents some special NPC has
+            var talentsFromOutsideTree = GetUnlockedTalentsOutsideTree().ToList();
+
+            UnlockedTalents.Clear();
+            SavedStatValues.Clear();
+            Character?.ResetTalents(talentPointReduction: talentResetCount);
+            TalentRefundPoints--;
+            talentResetCount++;
+
+            //it's simpler to just remove everything first and then reapply the "extra" talents than to
+            //try determining which talent the resistances, ability flags etc came from and only remove specific ones
+            if (Character == null)
+            {
+                talentsFromOutsideTree.ForEach(talentId => UnlockedTalents.Add(talentId));
+            }
+            else
+            {
+                talentsFromOutsideTree.ForEach(talentId => Character.GiveTalent(talentId, addingFirstTime: true));
+            }
+
+            GameMain.NetworkMember?.CreateEntityEvent(Character, new Character.ConfirmRefundEventData());
+        }
+
+        public void AddRefundPoints(int newRefundPoints)
+        {
+            TalentRefundPoints += newRefundPoints;
+#if SERVER
+            GameMain.NetworkMember?.CreateEntityEvent(Character, new Character.UpdateRefundPointsEventData());
+#elif CLIENT
+            ShowTalentResetPopupOnOpen = true;
+#endif
+        }
 
         public void Rename(string newName)
         {
@@ -1422,6 +1609,7 @@ namespace Barotrauma
                 new XAttribute("salary", Salary),
                 new XAttribute("experiencepoints", ExperiencePoints),
                 new XAttribute("additionaltalentpoints", AdditionalTalentPoints),
+                new XAttribute(nameof(talentResetCount), TalentResetCount),
                 new XAttribute("hairindex", Head.HairIndex),
                 new XAttribute("beardindex", Head.BeardIndex),
                 new XAttribute("moustacheindex", Head.MoustacheIndex),
@@ -1430,9 +1618,13 @@ namespace Barotrauma
                 new XAttribute("haircolor", XMLExtensions.ColorToString(Head.HairColor)),
                 new XAttribute("facialhaircolor", XMLExtensions.ColorToString(Head.FacialHairColor)),
                 new XAttribute("startitemsgiven", StartItemsGiven),
-                new XAttribute("ragdoll", ragdollFileName),
-                new XAttribute("personality", PersonalityTrait?.Identifier ?? Identifier.Empty));
-                // TODO: animations?
+                new XAttribute("personality", PersonalityTrait?.Identifier ?? Identifier.Empty),
+                new XAttribute("refundpoints", TalentRefundPoints),
+                new XAttribute("lastrewarddistribution", LastRewardDistribution.Match(some: value => value, none: () => -1).ToString()),
+                new XAttribute("permanentlydead", PermanentlyDead),
+                new XAttribute(nameof(IsOnReserveBench), IsOnReserveBench),
+                new XAttribute("renamingenabled", RenamingEnabled)
+            );
 
             if (HumanPrefabIds != default)
             {
@@ -1443,7 +1635,7 @@ namespace Barotrauma
 
             charElement.Add(new XAttribute("missionscompletedsincedeath", MissionsCompletedSinceDeath));
 
-            if (MinReputationToHire.factionId != default)
+            if (!MinReputationToHire.factionId.IsEmpty)
             {
                 charElement.Add(
                     new XAttribute("factionId", MinReputationToHire.factionId),
@@ -1530,7 +1722,7 @@ namespace Barotrauma
                     targetAvailableInNextLevel = 
                         !isOutside && 
                         GameMain.GameSession?.Campaign is not { SwitchedSubsThisRound: true } && 
-                        (isOnConnectedLinkedSub || entitySub == Submarine.MainSub);
+                        (isOnConnectedLinkedSub || (Submarine.MainSub != null && entitySub == Submarine.MainSub));
                     if (!targetAvailableInNextLevel)
                     {
                         if (!order.Prefab.CanBeGeneralized)
@@ -1565,7 +1757,7 @@ namespace Barotrauma
                 }
                 if (order.TargetSpatialEntity?.Submarine is Submarine targetSub)
                 {
-                    if (targetSub == Submarine.MainSub)
+                    if (Submarine.MainSub != null && targetSub == Submarine.MainSub)
                     {
                         orderElement.Add(new XAttribute("onmainsub", true));
                     }
@@ -1647,8 +1839,7 @@ namespace Barotrauma
             {
                 Order order = null;
                 string orderIdentifier = orderElement.GetAttributeString("id", "");
-                var orderPrefab = OrderPrefab.Prefabs[orderIdentifier];
-                if (orderPrefab == null)
+                if (!OrderPrefab.Prefabs.TryGet(orderIdentifier, out OrderPrefab orderPrefab))
                 {
                     DebugConsole.ThrowError($"Error loading a previously saved order - can't find an order prefab with the identifier \"{orderIdentifier}\"");
                     priorityIncrease++;
@@ -1899,13 +2090,30 @@ namespace Barotrauma
             }
         }
 
+        /// <summary>
+        /// Get the combined stat value of the identifier "all" and the specified identifier.
+        /// </summary>
+        /// <remarks>
+        /// The "all" identifier works like the "any" identifier in outpost modules where it doesn't literally mean everything but
+        /// is an unique identifier that indicates that it should target everything. For example if we wanted to make a talent
+        /// that increases the fabrication quality of every single item we could use something like:
+        /// <CharacterAbilityGivePermanentStat stattype="IncreaseFabricationQuality" statidentifier="all" />
+        /// (Granted IncreaseFabricationQuality doesn't support the "all" identifier so if we need this in vanilla it needs to be implemented in code)
+        /// </remarks>
+        public float GetSavedStatValueWithAll(StatTypes statType, Identifier statIdentifier)
+            => GetSavedStatValue(statType, Tags.StatIdentifierTargetAll) +
+               GetSavedStatValue(statType, statIdentifier);
+
         public float GetSavedStatValueWithBotsInMp(StatTypes statType, Identifier statIdentifier)
+            => GetSavedStatValueWithBotsInMp(statType, statIdentifier, GameSession.GetSessionCrewCharacters(CharacterType.Bot));
+
+        public float GetSavedStatValueWithBotsInMp(StatTypes statType, Identifier statIdentifier, IReadOnlyCollection<Character> bots)
         {
             float statValue = GetSavedStatValue(statType, statIdentifier);
 
             if (GameMain.NetworkMember is null) { return statValue; }
 
-            foreach (Character bot in GameSession.GetSessionCrewCharacters(CharacterType.Bot))
+            foreach (Character bot in bots)
             {
                 int botStatValue = (int)bot.Info.GetSavedStatValue(statType, statIdentifier);
                 statValue = Math.Max(statValue, botStatValue);
@@ -1935,6 +2143,21 @@ namespace Barotrauma
             }
             if (changed) { OnPermanentStatChanged(statType); }
         }
+
+        /// <summary>
+        /// Used to store the last known resistance against skill loss on death
+        /// when the character dies, so it can be correctly applied before
+        /// reinstantiating the Character object (if respawning).
+        /// NOTE: The resistances are handled as multipliers here, so 1.0 == 0% resistance
+        /// </summary>
+        public float LastResistanceMultiplierSkillLossDeath = 1.0f;
+        /// <summary>
+        /// Used to store the last known resistance against skill loss on respawn
+        /// when the character dies, so it can be correctly applied before
+        /// reinstantiating the Character object (if respawning).
+        /// NOTE: The resistances are handled as multipliers here, so 1.0 == 0% resistance
+        /// </summary>
+        public float LastResistanceMultiplierSkillLossRespawn = 1.0f;
     }
 
     internal sealed class SavedStatValue

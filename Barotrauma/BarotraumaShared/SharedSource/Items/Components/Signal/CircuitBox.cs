@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 using System;
 using System.Collections.Generic;
@@ -22,12 +22,17 @@ namespace Barotrauma.Items.Components
 
         public readonly List<CircuitBoxInputOutputNode> InputOutputNodes = new();
 
+        public readonly List<CircuitBoxLabelNode> Labels = new();
+
         public readonly List<CircuitBoxWire> Wires = new List<CircuitBoxWire>();
 
         public override bool IsActive => true;
 
         // We don't want the components and wires to transfer between subs as it would cause issues.
         public override bool DontTransferInventoryBetweenSubs => true;
+
+        // We don't want to sell the components and wires inside the circuit box
+        public override bool DisallowSellingItemsFromContainer => true;
 
         public Option<CircuitBoxConnection> FindInputOutputConnection(Identifier connectionName)
         {
@@ -77,6 +82,14 @@ namespace Barotrauma.Items.Components
 
         public bool IsFull => ComponentContainer?.Inventory is { } inventory && inventory.IsFull(true);
 
+        /// <summary>
+        /// Works the same way as the Locked property, but isn't persistent.
+        /// </summary>
+        public bool TemporarilyLocked;
+
+        [Editable, Serialize(false, IsPropertySaveable.Yes, description: "Locked circuit boxes can only be viewed and not interacted with.")]
+        public bool Locked { get; private set; }
+
         public CircuitBox(Item item, ContentXElement element) : base(item, element)
         {
             containers = item.GetComponents<ItemContainer>().ToArray();
@@ -117,9 +130,9 @@ namespace Barotrauma.Items.Components
         /// </summary>
         private Option<ContentXElement> delayedElementToLoad;
 
-        public override void Load(ContentXElement componentElement, bool usePrefabValues, IdRemap idRemap)
+        public override void Load(ContentXElement componentElement, bool usePrefabValues, IdRemap idRemap, bool isItemSwap)
         {
-            base.Load(componentElement, usePrefabValues, idRemap);
+            base.Load(componentElement, usePrefabValues, idRemap, isItemSwap);
             if (delayedElementToLoad.IsSome()) { return; }
             delayedElementToLoad = Option.Some(componentElement);
         }
@@ -154,7 +167,7 @@ namespace Barotrauma.Items.Components
             delayedElementToLoad = Option.None;
         }
 
-        private void LoadFromXML(ContentXElement loadElement)
+        public void LoadFromXML(ContentXElement loadElement)
         {
             foreach (var subElement in loadElement.Elements())
             {
@@ -172,6 +185,9 @@ namespace Barotrauma.Items.Components
                         break;
                     case "outputnode":
                         LoadFor(CircuitBoxInputOutputNode.Type.Output, subElement);
+                        break;
+                    case "label":
+                        Labels.Add(CircuitBoxLabelNode.LoadFromXML(subElement, this));
                         break;
                 }
             }
@@ -201,11 +217,14 @@ namespace Barotrauma.Items.Components
         {
             Components.Clear();
             Wires.Clear();
+            Labels.Clear();
 
-            foreach (var origComp in original.Components)
+            foreach (var label in original.Labels)
             {
-                var newComponent = new CircuitBoxComponent(origComp.ID, clonedContainedItems[origComp.Item.ID], origComp.Position, this, origComp.UsedResource);
-                Components.Add(newComponent);
+                var newLabel = new CircuitBoxLabelNode(label.ID, label.Color, label.Position, this);
+                newLabel.EditText(label.HeaderText, label.BodyText);
+                newLabel.ApplyResize(label.Size, label.Position);
+                Labels.Add(newLabel);
             }
 
             for (int ioIndex = 0; ioIndex < original.InputOutputNodes.Count; ioIndex++)
@@ -216,10 +235,19 @@ namespace Barotrauma.Items.Components
                 cloneNode.Position = origNode.Position;
             }
 
+            if (!clonedContainedItems.Any()) { return; }
+            
+            foreach (var origComp in original.Components)
+            {
+                if (!clonedContainedItems.TryGetValue(origComp.Item.ID, out var clonedItem)) { continue; }
+                var newComponent = new CircuitBoxComponent(origComp.ID, clonedItem, origComp.Position, this, origComp.UsedResource);
+                Components.Add(newComponent);
+            }
+
             foreach (var origWire in original.Wires)
             {
                 Option<CircuitBoxConnection> to = CircuitBoxConnectorIdentifier.FromConnection(origWire.To).FindConnection(this),
-                                             from = CircuitBoxConnectorIdentifier.FromConnection(origWire.From).FindConnection(this);
+                    from = CircuitBoxConnectorIdentifier.FromConnection(origWire.From).FindConnection(this);
 
                 if (!to.TryUnwrap(out var toConn) || !from.TryUnwrap(out var fromConn))
                 {
@@ -227,7 +255,8 @@ namespace Barotrauma.Items.Components
                     continue;
                 }
 
-                var newWire = new CircuitBoxWire(this, origWire.ID, origWire.BackingWire.Select(w => clonedContainedItems[w.ID]), fromConn, toConn, origWire.UsedItemPrefab);
+                var wireItem = origWire.BackingWire.Select(w => clonedContainedItems[w.ID]);
+                var newWire = new CircuitBoxWire(this, origWire.ID, wireItem, fromConn, toConn, origWire.UsedItemPrefab);
                 Wires.Add(newWire);
             }
         }
@@ -249,6 +278,11 @@ namespace Barotrauma.Items.Components
             foreach (CircuitBoxWire wire in Wires)
             {
                 componentElement.Add(wire.Save());
+            }
+
+            foreach (var label in Labels)
+            {
+                componentElement.Add(label.Save());
             }
 
             return componentElement;
@@ -321,6 +355,48 @@ namespace Barotrauma.Items.Components
             return true;
         }
 
+        private void AddLabelInternal(ushort id, Color color, Vector2 pos, NetLimitedString header, NetLimitedString body)
+        {
+            var newLabel = new CircuitBoxLabelNode(id, color, pos, this);
+            newLabel.EditText(header, body);
+            Labels.Add(newLabel);
+            OnViewUpdateProjSpecific();
+        }
+
+        private void RemoveLabelInternal(IReadOnlyCollection<ushort> ids)
+        {
+            foreach (CircuitBoxLabelNode node in Labels.ToImmutableArray())
+            {
+                if (!ids.Contains(node.ID)) { continue; }
+                Labels.Remove(node);
+            }
+            OnViewUpdateProjSpecific();
+        }
+
+        private void ResizeLabelInternal(ushort id, Vector2 pos, Vector2 size)
+        {
+            size = Vector2.Max(size, CircuitBoxLabelNode.MinSize);
+            foreach (CircuitBoxLabelNode node in Labels)
+            {
+                if (node.ID != id) { continue; }
+                node.ApplyResize(size, pos);
+                break;
+            }
+            OnViewUpdateProjSpecific();
+        }
+
+        private void RenameConnectionLabelsInternal(CircuitBoxInputOutputNode.Type type, Dictionary<string, string> overrides)
+        {
+            foreach (var node in InputOutputNodes)
+            {
+                if (node.NodeType != type) { continue; }
+
+                node.ReplaceAllConnectionLabelOverrides(overrides);
+                break;
+            }
+            OnViewUpdateProjSpecific();
+        }
+
         private static bool IsExternalConnection(CircuitBoxConnection conn) => conn is (CircuitBoxInputConnection or CircuitBoxOutputConnection);
 
         private void CreateWireWithoutItem(CircuitBoxConnection one, CircuitBoxConnection two, ushort id, ItemPrefab prefab)
@@ -377,6 +453,18 @@ namespace Barotrauma.Items.Components
         private void AddWireDirect(ushort id, ItemPrefab prefab, Option<Item> backingItem, CircuitBoxConnection one, CircuitBoxConnection two)
             => Wires.Add(new CircuitBoxWire(this, id, backingItem, one, two, prefab));
 
+        private void RenameLabelInternal(ushort id, Color color, NetLimitedString header, NetLimitedString body)
+        {
+            foreach (CircuitBoxLabelNode node in Labels)
+            {
+                if (node.ID != id) { continue; }
+
+                node.EditText(header, body);
+                node.Color = color;
+                break;
+            }
+        }
+
         private bool AddComponentInternal(ushort id, ItemPrefab prefab, ItemPrefab usedResource, Vector2 pos, Character? user, Action<Item>? onItemSpawned)
         {
             if (id is ICircuitBoxIdentifiable.NullComponentID)
@@ -395,8 +483,8 @@ namespace Barotrauma.Items.Components
             {
                 Components.Add(new CircuitBoxComponent(id, spawnedItem, pos, this, usedResource));
                 onItemSpawned?.Invoke(spawnedItem);
+                OnViewUpdateProjSpecific();
             });
-
             OnViewUpdateProjSpecific();
             return true;
         }
@@ -423,6 +511,21 @@ namespace Barotrauma.Items.Components
             ClearSelectionFor(characterId, Components);
             ClearSelectionFor(characterId, InputOutputNodes);
             ClearSelectionFor(characterId, Wires);
+            ClearSelectionFor(characterId, Labels);
+        }
+
+        private void SelectLabelsInternal(IReadOnlyCollection<ushort> ids, ushort characterId, bool overwrite)
+        {
+            if (overwrite) { ClearSelectionFor(characterId, Labels); }
+
+            if (!ids.Any()) { return; }
+
+            foreach (CircuitBoxLabelNode node in Labels)
+            {
+                if (!ids.Contains(node.ID)) { continue; }
+
+                node.SetSelected(Option.Some(characterId));
+            }
         }
 
         private void SelectComponentsInternal(IReadOnlyCollection<ushort> ids, ushort characterId, bool overwrite)
@@ -441,7 +544,8 @@ namespace Barotrauma.Items.Components
 
         private void UpdateSelections(ImmutableDictionary<ushort, Option<ushort>> nodeIds,
                                       ImmutableDictionary<ushort, Option<ushort>> wireIds,
-                                      ImmutableDictionary<CircuitBoxInputOutputNode.Type, Option<ushort>> inputOutputs)
+                                      ImmutableDictionary<CircuitBoxInputOutputNode.Type, Option<ushort>> inputOutputs,
+                                      ImmutableDictionary<ushort, Option<ushort>> labels)
         {
             foreach (var wire in Wires)
             {
@@ -468,6 +572,13 @@ namespace Barotrauma.Items.Components
             foreach (var node in InputOutputNodes)
             {
                 if (!inputOutputs.TryGetValue(node.NodeType, out var selectedBy)) { continue; }
+
+                node.SetSelected(selectedBy);
+            }
+
+            foreach (var node in Labels)
+            {
+                if (!labels.TryGetValue(node.ID, out var selectedBy)) { continue; }
 
                 node.SetSelected(selectedBy);
             }
@@ -529,6 +640,18 @@ namespace Barotrauma.Items.Components
             OnViewUpdateProjSpecific();
         }
 
+        public void RemoveWire(Wire wireItem)
+        {
+            foreach (CircuitBoxWire wire in Wires.ToImmutableArray())
+            {
+                if (wire.BackingWire.TryUnwrap(out var backingWire) && backingWire == wireItem.Item) 
+                { 
+                    RemoveWireCollectionUnsafe(wire);
+                }
+            }
+            OnViewUpdateProjSpecific();
+        }
+
         private void RemoveWireCollectionUnsafe(CircuitBoxWire wire)
         {
             foreach (CircuitBoxOutputConnection output in Outputs)
@@ -552,12 +675,18 @@ namespace Barotrauma.Items.Components
 
         private void MoveNodesInternal(IReadOnlyCollection<ushort> ids,
                                        IReadOnlyCollection<CircuitBoxInputOutputNode.Type> ios,
+                                       IReadOnlyCollection<ushort> labels,
                                        Vector2 moveAmount)
         {
             IEnumerable<CircuitBoxComponent> nodes = Components.Where(node => ids.Contains(node.ID));
             foreach (CircuitBoxComponent node in nodes)
             {
                 node.Position += moveAmount;
+            }
+
+            foreach (var label in Labels.Where(n => labels.Contains(n.ID)))
+            {
+                label.Position += moveAmount;
             }
 
 
@@ -632,7 +761,7 @@ namespace Barotrauma.Items.Components
             }
         }
 
-        public static ImmutableArray<Item> GetSortedCircuitBoxSortedItemsFromPlayer(Character? character)
+        public static ImmutableArray<Item> GetSortedCircuitBoxItemsFromPlayer(Character? character)
             => character?.Inventory?.FindAllItems(predicate: CanItemBeAccessed, recursive: true)
                         .OrderBy(static i => i.Prefab.Identifier == Tags.FPGACircuit)
                         .ToImmutableArray() ?? ImmutableArray<Item>.Empty;
@@ -644,11 +773,13 @@ namespace Barotrauma.Items.Components
                 _ => true
             };
 
+        public bool IsLocked() => Locked || TemporarilyLocked;
+
         public static Option<Item> GetApplicableResourcePlayerHas(ItemPrefab prefab, Character? character)
         {
             if (character is null) { return Option.None; }
 
-            return GetApplicableResourcePlayerHas(prefab, GetSortedCircuitBoxSortedItemsFromPlayer(character));
+            return GetApplicableResourcePlayerHas(prefab, GetSortedCircuitBoxItemsFromPlayer(character));
         }
 
         public static Option<Item> GetApplicableResourcePlayerHas(ItemPrefab prefab, ImmutableArray<Item> playerItems)

@@ -1,4 +1,4 @@
-namespace Barotrauma
+﻿namespace Barotrauma
 {
     public enum InputType
     {
@@ -7,15 +7,17 @@ namespace Barotrauma
         Aim,
         Up, Down, Left, Right,
         Attack,
-        Run, Crouch,
+        Run, ToggleRun, Crouch,
         InfoTab, Chat, RadioChat, CrewOrders,
         Ragdoll, Health, Grab,
+        DropItem,
         SelectNextCharacter,
         SelectPreviousCharacter,
         Voice, RadioVoice, LocalVoice,
         Deselect,
         Shoot,
         Command,
+        ContextualCommand,
         ToggleInventory,
         TakeOneFromInventorySlot,
         TakeHalfFromInventorySlot,
@@ -23,6 +25,7 @@ namespace Barotrauma
         PreviousFireMode,
         ActiveChat,
         ToggleChatMode,
-        ChatBox
+        ChatBox,
+        ShowInteractionLabels
     }
 }

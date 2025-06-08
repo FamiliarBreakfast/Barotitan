@@ -78,6 +78,11 @@ namespace Barotrauma.Networking
 
             public bool IsProcessed;
 
+            /// <summary>
+            /// Does the client need to be controlling a character for the server to consider the event valid?
+            /// </summary>
+            public bool RequireCharacter = true;
+
             public BufferedEvent(Client sender, Character senderCharacter, UInt16 characterStateID, IClientSerializable targetEntity, ReadWriteMessage data)
             {
                 this.Sender = sender;
@@ -157,15 +162,19 @@ namespace Barotrauma.Networking
             {
                 if (bufferedEvent.Character == null || bufferedEvent.Character.IsDead)
                 {
-                    bufferedEvent.IsProcessed = true;
-                    continue;
+                    if (bufferedEvent.RequireCharacter)
+                    {
+                        bufferedEvent.IsProcessed = true;
+                        continue;
+                    }
                 }
 
                 //delay reading the events until the inputs for the corresponding frame have been processed
 
                 //UNLESS the character is unconscious, in which case we'll read the messages immediately (because further inputs will be ignored)
                 //atm the "give in" command is the only thing unconscious characters can do, other types of events are ignored
-                if (!bufferedEvent.Character.IsIncapacitated &&
+                if (bufferedEvent.Character != null &&
+                    !bufferedEvent.Character.IsIncapacitated &&
                     NetIdUtils.IdMoreRecent(bufferedEvent.CharacterStateID, bufferedEvent.Character.LastProcessedID))
                 {
                     DebugConsole.Log($"Delaying reading entity event sent by a client until the character state has been processed. Event's character state: {bufferedEvent.CharacterStateID}, last processed character state: {bufferedEvent.Character.LastProcessedID}");
@@ -220,7 +229,9 @@ namespace Barotrauma.Networking
                     GameMain.GameSession.RoundDuration > NetConfig.RoundStartSyncDuration)
                 {
                     lastWarningTime = Timing.TotalTime;
-                    GameServer.Log("WARNING: ServerEntityEventManager is lagging behind! Last sent id: " + lastSentToAnyone.ToString() + ", latest create id: " + ID.ToString(), ServerLog.MessageType.ServerMessage);
+                    string warningMsg = $"WARNING: ServerEntityEventManager is lagging behind! Last sent id: {lastSentToAnyone}, latest create id: {ID}";
+                    warningMsg += "\n" + GetHighEventCountsWarning(events, maxEventsToList: 3);
+                    GameServer.Log(warningMsg, ServerLog.MessageType.ServerMessage);
                     events.ForEach(e => e.ResetCreateTime());
                     //TODO: reset clients if this happens, maybe do it if a majority are behind rather than all of them?
                 }
@@ -314,30 +325,20 @@ namespace Barotrauma.Networking
             }
 
             //too many events for one packet
-            //(normal right after a round has just started, don't show a warning if it's been less than 10 seconds)
-            if (eventsToSync.Count > 200 && GameMain.GameSession != null && GameMain.GameSession.RoundDuration > 10.0)
+            //(normal right after a round has just started, don't show a warning if it's been less than 30 seconds)
+            if (eventsToSync.Count > 200 && GameMain.GameSession != null && GameMain.GameSession.RoundDuration > 30.0)
             {
                 if (eventsToSync.Count > 200 && !client.NeedsMidRoundSync && Timing.TotalTime > lastEventCountHighWarning + 2.0)
                 {
                     Color color = eventsToSync.Count > 500 ? Color.Red : Color.Orange;
                     if (eventsToSync.Count < 300) { color = Color.Yellow; }
                     string warningMsg = "WARNING: event count very high: " + eventsToSync.Count;
-
-                    var sortedEvents = eventsToSync.GroupBy(e => e.Entity.ToString())
-                        .Select(e => new { Value = e.Key, Count = e.Count() })
-                        .OrderByDescending(e => e.Count);
-
-                    int count = 1;
-                    foreach (var sortedEvent in sortedEvents)
-                    {
-                        warningMsg += "\n" + count + ". " + (sortedEvent.Value?.ToString() ?? "null") + " x" + sortedEvent.Count;
-                        count++;
-                        if (count > 3) { break; }
-                    }
+                    warningMsg += "\n" + GetHighEventCountsWarning(eventsToSync, maxEventsToList: 3);
                     if (GameSettings.CurrentConfig.VerboseLogging)
                     {
                         GameServer.Log(warningMsg, ServerLog.MessageType.Error);
                     }
+                    server.SendConsoleMessage(warningMsg, client, color);
                     DebugConsole.NewMessage(warningMsg, color);
                     lastEventCountHighWarning = Timing.TotalTime;
                 }
@@ -362,6 +363,31 @@ namespace Barotrauma.Networking
                 (entityEvent as ServerEntityEvent).Sent = true;
                 client.EntityEventLastSent[entityEvent.ID] = Lidgren.Network.NetTime.Now;
             }
+        }
+
+        private string GetHighEventCountsWarning(IEnumerable<NetEntityEvent> events, int maxEventsToList)
+        {
+            string warningMsg = string.Empty;
+
+            var sortedEvents = events.GroupBy(e => e.Entity.ToString())
+                .Select(e => new { Value = e.First(), Count = e.Count() })
+                .OrderByDescending(e => e.Count);
+
+            int count = 1;
+            foreach (var sortedEvent in sortedEvents)
+            {
+                Entity targetEntity = sortedEvent.Value.Entity;
+                if (!warningMsg.IsNullOrEmpty()) { warningMsg += "\n"; }
+                warningMsg += count + ". " + (targetEntity?.ToString() ?? "null") + " x" + sortedEvent.Count;
+                if (targetEntity != null && targetEntity.ContentPackage != ContentPackageManager.VanillaCorePackage)
+                {
+                    warningMsg += $" (content package: {targetEntity.ContentPackage.Name})";
+                }
+                count++;
+                if (count > maxEventsToList) { break; }
+            }
+
+            return warningMsg;
         }
 
         /// <summary>
@@ -426,8 +452,9 @@ namespace Barotrauma.Networking
             }
             else
             {
-                double midRoundSyncTimeOut = uniqueEvents.Count / 100 * server.UpdateInterval.TotalSeconds;
-                midRoundSyncTimeOut = Math.Max(10.0f, midRoundSyncTimeOut * 10.0f);
+                //assume we can get at least 10 events per second through
+                double midRoundSyncTimeOut = uniqueEvents.Count / 10 * server.UpdateInterval.TotalSeconds;
+                midRoundSyncTimeOut = Math.Max(midRoundSyncTimeOut, server.ServerSettings.MinimumMidRoundSyncTimeout);
 
                 client.UnreceivedEntityEventCount = (UInt16)uniqueEvents.Count;
                 client.NeedsMidRoundSync = true;
@@ -502,7 +529,12 @@ namespace Barotrauma.Networking
                     byte[] temp = msg.ReadBytes(msgLength - 2);
                     buffer.WriteBytes(temp, 0, msgLength - 2);
                     buffer.BitPosition = 0;
-                    BufferEvent(new BufferedEvent(sender, sender.Character, characterStateID, entity, buffer));
+                    BufferEvent(
+                        new BufferedEvent(sender, sender.Character, characterStateID, entity, buffer)
+                        {
+                            //hull updates can be sent without a character to allow editing water and fire in spectator mode
+                            RequireCharacter = entity is not Hull
+                        });
 
                     sender.LastSentEntityEventID++;
                 }

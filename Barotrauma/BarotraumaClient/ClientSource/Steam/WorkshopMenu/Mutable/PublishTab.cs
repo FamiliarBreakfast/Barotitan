@@ -88,17 +88,21 @@ namespace Barotrauma.Steam
 
         private void DeselectPublishedItem()
         {
-            var deselectCarrier = selfModsList.Parent.FindChild(c => c.UserData is ActionCarrier { Id: var id } && id == "deselect");
-            Action? deselectAction = deselectCarrier.UserData is ActionCarrier { Action: var action }
-                ? action
-                : null;
-            deselectAction?.Invoke();
+            if (selfModsListOption.TryUnwrap(out var selfModsList))
+            {
+                var deselectCarrier = selfModsList.Parent.FindChild(c => c.UserData is ActionCarrier { Id: var id } && id == "deselect");
+                Action? deselectAction = deselectCarrier.UserData is ActionCarrier { Action: var action }
+                    ? action
+                    : null;
+                deselectAction?.Invoke();
+            }
+
             SelectTab(Tab.Publish);
         }
-        
+
         private static bool PackageMatchesItem(ContentPackage p, Steamworks.Ugc.Item workshopItem)
             => p.TryExtractSteamWorkshopId(out var workshopId) && workshopId.Value == workshopItem.Id;
-        
+
         private void PopulatePublishTab(ItemOrPackage itemOrPackage, GUIFrame parentFrame)
         {
             ContentPackageManager.LocalPackages.Refresh();
@@ -226,9 +230,12 @@ namespace Barotrauma.Steam
                         SteamManager.Workshop.GetItemAsap(workshopItem.Id.Value, withLongDescription: true),
                         t =>
                         {
-                            if (!t.TryGetResult(out Steamworks.Ugc.Item? itemWithDescription)) { return; }
+                            if (!t.TryGetResult(out Option<Steamworks.Ugc.Item> itemWithDescriptionOption)) { return; }
 
-                            descriptionTextBox.Text = itemWithDescription?.Description ?? descriptionTextBox.Text;
+                            descriptionTextBox.Text =
+                                itemWithDescriptionOption.TryUnwrap(out var itemWithDescription)
+                                    ? itemWithDescription.Description ?? descriptionTextBox.Text
+                                    : descriptionTextBox.Text;
                             descriptionTextBox.Deselect();
                         });
                 }
@@ -296,7 +303,7 @@ namespace Barotrauma.Steam
 
                 var fileInfoLabel = Label(rightBottom, "", GUIStyle.Font, heightScale: 1.0f);
                 fileInfoLabel.TextAlignment = Alignment.CenterRight;
-                TaskPool.Add($"FileInfoLabel{workshopItem.Id}", GetModDirInfo(localPackage.Dir, fileInfoLabel), t => { });
+                TaskPool.AddWithResult($"FileInfoLabel{workshopItem.Id}", GetModDirInfo(localPackage.Dir, fileInfoLabel), t => { });
 
                 GUILayoutGroup buttonLayout = new GUILayoutGroup(NewItemRectT(rightBottom), isHorizontal: true, childAnchor: Anchor.CenterRight);
 
@@ -351,7 +358,7 @@ namespace Barotrauma.Steam
                                 buttons: new[] { TextManager.Get("Yes"), TextManager.Get("No") });
                             confirmDeletion.Buttons[0].OnClicked = (yesBuffer, o1) =>
                             {
-                                TaskPool.Add($"Delete{workshopItem.Id}", Steamworks.SteamUGC.DeleteFileAsync(workshopItem.Id),
+                                TaskPool.AddWithResult($"Delete{workshopItem.Id}", Steamworks.SteamUGC.DeleteFileAsync(workshopItem.Id),
                                     t =>
                                     {
                                         SteamManager.Workshop.Uninstall(workshopItem);
@@ -379,7 +386,7 @@ namespace Barotrauma.Steam
 
         private IEnumerable<CoroutineStatus> MessageBoxCoroutine(Func<GUITextBlock, GUIMessageBox, IEnumerable<CoroutineStatus>> subcoroutine)
         {
-            var messageBox = new GUIMessageBox("", TextManager.Get("ellipsis"), buttons: new [] { TextManager.Get("Cancel") });
+            var messageBox = new GUIMessageBox("", TextManager.Get("ellipsis").Fallback("..."), buttons: new [] { TextManager.Get("Cancel") });
             messageBox.Buttons[0].OnClicked = (button, o) =>
             {
                 messageBox.Close();
@@ -452,7 +459,7 @@ namespace Barotrauma.Steam
             }
 
             bool localCopyMade = false;
-            TaskPool.Add($"Create local copy {workshopItem.Title}",
+            TaskPool.AddWithResult($"Create local copy {workshopItem.Title}",
                 SteamManager.Workshop.CreateLocalCopy(workshopCopy),
                 (t) =>
                 {
@@ -487,7 +494,8 @@ namespace Barotrauma.Steam
                     stagingReady = true;
                     stagingException = t.Exception?.GetInnermost();
                 });
-            currentStepText.Text = TextManager.Get("PublishPopupStaging");
+            TrySetText("PublishPopupStaging");
+            
             while (!stagingReady) { yield return new WaitForSeconds(0.5f); }
 
             if (stagingException != null)
@@ -512,7 +520,7 @@ namespace Barotrauma.Steam
                     }
                     resultException = t.Exception?.GetInnermost();
                 });
-            currentStepText.Text = TextManager.Get("PublishPopupSubmit");
+            TrySetText("PublishPopupSubmit");
             while (!result.HasValue && resultException is null) { yield return new WaitForSeconds(0.5f); }
 
             if (result is { Success: true })
@@ -560,7 +568,7 @@ namespace Barotrauma.Steam
                     });
                 while (!installed)
                 {
-                    currentStepText.Text = TextManager.Get("PublishPopupInstall");
+                    TrySetText("PublishPopupInstall");
                     yield return new WaitForSeconds(0.5f);
                 }
 
@@ -594,6 +602,14 @@ namespace Barotrauma.Steam
 
             SteamManager.Workshop.DeletePublishStagingCopy();
             messageBox.Close();
+
+            void TrySetText(string textTag)
+            {
+                if (currentStepText?.Text != null)
+                {
+                    currentStepText.Text = TextManager.Get(textTag);
+                }
+            }
         }
     }
 }

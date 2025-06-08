@@ -46,7 +46,7 @@ namespace Barotrauma.Items.Components
 
             if (item.CurrentHull == null) { return; }
             
-            if (Voltage < MinVoltage && PowerConsumption > 0)
+            if (!HasPower && PowerConsumption > 0)
             {
                 return;
             }
@@ -91,7 +91,7 @@ namespace Barotrauma.Items.Components
             ventList.Clear();
             foreach (MapEntity entity in item.linkedTo)
             {
-                if (!(entity is Item linkedItem)) { continue; }
+                if (entity is not Item linkedItem) { continue; }
 
                 Vent vent = linkedItem.GetComponent<Vent>();
                 if (vent?.Item.CurrentHull == null) { continue; }
@@ -131,6 +131,20 @@ namespace Barotrauma.Items.Components
                 vent.OxygenFlow = deltaOxygen * (hullVolume / totalHullVolume);
                 vent.IsActive = true;
             }
+        }
+
+        public float GetVentOxygenFlow(Vent targetVent)
+        {
+            if (ventList == null)
+            {
+                GetVents();
+            }
+            foreach ((Vent vent, float hullVolume) in ventList)
+            {
+                if (vent != targetVent) { continue; }
+                return generatedAmount * 100.0f * (hullVolume / totalHullVolume);
+            }
+            return 0.0f;
         }
     }
 }

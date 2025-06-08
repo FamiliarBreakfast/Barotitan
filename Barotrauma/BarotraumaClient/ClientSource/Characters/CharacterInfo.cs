@@ -1,4 +1,4 @@
-using Barotrauma.Extensions;
+﻿using Barotrauma.Extensions;
 using Barotrauma.Networking;
 using System;
 using System.Linq;
@@ -17,7 +17,8 @@ namespace Barotrauma
         private static Sprite infoAreaPortraitBG;
 
         public bool LastControlled;
-        public int CrewListIndex { get; set; } = -1;
+               
+        public int CrewListIndex { get; set; } = int.MaxValue; //default to the bottom of the list
 
         private Sprite disguisedPortrait;
         private List<WearableSprite> disguisedAttachmentSprites;
@@ -31,6 +32,8 @@ namespace Barotrauma
         private Sprite tintMask;
         private float tintHighlightThreshold;
         private float tintHighlightMultiplier;
+
+        public bool ShowTalentResetPopupOnOpen = true;
 
         public static void Init()
         {
@@ -46,6 +49,7 @@ namespace Barotrauma
                 ContentPath tintMaskPath = maskElement.GetAttributeContentPath("texture");
                 if (!tintMaskPath.IsNullOrEmpty())
                 {
+                    VerifySpriteTagsLoaded();
                     tintMask = new Sprite(maskElement, file: Limb.GetSpritePath(tintMaskPath, this));
                     tintHighlightThreshold = maskElement.GetAttributeFloat("highlightthreshold", 0.6f);
                     tintHighlightMultiplier = maskElement.GetAttributeFloat("highlightmultiplier", 0.8f);
@@ -61,7 +65,7 @@ namespace Barotrauma
                //Stretch = true
             };
 
-            var headerArea = new GUILayoutGroup(new RectTransform(new Vector2(1.0f, 0.322f), paddedFrame.RectTransform), isHorizontal: true);
+            var headerArea = new GUILayoutGroup(new RectTransform(new Vector2(1.0f, 0.4f), paddedFrame.RectTransform), isHorizontal: true);
 
             new GUICustomComponent(new RectTransform(new Vector2(0.425f, 1.0f), headerArea.RectTransform), 
                 onDraw: (sb, component) => DrawInfoFrameCharacterIcon(sb, component.Rect));
@@ -140,7 +144,7 @@ namespace Barotrauma
                 {
                     Color textColor = Color.White * (0.5f + skill.Level / 200.0f);
 
-                    var skillName = new GUITextBlock(new RectTransform(new Vector2(1.0f, 0.0f), skillsArea.RectTransform), TextManager.Get("SkillName." + skill.Identifier), textColor: textColor, font: font) { Padding = Vector4.Zero };
+                    var skillName = new GUITextBlock(new RectTransform(new Vector2(1.0f, 0.0f), skillsArea.RectTransform), skill.DisplayName, textColor: textColor, font: font) { Padding = Vector4.Zero };
 
                     float modifiedSkillLevel = skill.Level;
                     if (Character != null)
@@ -185,7 +189,7 @@ namespace Barotrauma
 
         private void DrawInfoFrameCharacterIcon(SpriteBatch sb, Rectangle componentRect)
         {
-            if (_headSprite == null) { return; }
+            if (HeadSprite == null) { return; }
             Vector2 targetAreaSize = componentRect.Size.ToVector2();
             float scale = Math.Min(targetAreaSize.X / _headSprite.size.X, targetAreaSize.Y / _headSprite.size.Y);
             DrawIcon(sb, componentRect.Location.ToVector2() + _headSprite.size / 2 * scale, targetAreaSize);
@@ -207,7 +211,7 @@ namespace Barotrauma
             return frame;
         }
 
-        partial void OnSkillChanged(Identifier skillIdentifier, float prevLevel, float newLevel)
+        partial void OnSkillChanged(Identifier skillIdentifier, float prevLevel, float newLevel, bool forceNotification)
         {
             if (TeamID == CharacterTeamType.FriendlyNPC) { return; }
             if (Character.Controlled != null && Character.Controlled.TeamID != TeamID) { return; }
@@ -217,12 +221,25 @@ namespace Barotrauma
 
             if ((int)newLevel > (int)prevLevel)
             {
+                Character.Controlled?.SelectedItem?.OnPlayerSkillsChanged();
                 int increase = Math.Max((int)newLevel - (int)prevLevel, 1);
 
                 Character?.AddMessage(
                     "+[value] "+ TextManager.Get("SkillName." + skillIdentifier).Value, 
                     specialIncrease ? GUIStyle.Orange : GUIStyle.Green, 
                     playSound: Character == Character.Controlled, skillIdentifier, increase);
+            }
+            else if (forceNotification)
+            {
+                float change = newLevel - prevLevel;
+                if (Math.Abs(change) > 0.01f)
+                {
+                    string sign = change > 0 ? "+" : "-";
+                    Character?.AddMessage(
+                        $"{sign}{Math.Round(change, 2)} {TextManager.Get("SkillName." + skillIdentifier).Value}",
+                        specialIncrease ? GUIStyle.Orange : GUIStyle.Green,
+                        playSound: Character == Character.Controlled);
+                }
             }
         }
 
@@ -509,6 +526,17 @@ namespace Barotrauma
             else
             {
                 origin = attachment.Sprite.Origin;
+                if (spriteEffects.HasFlag(SpriteEffects.FlipHorizontally))
+                {
+                    origin.X = attachment.Sprite.size.X - origin.X;
+                }
+                if (spriteEffects.HasFlag(SpriteEffects.FlipVertically))
+                {
+                    origin.Y = attachment.Sprite.size.Y - origin.Y;
+                }
+                //the portrait's origin is forced to 0,0 (presumably for easier drawing on the UI?), see LoadHeadElement
+                //we need to take that into account here and draw the attachment at where the origin of the "actual" head sprite would be
+                drawPos += HeadSprite.Origin * scale;
             }
             float depth = attachment.Sprite.Depth;
             if (attachment.InheritLimbDepth)
@@ -518,11 +546,14 @@ namespace Barotrauma
             attachment.Sprite.Draw(spriteBatch, drawPos, color ?? Color.White, origin, rotate: 0, scale: scale, depth: depth, spriteEffect: spriteEffects);
         }
 
-        public static CharacterInfo ClientRead(Identifier speciesName, IReadMessage inc)
+        public static CharacterInfo ClientRead(Identifier speciesName, IReadMessage inc, bool requireJobPrefabFound = true)
         {
             ushort infoID = inc.ReadUInt16();
             string newName = inc.ReadString();
             string originalName = inc.ReadString();
+            bool renamingEnabled = inc.ReadBoolean();
+            BotStatus botStatus = (BotStatus)inc.ReadByte();
+            int salary = inc.ReadInt32();
             int tagCount = inc.ReadByte();
             HashSet<Identifier> tagSet = new HashSet<Identifier>();
             for (int i = 0; i < tagCount; i++)
@@ -537,12 +568,12 @@ namespace Barotrauma
             Color hairColor = inc.ReadColorR8G8B8();
             Color facialHairColor = inc.ReadColorR8G8B8();
 
-            string ragdollFile = inc.ReadString();
+
             Identifier npcId = inc.ReadIdentifier();
 
             Identifier factionId = inc.ReadIdentifier();
             float minReputationToHire = 0.0f;
-            if (factionId != default)
+            if (!factionId.IsEmpty)
             {
                 minReputationToHire = inc.ReadSingle();
             }
@@ -554,22 +585,27 @@ namespace Barotrauma
             if (jobIdentifier > 0)
             {
                 jobPrefab = JobPrefab.Prefabs.Find(jp => jp.UintIdentifier == jobIdentifier);
-                if (jobPrefab == null)
+                if (jobPrefab == null && requireJobPrefabFound)
                 {
                     throw new Exception($"Error while reading {nameof(CharacterInfo)} received from the server: could not find a job prefab with the identifier \"{jobIdentifier}\".");
                 }
-                foreach (SkillPrefab skillPrefab in jobPrefab.Skills.OrderBy(s => s.Identifier))
+                byte skillCount = inc.ReadByte();
+                for (int i = 0; i < skillCount; i++)
                 {
+                    Identifier skillIdentifier = inc.ReadIdentifier();
                     float skillLevel = inc.ReadSingle();
-                    skillLevels.Add(skillPrefab.Identifier, skillLevel);
+                    skillLevels.Add(skillIdentifier, skillLevel);
                 }
             }
 
-            CharacterInfo ch = new CharacterInfo(speciesName, newName, originalName, jobPrefab, ragdollFile, variant, npcIdentifier: npcId)
+            CharacterInfo ch = new CharacterInfo(speciesName, newName, originalName, jobPrefab, variant, npcIdentifier: npcId)
             {
                 ID = infoID,
-                MinReputationToHire = (factionId, minReputationToHire)
+                MinReputationToHire = (factionId, minReputationToHire),
+                RenamingEnabled = renamingEnabled
             };
+            ch.BotStatus = botStatus;
+            ch.Salary = salary;
             ch.RecreateHead(tagSet.ToImmutableHashSet(), hairIndex, beardIndex, moustacheIndex, faceAttachmentIndex);
             ch.Head.SkinColor = skinColor;
             ch.Head.HairColor = hairColor;
@@ -579,6 +615,9 @@ namespace Barotrauma
 
             ch.ExperiencePoints = inc.ReadInt32();
             ch.AdditionalTalentPoints = inc.ReadRangedInteger(0, MaxAdditionalTalentPoints);
+            ch.PermanentlyDead = inc.ReadBoolean();
+            ch.TalentRefundPoints = inc.ReadInt32();
+            ch.TalentResetCount = inc.ReadInt32();
             return ch;
         }
 

@@ -181,10 +181,13 @@ function character.death(character) end
 -- @realm shared
 function character.applyAffliction(character, limbHealth, newAffliction, allowStacking) end
 
---- Gets gets called every time an attack damage.
+--- Gets gets called every time a character gets damaged by an attack.
 -- @realm shared
-function character.applyDamage(character, attackResult, hitLimb, allowStacking) end
+function character.applyDamage(characterHealth, attackResult, hitLimb, allowStacking) end
 
+--- Gets gets called every time a limb gets damaged by an attack.
+-- @realm shared
+function character.damageLimb(character, worldPosition, hitLimb, afflictions, stun, playSound, attackImpulse, attacker, damageMultiplier, allowStacking, penetration, shouldImplode) end
 
 --- Gets called every time an affliction updates.
 -- @realm shared

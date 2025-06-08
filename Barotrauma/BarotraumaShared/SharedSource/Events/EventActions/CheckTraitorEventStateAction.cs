@@ -2,9 +2,12 @@
 
 namespace Barotrauma
 {
+    /// <summary>
+    /// Check the state of the traitor event the action is defined in. Only valid for traitor events.
+    /// </summary>
     class CheckTraitorEventStateAction : BinaryOptionAction
     {
-        [Serialize(TraitorEvent.State.Completed, IsPropertySaveable.Yes)]
+        [Serialize(TraitorEvent.State.Completed, IsPropertySaveable.Yes, description: "What does the state of the event need to be for the check to succeed?")]
         public TraitorEvent.State State { get; set; }
 
         private readonly TraitorEvent? traitorEvent;
@@ -17,7 +20,8 @@ namespace Barotrauma
             }
             else
             {
-                DebugConsole.ThrowError($"Cannot use the action {nameof(CheckTraitorEventStateAction)} in the event \"{parentEvent.Prefab.Identifier}\" because it's not a traitor event.");
+                DebugConsole.ThrowError($"Cannot use the action {nameof(CheckTraitorEventStateAction)} in the event \"{parentEvent.Prefab.Identifier}\" because it's not a traitor event.",
+                    contentPackage: element.ContentPackage);
             }
         }
 

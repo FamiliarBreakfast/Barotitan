@@ -9,7 +9,10 @@ using Microsoft.Xna.Framework.Input;
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Linq;
+using System.Text;
 
 namespace Barotrauma
 {
@@ -127,14 +130,14 @@ namespace Barotrauma
             }
         }
 
-        public float GetDrawDepth()
+        public override float GetDrawDepth()
         {
             return GetDrawDepth(SpriteDepth + DrawDepthOffset, Sprite);
         }
 
-        public Color GetSpriteColor(bool withHighlight = false)
+        public Color GetSpriteColor(Color? defaultColor = null, bool withHighlight = false)
         {
-            Color color = spriteColor;
+            Color color = defaultColor ?? spriteColor;
             if (Prefab.UseContainedSpriteColor && ownInventory != null)
             {
                 foreach (Item item in ContainedItems)
@@ -216,7 +219,7 @@ namespace Barotrauma
                 }
             }
 
-            float displayCondition = FakeBroken ? 0.0f : ConditionPercentage;
+            float displayCondition = FakeBroken ? 0.0f : ConditionPercentageRelativeToDefaultMaxCondition;
             for (int i = 0; i < Prefab.BrokenSprites.Length;i++)
             {
                 if (Prefab.BrokenSprites[i].FadeIn) { continue; }
@@ -284,9 +287,10 @@ namespace Barotrauma
             }
             else
             {
-                int padding = 100;
+                int padding = 0;
 
-                Vector2 min = new Vector2(-rect.Width / 2 - padding, -rect.Height / 2 - padding);
+                RectangleF boundingBox = GetTransformedQuad().BoundingAxisAlignedRectangle;
+                Vector2 min = new Vector2(-boundingBox.Width / 2 - padding, -boundingBox.Height / 2 - padding);
                 Vector2 max = -min;
 
                 foreach (IDrawableComponent drawable in drawableComponents)
@@ -298,11 +302,11 @@ namespace Barotrauma
                 }
                 foreach (DecorativeSprite decorativeSprite in Prefab.DecorativeSprites)
                 {
-                    float scale = decorativeSprite.GetScale(spriteAnimState[decorativeSprite].RandomScaleFactor) * Scale;
-                    min.X = Math.Min(-decorativeSprite.Sprite.size.X * decorativeSprite.Sprite.RelativeOrigin.X * scale, min.X);
-                    min.Y = Math.Min(-decorativeSprite.Sprite.size.Y * (1.0f - decorativeSprite.Sprite.RelativeOrigin.Y) * scale, min.Y);
-                    max.X = Math.Max(decorativeSprite.Sprite.size.X * (1.0f - decorativeSprite.Sprite.RelativeOrigin.X) * scale, max.X);
-                    max.Y = Math.Max(decorativeSprite.Sprite.size.Y * decorativeSprite.Sprite.RelativeOrigin.Y * scale, max.Y);
+                    Vector2 scale = decorativeSprite.GetScale(ref spriteAnimState[decorativeSprite].ScaleState, spriteAnimState[decorativeSprite].RandomScaleFactor) * Scale;
+                    min.X = Math.Min(-decorativeSprite.Sprite.size.X * decorativeSprite.Sprite.RelativeOrigin.X * scale.X, min.X);
+                    min.Y = Math.Min(-decorativeSprite.Sprite.size.Y * (1.0f - decorativeSprite.Sprite.RelativeOrigin.Y) * scale.Y, min.Y);
+                    max.X = Math.Max(decorativeSprite.Sprite.size.X * (1.0f - decorativeSprite.Sprite.RelativeOrigin.X) * scale.X, max.X);
+                    max.Y = Math.Max(decorativeSprite.Sprite.size.Y * decorativeSprite.Sprite.RelativeOrigin.Y * scale.Y, max.Y);
                 }
                 cachedVisibleExtents = extents = new Rectangle(min.ToPoint(), max.ToPoint());
             }
@@ -311,6 +315,9 @@ namespace Barotrauma
 
             if (worldPosition.X + extents.X > worldView.Right || worldPosition.X + extents.Width < worldView.X) { return false; }
             if (worldPosition.Y + extents.Height < worldView.Y - worldView.Height || worldPosition.Y + extents.Y > worldView.Y) { return false; }
+
+            if (extents.Width * Screen.Selected.Cam.Zoom < 1.0f) { return false; }
+            if (extents.Height * Screen.Selected.Cam.Zoom < 1.0f) { return false; }
 
             return true;
         }
@@ -322,7 +329,7 @@ namespace Barotrauma
 
         public void Draw(SpriteBatch spriteBatch, bool editing, bool back = true, Color? overrideColor = null)
         {
-            if (!Visible || (!editing && HiddenInGame) || !SubEditorScreen.IsLayerVisible(this)) { return; }
+            if (!Visible || (!editing && IsHidden) || !SubEditorScreen.IsLayerVisible(this)) { return; }
 
             if (editing)
             {
@@ -333,17 +340,34 @@ namespace Barotrauma
                 else if (!ShowItems) { return; }
             }
 
-            Color color = 
-                overrideColor ??
-                (IsIncludedInSelection && editing ?  GUIStyle.Blue : GetSpriteColor(withHighlight: true));
+            Color color = GetSpriteColor(spriteColor);
 
             bool isWiringMode = editing && SubEditorScreen.TransparentWiringMode && SubEditorScreen.IsWiringMode() && !isWire && parentInventory == null;
             bool renderTransparent = isWiringMode && GetComponent<ConnectionPanel>() == null;
             if (renderTransparent) { color *= 0.15f; }
 
+            if (Character.Controlled != null && Character.DebugDrawInteract)
+            {
+                color = Color.Red;
+                foreach (var ic in components)
+                {
+                    var interactionType = GetComponentInteractionVisibility(Character.Controlled, ic);
+                    if (interactionType == InteractionVisibility.MissingRequirement)
+                    {
+                        color = Color.Orange;
+                    }
+                    else if (interactionType == InteractionVisibility.Visible)
+                    {
+                        color = Color.LightGreen;
+                        break;
+                    }
+                }
+            }
+
             BrokenItemSprite fadeInBrokenSprite = null;
             float fadeInBrokenSpriteAlpha = 0.0f;
-            float displayCondition = FakeBroken ? 0.0f : ConditionPercentage;
+
+            float displayCondition = FakeBroken ? 0.0f : ConditionPercentageRelativeToDefaultMaxCondition;
             Vector2 drawOffset = GetCollapseEffectOffset();
             drawOffset.Y = -drawOffset.Y;            
 
@@ -384,13 +408,13 @@ namespace Barotrauma
                     fadeInBrokenSprite.Sprite.effects ^= SpriteEffects;
                 }
 
-                if (body == null)
+                if (body == null || body.BodyType == BodyType.Static)
                 {
                     if (Prefab.ResizeHorizontal || Prefab.ResizeVertical)
                     {
-                        Vector2 size = new Vector2(rect.Width, rect.Height);
                         if (color.A > 0)
                         {
+                            Vector2 size = new Vector2(rect.Width, rect.Height);
                             activeSprite.DrawTiled(spriteBatch, new Vector2(DrawPosition.X - rect.Width / 2, -(DrawPosition.Y + rect.Height / 2)) + drawOffset,
                                 size, color: color,
                                 textureScale: Vector2.One * Scale,
@@ -403,18 +427,7 @@ namespace Barotrauma
                                     textureScale: Vector2.One * Scale,
                                     depth: d);
                             }
-                            foreach (var decorativeSprite in Prefab.DecorativeSprites)
-                            {
-                                if (!spriteAnimState[decorativeSprite].IsActive) { continue; }
-                                Vector2 offset = decorativeSprite.GetOffset(ref spriteAnimState[decorativeSprite].OffsetState, spriteAnimState[decorativeSprite].RandomOffsetMultiplier, flippedX && Prefab.CanSpriteFlipX ? RotationRad : -RotationRad) * Scale;
-                                if (flippedX && Prefab.CanSpriteFlipX) { offset.X = -offset.X; }
-                                if (flippedY && Prefab.CanSpriteFlipY) { offset.Y = -offset.Y; }
-                                decorativeSprite.Sprite.DrawTiled(spriteBatch,
-                                    new Vector2(DrawPosition.X + offset.X - rect.Width / 2, -(DrawPosition.Y + offset.Y + rect.Height / 2)),
-                                    size, color: color,
-                                    textureScale: Vector2.One * Scale,
-                                    depth: Math.Min(depth + (decorativeSprite.Sprite.Depth - activeSprite.Depth), 0.999f));
-                            }
+                            DrawDecorativeSprites(spriteBatch, DrawPosition, flippedX && Prefab.CanSpriteFlipX, flippedY && Prefab.CanSpriteFlipY, rotation: 0, depth, overrideColor);
                         }
                     }
                     else
@@ -434,19 +447,8 @@ namespace Barotrauma
                             Prefab.InfectedSprite?.Draw(spriteBatch, new Vector2(DrawPosition.X, -DrawPosition.Y) + drawOffset, color, Prefab.InfectedSprite.Origin, RotationRad, Scale, activeSprite.effects, depth - 0.001f);
                             Prefab.DamagedInfectedSprite?.Draw(spriteBatch, new Vector2(DrawPosition.X, -DrawPosition.Y) + drawOffset, Infector.HealthColor, Prefab.DamagedInfectedSprite.Origin, RotationRad, Scale, activeSprite.effects, depth - 0.002f);
                         }
-                        foreach (var decorativeSprite in Prefab.DecorativeSprites)
-                        {
-                            if (!spriteAnimState[decorativeSprite].IsActive) { continue; }
-                            float rot = decorativeSprite.GetRotation(ref spriteAnimState[decorativeSprite].RotationState, spriteAnimState[decorativeSprite].RandomRotationFactor);
-                            bool flipX = flippedX && Prefab.CanSpriteFlipX;
-                            bool flipY = flippedY && Prefab.CanSpriteFlipY;
-                            Vector2 offset = decorativeSprite.GetOffset(ref spriteAnimState[decorativeSprite].OffsetState, spriteAnimState[decorativeSprite].RandomOffsetMultiplier, flipX ^ flipY ? RotationRad : -RotationRad) * Scale;
-                            if (flipX) { offset.X = -offset.X; }
-                            if (flipY) { offset.Y = -offset.Y; }
-                            decorativeSprite.Sprite.Draw(spriteBatch, new Vector2(DrawPosition.X + offset.X, -(DrawPosition.Y + offset.Y)), color,
-                                RotationRad + rot, decorativeSprite.GetScale(spriteAnimState[decorativeSprite].RandomScaleFactor) * Scale, activeSprite.effects,
-                                depth: Math.Min(depth + (decorativeSprite.Sprite.Depth - activeSprite.Depth), 0.999f));
-                        }
+
+                        DrawDecorativeSprites(spriteBatch, DrawPosition, flippedX && Prefab.CanSpriteFlipX, flippedY && Prefab.CanSpriteFlipY, -RotationRad, depth, overrideColor);
                     }
                 }
                 else if (body.Enabled)
@@ -457,30 +459,50 @@ namespace Barotrauma
                         //don't draw the item on hands if it's also being worn
                         if (GetComponent<Wearable>() is { IsActive: true }) { return; }
                         if (!back) { return; }
-                        float depthStep = 0.000001f;
                         if (holdable.Picker.Inventory?.GetItemInLimbSlot(InvSlotType.RightHand) == this)
                         {
-                            Limb holdLimb = holdable.Picker.AnimController.GetLimb(LimbType.RightArm);
-                            if (holdLimb?.ActiveSprite != null)
-                            {
-                                depth = holdLimb.ActiveSprite.Depth + holdable.Picker.AnimController.GetDepthOffset() + depthStep * 2;
-                                foreach (WearableSprite wearableSprite in holdLimb.WearingItems)
-                                {
-                                    if (!wearableSprite.InheritLimbDepth && wearableSprite.Sprite != null) { depth = Math.Max(wearableSprite.Sprite.Depth + depthStep, depth); }
-                                }
-                            }
+                            depth = GetHeldItemDepth(LimbType.RightHand, holdable, depth);
                         }
                         else if (holdable.Picker.Inventory?.GetItemInLimbSlot(InvSlotType.LeftHand) == this)
                         {
-                            Limb holdLimb = holdable.Picker.AnimController.GetLimb(LimbType.LeftArm);
+                            depth = GetHeldItemDepth(LimbType.LeftHand, holdable, depth);
+                        }
+
+                        static float GetHeldItemDepth(LimbType limb, Holdable holdable, float depth)
+                        {
+                            if (holdable?.Picker?.AnimController == null) { return depth; }
+                            //offset used to make sure the item draws just slightly behind the right hand, or slightly in front of the left hand
+                            float limbDepthOffset = 0.000001f;
+                            float depthOffset = holdable.Picker.AnimController.GetDepthOffset();
+                            //use the upper arm as a reference, to ensure the item gets drawn behind / in front of the whole arm (not just the forearm)
+                            Limb holdLimb = holdable.Picker.AnimController.GetLimb(limb == LimbType.RightHand ? LimbType.RightArm : LimbType.LeftArm);
                             if (holdLimb?.ActiveSprite != null)
                             {
-                                depth = holdLimb.ActiveSprite.Depth + holdable.Picker.AnimController.GetDepthOffset() - depthStep * 2;
+                                depth = 
+                                    holdLimb.ActiveSprite.Depth 
+                                    + depthOffset 
+                                    + limbDepthOffset * 2 * (limb == LimbType.RightHand ? 1 : -1);
                                 foreach (WearableSprite wearableSprite in holdLimb.WearingItems)
                                 {
-                                    if (!wearableSprite.InheritLimbDepth && wearableSprite.Sprite != null) { depth = Math.Min(wearableSprite.Sprite.Depth - depthStep, depth); }
+                                    if (!wearableSprite.InheritLimbDepth && wearableSprite.Sprite != null) 
+                                    { 
+                                        depth =
+                                            limb == LimbType.RightHand ?
+                                                Math.Max(wearableSprite.Sprite.Depth + limbDepthOffset, depth) : 
+                                                Math.Min(wearableSprite.Sprite.Depth - limbDepthOffset, depth);
+                                    }
+                                }
+                                var head = holdable.Picker.AnimController.GetLimb(LimbType.Head);
+                                if (head?.Sprite != null)
+                                {
+                                    //ensure the holdable item is always drawn in front of the head no matter what the wearables or whatnot do with the sprite depths
+                                    depth =
+                                        limb == LimbType.RightHand ?
+                                            Math.Min(head.Sprite.Depth + depthOffset - limbDepthOffset, depth) :
+                                            Math.Max(head.Sprite.Depth + depthOffset + limbDepthOffset, depth);
                                 }
                             }
+                            return depth;
                         }
                     }
                     Vector2 origin = GetSpriteOrigin(activeSprite);
@@ -490,21 +512,7 @@ namespace Barotrauma
                         float d = Math.Min(depth + (fadeInBrokenSprite.Sprite.Depth - activeSprite.Depth - 0.000001f), 0.999f);
                         body.Draw(spriteBatch, fadeInBrokenSprite.Sprite, color * fadeInBrokenSpriteAlpha, d, Scale);
                     }
-                    foreach (var decorativeSprite in Prefab.DecorativeSprites)
-                    {
-                        if (!spriteAnimState[decorativeSprite].IsActive) { continue; }
-                        float rotation = decorativeSprite.GetRotation(ref spriteAnimState[decorativeSprite].RotationState, spriteAnimState[decorativeSprite].RandomRotationFactor);
-                        Vector2 offset = decorativeSprite.GetOffset(ref spriteAnimState[decorativeSprite].OffsetState, spriteAnimState[decorativeSprite].RandomOffsetMultiplier, -RotationRad) * Scale;
-                        if (flippedX && Prefab.CanSpriteFlipX) { offset.X = -offset.X; }
-                        if (flippedY && Prefab.CanSpriteFlipY) { offset.Y = -offset.Y; }
-                        var ca = MathF.Cos(-body.DrawRotation);
-                        var sa = MathF.Sin(-body.DrawRotation);
-                        Vector2 transformedOffset = new Vector2(ca * offset.X + sa * offset.Y, -sa * offset.X + ca * offset.Y);
-
-                        decorativeSprite.Sprite.Draw(spriteBatch, new Vector2(body.DrawPosition.X + transformedOffset.X, -(body.DrawPosition.Y + transformedOffset.Y)), color,
-                            -body.DrawRotation + rotation, decorativeSprite.GetScale(spriteAnimState[decorativeSprite].RandomScaleFactor) * Scale, activeSprite.effects,
-                            depth: depth + (decorativeSprite.Sprite.Depth - activeSprite.Depth));
-                    }
+                    DrawDecorativeSprites(spriteBatch, body.DrawPosition, flipX: body.Dir < 0, flipY: false, rotation: body.Rotation, depth, overrideColor);
                 }
 
                 foreach (var upgrade in Upgrades)
@@ -518,11 +526,10 @@ namespace Barotrauma
                         Vector2 offset = decorativeSprite.GetOffset(ref spriteAnimState[decorativeSprite].OffsetState, spriteAnimState[decorativeSprite].RandomOffsetMultiplier, -RotationRad) * Scale;
                         if (flippedX && Prefab.CanSpriteFlipX) { offset.X = -offset.X; }
                         if (flippedY && Prefab.CanSpriteFlipY) { offset.Y = -offset.Y; }
-                        decorativeSprite.Sprite.Draw(spriteBatch, new Vector2(DrawPosition.X + offset.X, -(DrawPosition.Y + offset.Y)), color,
-                            rotation, decorativeSprite.GetScale(spriteAnimState[decorativeSprite].RandomScaleFactor) * Scale, activeSprite.effects,
+                        decorativeSprite.Sprite.Draw(spriteBatch, new Vector2(DrawPosition.X + offset.X, -(DrawPosition.Y + offset.Y)), color, decorativeSprite.Sprite.Origin,
+                            rotation, decorativeSprite.GetScale(ref spriteAnimState[decorativeSprite].ScaleState, spriteAnimState[decorativeSprite].RandomScaleFactor) * Scale, activeSprite.effects,
                             depth: depth + (decorativeSprite.Sprite.Depth - activeSprite.Depth));
                     }
-
                 }
 
                 activeSprite.effects = oldEffects;
@@ -567,8 +574,14 @@ namespace Barotrauma
                 Vector2 drawPos = new Vector2(DrawPosition.X - rect.Width / 2, -(DrawPosition.Y + rect.Height / 2));
                 Vector2 drawSize = new Vector2(MathF.Ceiling(rect.Width + Math.Abs(drawPos.X - (int)drawPos.X)), MathF.Ceiling(rect.Height + Math.Abs(drawPos.Y - (int)drawPos.Y)));
                 drawPos = new Vector2(MathF.Floor(drawPos.X), MathF.Floor(drawPos.Y));
-                GUI.DrawRectangle(spriteBatch, drawPos, drawSize,
-                    Color.White, false, 0, thickness: Math.Max(1, (int)(2 / Screen.Selected.Cam.Zoom)));
+                GUI.DrawRectangle(sb: spriteBatch,
+                    center: drawPos + drawSize * 0.5f,
+                    width: drawSize.X,
+                    height: drawSize.Y,
+                    rotation: RotationRad,
+                    clr: Color.White,
+                    depth: 0,
+                    thickness: Math.Max(2f / Screen.Selected.Cam.Zoom, 1));
 
                 foreach (Rectangle t in Prefab.Triggers)
                 {
@@ -617,6 +630,56 @@ namespace Barotrauma
                     origin.Y = sprite.SourceRect.Height - origin.Y;
                 }
                 return origin;
+            }
+
+            Color GetSpriteColor(Color defaultColor)
+            {
+                return
+                    overrideColor ??
+                    (IsIncludedInSelection && editing ? GUIStyle.Blue : this.GetSpriteColor(defaultColor: defaultColor, withHighlight: true));
+            }
+        }
+
+        public void DrawDecorativeSprites(SpriteBatch spriteBatch, Vector2 drawPos, bool flipX, bool flipY, float rotation, float depth, Color? overrideColor = null)
+        {
+            foreach (var decorativeSprite in Prefab.DecorativeSprites)
+            {
+                Color decorativeSpriteColor = overrideColor ?? GetSpriteColor(decorativeSprite.Color).Multiply(GetSpriteColor(spriteColor));
+                if (!spriteAnimState[decorativeSprite].IsActive) { continue; }
+
+                Vector2 offset = decorativeSprite.GetOffset(ref spriteAnimState[decorativeSprite].OffsetState, spriteAnimState[decorativeSprite].RandomOffsetMultiplier,
+                    flipX ^ flipY ? -rotation : rotation) * Scale;
+
+                if (ResizeHorizontal || ResizeVertical)
+                {
+                    decorativeSprite.Sprite.DrawTiled(spriteBatch,
+                        new Vector2(DrawPosition.X + offset.X - rect.Width / 2, -(DrawPosition.Y + offset.Y + rect.Height / 2)),
+                        new Vector2(rect.Width, rect.Height), color: decorativeSpriteColor,
+                        textureScale: Vector2.One * Scale,
+                        depth: Math.Min(depth + (decorativeSprite.Sprite.Depth - activeSprite.Depth), 0.999f));
+                }
+                else
+                {
+                    float spriteRotation = decorativeSprite.GetRotation(ref spriteAnimState[decorativeSprite].RotationState, spriteAnimState[decorativeSprite].RandomRotationFactor);
+                    
+                    Vector2 origin = decorativeSprite.Sprite.Origin;
+                    SpriteEffects spriteEffects = SpriteEffects.None;
+                    if (flipX && Prefab.CanSpriteFlipX) 
+                    { 
+                        offset.X = -offset.X;
+                        origin.X = -origin.X + decorativeSprite.Sprite.size.X;
+                        spriteEffects = SpriteEffects.FlipHorizontally;
+                    }
+                    if (flipY && Prefab.CanSpriteFlipY) 
+                    { 
+                        offset.Y = -offset.Y;
+                        origin.Y = -origin.Y + decorativeSprite.Sprite.size.Y;
+                        spriteEffects |= SpriteEffects.FlipVertically;
+                    }
+                    decorativeSprite.Sprite.Draw(spriteBatch, new Vector2(drawPos.X + offset.X, -(drawPos.Y + offset.Y)), decorativeSpriteColor, origin,
+                        -rotation + spriteRotation, decorativeSprite.GetScale(ref spriteAnimState[decorativeSprite].ScaleState, spriteAnimState[decorativeSprite].RandomScaleFactor) * Scale, spriteEffects,
+                        depth: depth + (decorativeSprite.Sprite.Depth - activeSprite.Depth));
+                }
             }
         }
 
@@ -729,6 +792,11 @@ namespace Barotrauma
                     }
                 }
             }
+
+            foreach (var containedItem in ContainedItems)
+            {
+                containedItem.UpdateSpriteStates(deltaTime);
+            }
         }
 
         public override void UpdateEditing(Camera cam, float deltaTime)
@@ -795,6 +863,19 @@ namespace Barotrauma
             }
         }
 
+        public override bool IsMouseOn(Vector2 position)
+        {
+            Vector2 rectSize = rect.Size.ToVector2();
+
+            Vector2 bodyPos = WorldPosition;
+
+            Vector2 transformedMousePos = MathUtils.RotatePointAroundTarget(position, bodyPos, RotationRad);
+
+            return
+                Math.Abs(transformedMousePos.X - bodyPos.X) < rectSize.X / 2.0f &&
+                Math.Abs(transformedMousePos.Y - bodyPos.Y) < rectSize.Y / 2.0f;
+        }
+
         public GUIComponent CreateEditingHUD(bool inGame = false)
         {
             activeEditors.Clear();
@@ -812,27 +893,6 @@ namespace Barotrauma
             itemEditor.Children.First().Color = Color.Black * 0.7f;
             if (!inGame)
             {
-                //create a tag picker for item containers to make it easier to pick relevant tags for PreferredContainers
-                var itemContainer = GetComponent<ItemContainer>();
-                if (itemContainer != null)
-                {
-                    var tagsField = itemEditor.Fields["Tags".ToIdentifier()].First().Parent;
-
-                    //find all the items that can be put inside the container and add their PreferredContainer identifiers/tags to the available tags
-                    ImmutableHashSet<Identifier> availableTags = ItemPrefab.Prefabs
-                        .Where(ip => itemContainer.CanBeContained(ip))
-                        .SelectMany(ip => ip.PreferredContainers.SelectMany(pc => pc.Primary.Union(pc.Secondary)))
-                        //remove identifiers from the available container tags
-                        //(otherwise the list will include many irrelevant options,
-                        //e.g. "weldingtool" because a welding fuel tank can be placed inside the container, etc)
-                        .Where(t => !ItemPrefab.Prefabs.ContainsKey(t))
-                        .ToImmutableHashSet();
-                    new GUIButton(new RectTransform(new Vector2(0.1f, 1), tagsField.RectTransform, Anchor.TopRight), "...")
-                    {
-                        OnClicked = (bt, userData) => { CreateTagPicker(tagsField.GetChild<GUITextBox>(), availableTags); return true; }
-                    };
-                }
-
                 if (Linkable)
                 {
                     var linkText = new GUITextBlock(new RectTransform(new Point(editingHUD.Rect.Width, heightScaled), isFixedSize: true), TextManager.Get("HoldToLink"), font: GUIStyle.SmallFont);
@@ -844,6 +904,33 @@ namespace Barotrauma
                     linkText.TextColor = GUIStyle.Orange;
                     itemsText.TextColor = GUIStyle.Orange;
                 }
+                
+                //create a tag picker for item containers to make it easier to pick relevant tags for PreferredContainers
+                var itemContainer = GetComponent<ItemContainer>();
+                if (itemContainer != null)
+                {
+                    var tagBox = itemEditor.Fields["Tags".ToIdentifier()].First() as GUITextBox;
+                    var tagsField = tagBox?.Parent;
+
+                    var containerTagLayout = new GUILayoutGroup(new RectTransform(new Point(editingHUD.Rect.Width, heightScaled), isFixedSize: true), isHorizontal: true);
+                    var containerTagButtonLayout = new GUILayoutGroup(new RectTransform(new Vector2(0.25f, 1), containerTagLayout.RectTransform), isHorizontal: true, childAnchor: Anchor.CenterRight);
+                    new GUIButton(new RectTransform(new Vector2(0.95f, 1), containerTagButtonLayout.RectTransform), text: TextManager.Get("containertaguibutton"), style: "GUIButtonSmall")
+                    {
+                        OnClicked = (_, _) => { CreateContainerTagPicker(tagBox); return true; },
+                        TextBlock = { AutoScaleHorizontal = true }
+                    };
+                    var containerTagText = new GUITextBlock(new RectTransform(new Vector2(0.8f, 1), containerTagLayout.RectTransform), TextManager.Get("containertaguibuttondescription"), font: GUIStyle.SmallFont)
+                    {
+                        TextColor = GUIStyle.Orange
+                    };
+                    var limitedString = ToolBox.LimitString(containerTagText.Text, containerTagText.Font, itemEditor.Rect.Width - containerTagButtonLayout.Rect.Width);
+                    if (limitedString != containerTagText.Text)
+                    {
+                        containerTagText.ToolTip = containerTagText.Text;
+                        containerTagText.Text = limitedString;
+                    }
+                    itemEditor.AddCustomContent(containerTagLayout, 3);
+                }
 
                 var buttonContainer = new GUILayoutGroup(new RectTransform(new Point(listBox.Content.Rect.Width, heightScaled)), isHorizontal: true)
                 {
@@ -852,7 +939,12 @@ namespace Barotrauma
                     CanBeFocused = true
                 };
 
-                new GUIButton(new RectTransform(new Vector2(0.23f, 1.0f), buttonContainer.RectTransform), TextManager.Get("MirrorEntityX"), style: "GUIButtonSmall")
+                GUINumberInput rotationField =
+                    itemEditor.Fields.TryGetValue("Rotation".ToIdentifier(), out var rotationFieldComponents)
+                        ? rotationFieldComponents.OfType<GUINumberInput>().FirstOrDefault()
+                        : null;
+
+                var mirrorX = new GUIButton(new RectTransform(new Vector2(0.23f, 1.0f), buttonContainer.RectTransform), TextManager.Get("MirrorEntityX"), style: "GUIButtonSmall")
                 {
                     ToolTip = TextManager.Get("MirrorEntityXToolTip"),
                     Enabled = Prefab.CanFlipX,
@@ -863,10 +955,13 @@ namespace Barotrauma
                             me.FlipX(relativeToSub: false);
                         }
                         if (!SelectedList.Contains(this)) { FlipX(relativeToSub: false); }
+                        ColorFlipButton(button, FlippedX);
+                        if (rotationField != null) { rotationField.FloatValue = Rotation; }
                         return true;
                     }
                 };
-                new GUIButton(new RectTransform(new Vector2(0.23f, 1.0f), buttonContainer.RectTransform), TextManager.Get("MirrorEntityY"), style: "GUIButtonSmall")
+                ColorFlipButton(mirrorX, FlippedX);
+                var mirrorY = new GUIButton(new RectTransform(new Vector2(0.23f, 1.0f), buttonContainer.RectTransform), TextManager.Get("MirrorEntityY"), style: "GUIButtonSmall")
                 {
                     ToolTip = TextManager.Get("MirrorEntityYToolTip"),
                     Enabled = Prefab.CanFlipY,
@@ -877,9 +972,12 @@ namespace Barotrauma
                             me.FlipY(relativeToSub: false);
                         }
                         if (!SelectedList.Contains(this)) { FlipY(relativeToSub: false); }
+                        ColorFlipButton(button, FlippedY);
+                        if (rotationField != null) { rotationField.FloatValue = Rotation; }
                         return true;
                     }
                 };
+                ColorFlipButton(mirrorY, FlippedY);
                 if (Sprite != null)
                 {
                     var reloadTextureButton = new GUIButton(new RectTransform(new Vector2(0.23f, 1.0f), buttonContainer.RectTransform), TextManager.Get("ReloadSprite"), style: "GUIButtonSmall");
@@ -924,6 +1022,12 @@ namespace Barotrauma
                     };
                     itemEditor.AddCustomContent(tickBox, 1);
                 }
+
+                if (!Layer.IsNullOrEmpty())
+                {
+                    var layerText = new GUITextBlock(new RectTransform(new Point(listBox.Content.Rect.Width, heightScaled)) { MinSize = new Point(0, heightScaled) }, TextManager.AddPunctuation(':', TextManager.Get("editor.layer"), Layer));
+                    itemEditor.AddCustomContent(layerText, 1);
+                }
             }
 
             foreach (ItemComponent ic in components)
@@ -939,7 +1043,7 @@ namespace Barotrauma
                 }
                 else
                 {
-                    if (ic.requiredItems.Count == 0 && ic.DisabledRequiredItems.Count == 0 && SerializableProperty.GetProperties<Editable>(ic).Count == 0) { continue; }
+                    if (ic.RequiredItems.Count == 0 && ic.DisabledRequiredItems.Count == 0 && SerializableProperty.GetProperties<Editable>(ic).Count == 0) { continue; }
                 }
 
                 new GUIFrame(new RectTransform(new Vector2(1.0f, 0.02f), listBox.Content.RectTransform), style: "HorizontalLine");
@@ -956,7 +1060,7 @@ namespace Barotrauma
                 }
 
                 List<RelatedItem> requiredItems = new List<RelatedItem>();
-                foreach (var kvp in ic.requiredItems)
+                foreach (var kvp in ic.RequiredItems)
                 {
                     foreach (RelatedItem relatedItem in kvp.Value)
                     {
@@ -967,12 +1071,18 @@ namespace Barotrauma
 
                 foreach (RelatedItem relatedItem in requiredItems)
                 {
-                    //TODO: add to localization
                     var textBlock = new GUITextBlock(new RectTransform(new Point(listBox.Content.Rect.Width, heightScaled)),
-                        relatedItem.Type.ToString() + " required", font: GUIStyle.SmallFont)
+                        TextManager.Get($"{relatedItem.Type}.required").Fallback($"{relatedItem.Type} required"), font: GUIStyle.SmallFont)
                     {
                         Padding = new Vector4(10.0f, 0.0f, 10.0f, 0.0f)
                     };
+
+                    var tooltip = TextManager.Get($"{relatedItem.Type}.required.tooltip").Fallback(LocalizedString.EmptyString);
+                    if (!tooltip.IsNullOrWhiteSpace())
+                    {
+                        textBlock.ToolTip = tooltip;
+                    }
+                    
                     textBlock.RectTransform.IsFixedSize = true;
                     componentEditor.AddCustomContent(textBlock, 1);
 
@@ -1041,33 +1151,388 @@ namespace Barotrauma
             return result;
         }
 
-        private void CreateTagPicker(GUITextBox textBox, IEnumerable<Identifier> availableTags)
+        public void CreateContainerTagPicker([MaybeNull] GUITextBox tagTextBox)
         {
-            var msgBox = new GUIMessageBox("", "", new LocalizedString[] { TextManager.Get("Cancel") }, new Vector2(0.2f, 0.5f), new Point(300, 400));
+            var msgBox = new GUIMessageBox(string.Empty, string.Empty, new[] { TextManager.Get("Ok") }, new Vector2(0.35f, 0.6f), new Point(400, 400));
             msgBox.Buttons[0].OnClicked = msgBox.Close;
 
-            var textList = new GUIListBox(new RectTransform(new Vector2(1.0f, 0.8f), msgBox.Content.RectTransform, Anchor.TopCenter))
+            var infoIcon = new GUIImage(new RectTransform(new Vector2(0.066f), msgBox.InnerFrame.RectTransform)
             {
-                PlaySoundOnSelect = true,
-                OnSelected = (component, userData) =>
+                RelativeOffset = new Vector2(0.015f)
+            }, style: "GUIButtonInfo")
+            {
+                ToolTip = TextManager.Get("containertagui.tutorial"),
+                IgnoreLayoutGroups = true
+            };
+
+            var layout = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.85f), msgBox.Content.RectTransform));
+
+            var list = new GUIListBox(new RectTransform(new Vector2(1f, 1f), layout.RectTransform));
+
+            const float NameSize = 0.4f;
+            const float ItemSize = 0.5f;
+            const float CountSize = 0.1f;
+
+            var headerLayout = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.075f), list.Content.RectTransform), isHorizontal: true);
+            new GUIButton(new RectTransform(new Vector2(NameSize, 1f), headerLayout.RectTransform), TextManager.Get("tagheader.tag"), style: "GUIButtonSmallFreeScale") { ForceUpperCase = ForceUpperCase.Yes, CanBeFocused = false };
+            new GUIButton(new RectTransform(new Vector2(ItemSize, 1f), headerLayout.RectTransform), TextManager.Get("tagheader.items"), style: "GUIButtonSmallFreeScale") { ForceUpperCase = ForceUpperCase.Yes, CanBeFocused = false  };
+            new GUIButton(new RectTransform(new Vector2(CountSize, 1f), headerLayout.RectTransform), TextManager.Get("tagheader.count"), style: "GUIButtonSmallFreeScale") { ForceUpperCase = ForceUpperCase.Yes, CanBeFocused = false };
+
+            var itemsByTag =
+                ContainerTagPrefab.Prefabs
+                    .ToImmutableDictionary(
+                        ct => ct,
+                        ct => ct.GetItemsAndSpawnProbabilities());
+
+            // Group the prefabs by category and turn them into a dictionary where the key is the category and value is the list of identifiers of the prefabs.
+            // LINQ GroupBy returns GroupedEnumerable where the enumerable is the list of prefabs and key is what we grouped by.
+            var tagCategories = ContainerTagPrefab.Prefabs
+                .GroupBy(ct => ct.Category)
+                .ToImmutableDictionary(
+                    g => g.Key,
+                    g => g.Select(ct => ct.Identifier).ToImmutableArray());
+
+            foreach (var (category, categoryTags) in tagCategories)
+            {
+                var categoryButton = new GUIButton(new RectTransform(new Vector2(1f, 0.075f), list.Content.RectTransform), style: "GUIButtonSmallFreeScale");
+                categoryButton.Color *= 0.66f;
+                var categoryLayout = new GUILayoutGroup(new RectTransform(Vector2.One, categoryButton.RectTransform), isHorizontal: true, childAnchor: Anchor.CenterLeft) { Stretch = true };
+                var categoryText = new GUITextBlock(new RectTransform(Vector2.One, categoryLayout.RectTransform), TextManager.Get($"tagcategory.{category}"), font: GUIStyle.SubHeadingFont);
+                var arrowImage = new GUIImage(new RectTransform(new Vector2(1f, 0.5f), categoryLayout.RectTransform, scaleBasis: ScaleBasis.BothHeight), style: "GUIButtonVerticalArrowFreeScale");
+                var arrowPadding = new GUIFrame(new RectTransform(new Vector2(0.025f, 1f), categoryLayout.RectTransform), style: null);
+
+                bool hasHiddenCategories = false;
+                foreach (var categoryTag in categoryTags.OrderBy(t => t.Value))
                 {
-                    if (!(userData is Identifier)) { return true; }
-                    AddTag((Identifier)userData);
-                    textBox.Text = Tags;
-                    msgBox.Close();
+                    var found = itemsByTag.FirstOrNull(kvp => kvp.Key.Identifier == categoryTag);
+                    if (found is null)
+                    {
+                        DebugConsole.ThrowError($"Failed to find tag with identifier {categoryTag} in itemsByTag");
+                        continue;
+                    }
+
+                    var (tag, prefabsAndProbabilities) = found.Value;
+
+                    bool isCorrectSubType = tag.IsRecommendedForSub(Submarine);
+
+                    var tagLayout = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.1f), list.Content.RectTransform), isHorizontal: true, childAnchor: Anchor.CenterLeft)
+                    {
+                        UserData = category,
+                        Visible = isCorrectSubType
+                    };
+
+                    if (!isCorrectSubType)
+                    {
+                        hasHiddenCategories = true;
+                    }
+
+                    var checkBoxLayout = new GUILayoutGroup(new RectTransform(new Vector2(NameSize, 1f), tagLayout.RectTransform), childAnchor: Anchor.Center);
+                    var enabledCheckBox = new GUITickBox(new RectTransform(Vector2.One, checkBoxLayout.RectTransform, Anchor.Center), tag.Name, font: GUIStyle.SmallFont)
+                    {
+                        Selected = tags.Contains(tag.Identifier),
+                        ToolTip = tag.Description
+                    };
+
+                    var tickBoxText = enabledCheckBox.TextBlock;
+                    tickBoxText.Text = ToolBox.LimitString(tickBoxText.Text, tickBoxText.Font, tickBoxText.Rect.Width);
+
+                    var itemLayout = new GUILayoutGroup(new RectTransform(new Vector2(ItemSize, 1f), tagLayout.RectTransform), isHorizontal: true, childAnchor: Anchor.CenterLeft);
+                    var itemLayoutScissor = new GUIScissorComponent(new RectTransform(new Vector2(0.8f, 1f), itemLayout.RectTransform)) { CanBeFocused = false };
+                    var itemLayoutButtonLayout = new GUILayoutGroup(new RectTransform(new Vector2(0.2f, 1), itemLayout.RectTransform), isHorizontal: true, childAnchor: Anchor.Center);
+                    var itemLayoutButton = new GUIButton(new RectTransform(new Vector2(0.8f), itemLayoutButtonLayout.RectTransform), text: "...", style: "GUICharacterInfoButton")
+                    {
+                        UserData = tag,
+                        ToolTip = TextManager.Get("containertagui.viewprobabilities")
+                    };
+                    
+                    itemLayoutButtonLayout.Recalculate();
+
+                    float scroll = 0f;
+                    float localScroll = 0f;
+                    int lastSkippedItems = 0;
+                    int skippedItems = 0;
+                    var itemLayoutDraw = new GUICustomComponent(new RectTransform(new Vector2(1f, 0.9f), itemLayoutScissor.Content.RectTransform, Anchor.CenterLeft), onDraw: (spriteBatch, component) =>
+                    {
+                        component.ToolTip = string.Empty;
+
+                        const float padding = 8f;
+                        float offset = 0f;
+                        float size = component.Rect.Height;
+                        int start = (int)Math.Floor(scroll);
+                        int amountToDraw = (int)Math.Ceiling(component.Rect.Width / size) + 1; // +1 just to be on the safe side
+                        bool shouldIncrementOnSkip = true;
+                        float toDrawWidth = prefabsAndProbabilities.Length * (size + padding);
+
+                        // if the width is less than the component width we need to limit how many items we draw or it looks weird
+                        if (toDrawWidth < component.Rect.Width)
+                        {
+                            shouldIncrementOnSkip = false;
+                            amountToDraw = prefabsAndProbabilities.Length;
+                        }
+
+                        for (int i = start; i < start + amountToDraw; i++)
+                        {
+                            var (ip, probability, _) = prefabsAndProbabilities[i % prefabsAndProbabilities.Length];
+                            var sprite = ip.InventoryIcon ?? ip.Sprite;
+
+                            if (sprite is null)
+                            {
+                                // I don't think this should happen but just in case
+                                if (shouldIncrementOnSkip)
+                                {
+                                    amountToDraw++;
+                                    skippedItems++;
+                                }
+                                continue;
+                            }
+
+                            if (ShouldHideItemPrefab(ip, probability))
+                            {
+                                if (shouldIncrementOnSkip)
+                                {
+                                    skippedItems++;
+                                    amountToDraw++;
+                                }
+                                continue;
+                            }
+
+                            float partialScroll = localScroll * (size + padding);
+                            var drawRect = new RectangleF(itemLayoutScissor.Rect.X + offset - partialScroll, component.Rect.Y, size, size);
+
+                            var isMouseOver = drawRect.Contains(PlayerInput.MousePosition);
+                            if (isMouseOver)
+                            {
+                                component.ToolTip = ip.CreateTooltipText();
+                            }
+
+                            var slotSprite = Inventory.SlotSpriteSmall;
+                            slotSprite?.Draw(spriteBatch, drawRect.Location, Color.White, origin: Vector2.Zero, rotate: 0f, scale: size / slotSprite.size.X * Inventory.SlotSpriteSmallScale);
+
+                            float iconScale = Math.Min(drawRect.Width / sprite.size.X, drawRect.Height / sprite.size.Y) * 0.9f;
+
+                            Color drawColor = ip.InventoryIconColor;
+
+                            sprite.Draw(spriteBatch, drawRect.Center, drawColor, origin: sprite.Origin, scale: iconScale);
+                            offset += size + padding;
+                        }
+
+                        // we need to compensate for the skipped items so that the scroll doesn't jump around
+                        if (skippedItems < lastSkippedItems)
+                        {
+                            scroll += lastSkippedItems - skippedItems;
+                        }
+
+                        lastSkippedItems = skippedItems;
+                        skippedItems = 0;
+                    }, onUpdate: (deltaTime, component) =>
+                    {
+                        if (GUI.MouseOn != component && MathUtils.NearlyEqual(localScroll, 0, deltaTime * 2))
+                        {
+                            localScroll = 0f;
+                            return;
+                        }
+
+                        float totalWidth = prefabsAndProbabilities.Length * (component.Rect.Height + 8f);
+                        if (totalWidth < component.Rect.Width) { return; }
+                        scroll += deltaTime;
+                        localScroll = scroll % 1f;
+                    })
+                    {
+                        HoverCursor = CursorState.Default,
+                        AlwaysOverrideCursor = true
+                    };
+
+                    var tooltip = TextManager.Get(tag.WarnIfLess ? "ContainerTagUI.RecommendedAmount" : "ContainerTagUI.SuggestedAmount");
+
+                    var countBlock = new GUITextBlock(new RectTransform(new Vector2(CountSize, 1f), tagLayout.RectTransform), string.Empty, textAlignment: Alignment.Center)
+                    {
+                        ToolTip = tooltip
+                    };
+                    UpdateCountBlock(countBlock, tag);
+
+                    enabledCheckBox.OnSelected += tickBox =>
+                    {
+                        if (tickBox.Selected)
+                        {
+                            AddTag(tag.Identifier);
+                        }
+                        else
+                        {
+                            RemoveTag(tag.Identifier);
+                        }
+
+                        if (tagTextBox is not null)
+                        {
+                            tagTextBox.Text = string.Join(',', tags.Where(t => !Prefab.Tags.Contains(t)));
+                        }
+                        UpdateCountBlock(countBlock, tag);
+                        return true;
+                    };
+
+                    itemLayoutButton.OnClicked = (button, _) =>
+                    {
+                        CreateContainerTagItemListPopup(tag, button.Rect.Center, layout, prefabsAndProbabilities);
+                        return true;
+                    };
+
+                    void UpdateCountBlock(GUITextBlock textBlock, ContainerTagPrefab containerTag)
+                    {
+                        if (textBlock is null) { return; }
+
+                        var tagCount = Submarine.GetItems(alsoFromConnectedSubs: true).Count(i => i.HasTag(containerTag.Identifier));
+                        textBlock.Text = $"{tagCount} ({containerTag.RecommendedAmount})";
+
+                        if (!isCorrectSubType || !containerTag.WarnIfLess || containerTag.RecommendedAmount <= 0) { return; }
+
+                        if (tagCount < containerTag.RecommendedAmount)
+                        {
+                            textBlock.TextColor = GUIStyle.Red;
+                            textBlock.Text += "*";
+                            textBlock.ToolTip = RichString.Rich($"{tooltip}\n\n‖color:gui.red‖{TextManager.Get("ContainerTagUI.RecommendedAmountWarning")}‖color:end‖");
+                        }
+                        else if (tagCount >= containerTag.RecommendedAmount)
+                        {
+                            textBlock.TextColor = GUIStyle.Green;
+                            textBlock.ToolTip = tooltip;
+                        }
+                    }
+                }
+
+                arrowImage.SpriteEffects = hasHiddenCategories ? SpriteEffects.None : SpriteEffects.FlipVertically;
+                categoryButton.OnClicked = (_, _) =>
+                {
+                    arrowImage.SpriteEffects ^= SpriteEffects.FlipVertically;
+
+                    foreach (var child in list.Content.Children)
+                    {
+                        if (child.UserData is Identifier id && id == category)
+                        {
+                            child.Visible = !child.Visible;
+                        }
+                    }
+                    return true;
+                };
+            }
+        }
+
+        private static void CreateContainerTagItemListPopup(ContainerTagPrefab tag, Point location, GUIComponent popupParent, ImmutableArray<ContainerTagPrefab.ItemAndProbability> prefabAndProbabilities)
+        {
+            const string TooltipUserData = "tooltip";
+            const string ProbabilityUserData = "probability";
+
+            if (popupParent.GetChildByUserData(TooltipUserData) is { } existingTooltip)
+            {
+                popupParent.RemoveChild(existingTooltip);
+            }
+
+            var tooltip = new GUIFrame(new RectTransform(new Point(popupParent.Rect.Height), popupParent.RectTransform)
+            {
+                AbsoluteOffset = location - popupParent.Rect.Location
+            })
+            {
+                UserData = TooltipUserData,
+                IgnoreLayoutGroups = true
+            };
+
+            if (tooltip.Rect.Bottom > GameMain.GraphicsHeight)
+            {
+                int diffY = tooltip.Rect.Bottom - GameMain.GraphicsHeight;
+                tooltip.RectTransform.AbsoluteOffset -= new Point(0, diffY);
+            }
+
+            if (tooltip.Rect.Right > GameMain.GraphicsWidth)
+            {
+                int diffX = tooltip.Rect.Right - GameMain.GraphicsWidth;
+                tooltip.RectTransform.AbsoluteOffset -= new Point(diffX, 0);
+            }
+
+            var tooltipLayout = new GUILayoutGroup(new RectTransform(ToolBox.PaddingSizeParentRelative(tooltip.RectTransform, 0.9f), tooltip.RectTransform, Anchor.Center));
+
+            var tooltipHeader = new GUITextBlock(new RectTransform(new Vector2(1f, 0.1f), tooltipLayout.RectTransform), tag.Name, textAlignment: Alignment.Center, font: GUIStyle.SubHeadingFont);
+            var tooltipList = new GUIListBox(new RectTransform(new Vector2(1f, 0.7f), tooltipLayout.RectTransform));
+
+            var tooltipHeaderLayout = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.1f), tooltipList.Content.RectTransform), isHorizontal: true);
+            new GUIButton(new RectTransform(new Vector2(0.66f, 1f), tooltipHeaderLayout.RectTransform), TextManager.Get("tagheader.item"), style: "GUIButtonSmallFreeScale") { ForceUpperCase = ForceUpperCase.Yes, CanBeFocused = false };
+            new GUIButton(new RectTransform(new Vector2(0.33f, 1f), tooltipHeaderLayout.RectTransform), TextManager.Get("tagheader.probability"), style: "GUIButtonSmallFreeScale") { ForceUpperCase = ForceUpperCase.Yes, CanBeFocused = false };
+
+            foreach (var itemAndProbability in prefabAndProbabilities.OrderByDescending(p => p.Probability))
+            {
+                var (ip, probability, campaignOnlyProbability) = itemAndProbability;
+                if (ShouldHideItemPrefab(ip, probability)) { continue; }
+
+                var itemLayout = new GUILayoutGroup(new RectTransform(new Vector2(1f, 0.1f), tooltipList.Content.RectTransform), isHorizontal: true, childAnchor: Anchor.CenterLeft)
+                {
+                    UserData = itemAndProbability
+                };
+
+                var itemNameLayout = new GUILayoutGroup(new RectTransform(new Vector2(0.66f, 1f), itemLayout.RectTransform), childAnchor: Anchor.CenterLeft, isHorizontal: true)
+                {
+                    Stretch = true
+                };
+
+                var itemIcon = new GUIImage(new RectTransform(Vector2.One, itemNameLayout.RectTransform, scaleBasis: ScaleBasis.BothHeight), ip.InventoryIcon ?? ip.Sprite, scaleToFit: true)
+                {
+                    Color = ip.InventoryIconColor
+                };
+                
+                var itemName = new GUITextBlock(new RectTransform(Vector2.One, itemNameLayout.RectTransform), ip.Name);
+                itemName.Text = ToolBox.LimitString(ip.Name, itemName.Font, itemName.Rect.Width);
+                
+                var toolTipContainer = new GUIFrame(new RectTransform(Vector2.One, itemNameLayout.RectTransform), style: null)
+                {
+                    IgnoreLayoutGroups = true,
+                    ToolTip = ip.CreateTooltipText()
+                };
+
+                var probabilityText = new GUITextBlock(new RectTransform(new Vector2(0.33f, 1f), itemLayout.RectTransform), ProbabilityToPercentage(campaignOnlyProbability), textAlignment: Alignment.Right)
+                {
+                    UserData = ProbabilityUserData
+                };
+                if (MathUtils.NearlyEqual(campaignOnlyProbability, 0f)) { probabilityText.TextColor = GUIStyle.Red; }
+            }
+
+            var campaignCheckbox = new GUITickBox(new RectTransform(new Vector2(1f, 0.1f), tooltipLayout.RectTransform), label: TextManager.Get("containertagui.campaignonly"))
+            {
+                ToolTip = TextManager.Get("containertagui.campaignonlytooltip"),
+                Selected = true,
+                OnSelected = box =>
+                {
+                    foreach (var child in tooltipList.Content.Children)
+                    {
+                        if (child.UserData is not ContainerTagPrefab.ItemAndProbability data) { continue; }
+
+                        if (child.GetChildByUserData(ProbabilityUserData) is not GUITextBlock text) { continue; }
+                        
+                        float probability = box.Selected 
+                            ? data.CampaignProbability 
+                            : data.Probability;
+                        text.Text = ProbabilityToPercentage(probability);
+
+                        text.TextColor = MathUtils.NearlyEqual(probability, 0f) 
+                            ? GUIStyle.Red 
+                            : GUIStyle.TextColorNormal;
+                    }
+
                     return true;
                 }
             };
 
-            foreach (var availableTag in availableTags.ToList().OrderBy(t => t))
+            var tooltipClose = new GUIButton(new RectTransform(new Vector2(1f, 0.1f), tooltipLayout.RectTransform), TextManager.Get("Close"))
             {
-                new GUITextBlock(new RectTransform(new Vector2(1.0f, 0.05f), textList.Content.RectTransform) { MinSize = new Point(0, 20) },
-                    ToolBox.LimitString(availableTag.Value, GUIStyle.Font, textList.Content.Rect.Width))
+                OnClicked = (_, _) =>
                 {
-                    UserData = availableTag
-                };
-            }
+                    popupParent.RemoveChild(tooltip);
+                    return true;
+                }
+            };
+
+            static LocalizedString ProbabilityToPercentage(float probability)
+                => TextManager.GetWithVariable("percentageformat", "[value]", MathF.Round((probability * 100f), 1).ToString(CultureInfo.InvariantCulture));
+
         }
+
+        private static bool ShouldHideItemPrefab(ItemPrefab ip, float probability)
+            => ip.HideInMenus && MathUtils.NearlyEqual(probability, 0f);
 
         /// <summary>
         /// Reposition currently active item interfaces to make sure they don't overlap with each other
@@ -1086,10 +1551,19 @@ namespace Barotrauma
             debugInitialHudPositions.Clear();
             foreach (ItemComponent ic in activeHUDs)
             {
-                if (ic.GuiFrame == null || ic.AllowUIOverlap || ic.GetLinkUIToComponent() != null) { continue; }
-                if (!ignoreLocking && ic.LockGuiFramePosition) { continue; }
-                //if the frame covers nearly all of the screen, don't trying to prevent overlaps because it'd fail anyway
-                if (ic.GuiFrame.Rect.Width >= GameMain.GraphicsWidth * 0.9f && ic.GuiFrame.Rect.Height >= GameMain.GraphicsHeight * 0.9f) { continue; }
+                if (ic.GuiFrame == null || ic.GetLinkUIToComponent() != null) { continue; }
+                
+                bool nearlyCoversScreen = ic.GuiFrame.Rect.Width >= GameMain.GraphicsWidth * 0.9f && 
+                                          ic.GuiFrame.Rect.Height >= GameMain.GraphicsHeight * 0.9f;
+                
+                // when we are not using overlap prevention, we still need to clamp the frame to the screen area to
+                // prevent frames becoming inaccessible outside the screen for example after a resolution change
+                if (ic.AllowUIOverlap || (!ignoreLocking && ic.LockGuiFramePosition) || nearlyCoversScreen)
+                {
+                    ic.GuiFrame.ClampToArea(new Rectangle(0, 0, GameMain.GraphicsWidth, GameMain.GraphicsHeight));
+                    continue;
+                }
+
                 ic.GuiFrame.RectTransform.ScreenSpaceOffset = ic.GuiFrameOffset;
                 elementsToMove.Add(ic.GuiFrame);
                 debugInitialHudPositions.Add(ic.GuiFrame.Rect);
@@ -1165,10 +1639,21 @@ namespace Barotrauma
             }
 
             activeHUDs.Clear();
+            maxPriorityHUDs.Clear();
+            bool DrawHud(ItemComponent ic)
+            {
+                if (!ic.ShouldDrawHUD(character)) { return false; }
+                if (character.HasEquippedItem(this))
+                {
+                    return ic.DrawHudWhenEquipped;
+                }
+                else
+                {
+                    return ic.CanBeSelected && ic.HasRequiredItems(character, addMessage: false);
+                }
+            }
             //the HUD of the component with the highest priority will be drawn
             //if all components have a priority of 0, all of them are drawn
-            maxPriorityHUDs.Clear();
-            bool DrawHud(ItemComponent ic) => ic.ShouldDrawHUD(character) && (ic.CanBeSelected && ic.HasRequiredItems(character, addMessage: false) || (character.HasEquippedItem(this) && ic.DrawHudWhenEquipped));
             foreach (ItemComponent ic in activeComponents)
             {
                 if (ic.HudPriority > 0 && DrawHud(ic) && (maxPriorityHUDs.Count == 0 || ic.HudPriority >= maxPriorityHUDs[0].HudPriority))
@@ -1269,14 +1754,14 @@ namespace Barotrauma
             }
         }
 
-        readonly List<ColoredText> texts = new List<ColoredText>();
+        readonly List<ColoredText> texts = new();
         public List<ColoredText> GetHUDTexts(Character character, bool recreateHudTexts = true)
         {
             // Always create the texts if they have not yet been created
             if (texts.Any() && !recreateHudTexts) { return texts; }
             texts.Clear();
 
-            string nameText = Name;
+            string nameText = RichString.Rich(Prefab.Name).SanitizedValue;
             if (Prefab.Tags.Contains("identitycard") || Tags.Contains("despawncontainer"))
             {
                 string[] readTags = Tags.Split(',');
@@ -1300,40 +1785,89 @@ namespace Barotrauma
                 nameText += $" x{DroppedStack.Count()}";
             }
 
-            texts.Add(new ColoredText(nameText, GUIStyle.TextColorNormal, false, false));
+            texts.Add(new ColoredText(nameText, GUIStyle.TextColorNormal, isCommand: false, isError: false));
 
             if (CampaignMode.BlocksInteraction(CampaignInteractionType))
             {
-                texts.Add(new ColoredText(TextManager.GetWithVariable($"CampaignInteraction.{CampaignInteractionType}", "[key]", GameSettings.CurrentConfig.KeyMap.KeyBindText(InputType.Use)).Value, Color.Cyan, false, false));
+                texts.Add(new ColoredText(TextManager.GetWithVariable($"CampaignInteraction.{CampaignInteractionType}", "[key]", GameSettings.CurrentConfig.KeyMap.KeyBindText(InputType.Use)).Value, Color.Cyan, isCommand: false, isError: false));
             }
             else
             {
-                foreach (ItemComponent ic in components)
+                foreach (ItemComponent itemComponent in components)
                 {
-                    if (!ic.CanBePicked && !ic.CanBeSelected) { continue; }
-                    if (ic is Holdable holdable && !holdable.CanBeDeattached()) { continue; }
-                    if (ic is ConnectionPanel connectionPanel && !connectionPanel.CanRewire()) { continue; }
-                    Color color = Color.Gray;
-                    if (ic.HasRequiredItems(character, false))
-                    {
-                        if (ic is Repairable r)
-                        {
-                            if (r.IsBelowRepairThreshold) { color = Color.Cyan; }
-                        }
-                        else
-                        {
-                            color = Color.Cyan;
-                        }
-                    }
-                    if (ic.DisplayMsg.IsNullOrEmpty()) { continue; }
-                    texts.Add(new ColoredText(ic.DisplayMsg.Value, color, false, false));
+                    var interactionVisibility = GetComponentInteractionVisibility(character, itemComponent);
+                    if (interactionVisibility == InteractionVisibility.None) { continue; }
+                    if (itemComponent.DisplayMsg.IsNullOrEmpty()) { continue; }
+                    
+                    Color color = interactionVisibility == InteractionVisibility.MissingRequirement ? Color.Gray : Color.Cyan;
+                    texts.Add(new ColoredText(itemComponent.DisplayMsg.Value, color, isCommand: false, isError: false));
                 }
             }
-            if (PlayerInput.IsShiftDown() && CrewManager.DoesItemHaveContextualOrders(this))
+            if (PlayerInput.KeyDown(InputType.ContextualCommand))
             {
-                texts.Add(new ColoredText(TextManager.ParseInputTypes(TextManager.Get("itemmsgcontextualorders")).Value, Color.Cyan, false, false));
+                texts.Add(new ColoredText(TextManager.ParseInputTypes(TextManager.Get("itemmsgcontextualorders")).Value, Color.Cyan, isCommand: false, isError: false));
             }
+            else
+            {
+                texts.Add(new ColoredText(TextManager.Get("itemmsg.morreoptionsavailable").Value, Color.LightGray * 0.7f, isCommand: false, isError: false));
+            }            
             return texts;
+        }
+
+        private enum InteractionVisibility
+        {
+            None,
+            MissingRequirement,
+            Visible
+        }
+
+        /// <summary>
+        /// Determine, for UI display purposes, the type of interaction visibility for an item component.
+        ///
+        /// Example:
+        /// Visible -> Display cyan "click to interact" type text on item hover.
+        /// MissingRequirement -> Display gray "need tool" type text on item hover.
+        /// None -> Hide from item hover texts.
+        /// </summary>
+        /// <param name="character">Character, for tool requirement purposes.</param>
+        /// <param name="itemComponent">The item component to inspect.</param>
+        /// <returns>The interaction visibility state for this component.</returns>
+        private static InteractionVisibility GetComponentInteractionVisibility(Character character, ItemComponent itemComponent)
+        {
+            if (!itemComponent.CanBePicked && !itemComponent.CanBeSelected) { return InteractionVisibility.None; }
+            if (itemComponent is Holdable holdable && !holdable.CanBeDeattached()) { return InteractionVisibility.None; }
+            if (itemComponent is ConnectionPanel connectionPanel && !connectionPanel.CanRewire()) { return InteractionVisibility.None; }
+            
+            InteractionVisibility interactionVisibility = InteractionVisibility.MissingRequirement;
+            if (itemComponent.HasRequiredItems(character, addMessage: false))
+            {
+                if (itemComponent is Repairable repairable)
+                {
+                    if (repairable.IsBelowRepairThreshold)
+                    {
+                        interactionVisibility = InteractionVisibility.Visible;
+                    }
+                }
+                else
+                {
+                    interactionVisibility = InteractionVisibility.Visible;
+                }
+            }
+            
+            return interactionVisibility;
+        }
+
+        public bool HasVisibleInteraction(Character character)
+        {
+            foreach (var component in components)
+            {
+                if (GetComponentInteractionVisibility(character, component) == InteractionVisibility.Visible)
+                {
+                    return true;
+                }
+            }
+            
+            return false;
         }
 
         public void ForceHUDLayoutUpdate(bool ignoreLocking = false)
@@ -1540,6 +2074,34 @@ namespace Barotrauma
                         RemoveFromDroppedStack(allowClientExecute: true);
                     }
                     break;
+                case EventType.SetHighlight:
+                    bool isTargetedForThisClient = msg.ReadBoolean();
+                    if (isTargetedForThisClient)
+                    {
+                        bool highlight = msg.ReadBoolean();
+                        ExternalHighlight = highlight;
+                        if (highlight)
+                        { 
+                            Color highlightColor = msg.ReadColorR8G8B8A8();
+                            HighlightColor = highlightColor;
+                        }
+                        else
+                        {
+                            HighlightColor = null;
+                        }
+                    }
+                    break;
+                case EventType.SwapItem:
+                    ushort newId = msg.ReadUInt16();
+                    uint prefabUintId = msg.ReadUInt32();
+                    ItemPrefab newPrefab = ItemPrefab.Prefabs.FirstOrDefault(p => p.UintIdentifier == prefabUintId);
+                    if (newPrefab is null)
+                    {
+                        DebugConsole.ThrowError($"Error while reading {EventType.SwapItem} message: could not find an item prefab with the hash {prefabUintId}.");
+                        break;
+                    }
+                    ReplaceFromNetwork(newPrefab, newId);
+                    break;
                 default:
                     throw new Exception($"Malformed incoming item event: unsupported event type {eventType}");
             }
@@ -1637,6 +2199,18 @@ namespace Barotrauma
                 }
             }
 
+            //if the item is outside the level, but not in a sub, it implies the item is inside a sub server-side but the client failed to properly move it
+            // -> let's correct that by finding the correct sub
+            if (Level.IsPositionAboveLevel(WorldPosition) && Submarine == null)
+            {
+                var newSub = Submarine.FindContainingInLocalCoordinates(ConvertUnits.ToDisplayUnits(body.SimPosition), inflate: 0.0f);
+                if (newSub != null)
+                {
+                    Submarine = newSub;
+                    FindHull();
+                }
+            }
+
             Vector2 displayPos = ConvertUnits.ToDisplayUnits(body.SimPosition);
             rect.X = (int)(displayPos.X - rect.Width / 2.0f);
             rect.Y = (int)(displayPos.Y + rect.Height / 2.0f);
@@ -1715,7 +2289,13 @@ namespace Barotrauma
             if (!components.Contains(ic)) { return; }
 
             var eventData = new ComponentStateEventData(ic, extraData);
-            if (!ic.ValidateEventData(eventData)) { throw new Exception($"Component event creation failed: {typeof(T).Name}.{nameof(ItemComponent.ValidateEventData)} returned false"); }
+            if (!ic.ValidateEventData(eventData)) {
+                string errorMsg =
+                    $"Client-side component event creation for the item \"{Prefab.Identifier}\" failed: {typeof(T).Name}.{nameof(ItemComponent.ValidateEventData)} returned false. " +
+                    $"Data: {extraData?.GetType().ToString() ?? "null"}";
+                GameAnalyticsManager.AddErrorEventOnce($"Item.CreateClientEvent:ValidateEventData:{Prefab.Identifier}", GameAnalyticsManager.ErrorSeverity.Error, errorMsg);
+                throw new Exception(errorMsg);
+            }
             GameMain.Client.CreateEntityEvent(this, eventData);
         }
 
@@ -1795,15 +2375,15 @@ namespace Barotrauma
                 ownerSheetIndex = (x, y);
             }
             
-            bool tagsChanged        = msg.ReadBoolean();
+            bool tagsChanged = msg.ReadBoolean();
             string tags = "";
             if (tagsChanged)
             {
-                HashSet<Identifier> addedTags = msg.ReadString().Split(',').ToIdentifiers().ToHashSet();
-                HashSet<Identifier> removedTags = msg.ReadString().Split(',').ToIdentifiers().ToHashSet();
+                HashSet<Identifier> addedTags = msg.ReadString().ToIdentifiers().ToHashSet();
+                HashSet<Identifier> removedTags = msg.ReadString().ToIdentifiers().ToHashSet();
                 if (itemPrefab != null)
                 {
-                    tags = string.Join(',',itemPrefab.Tags.Where(t => !removedTags.Contains(t)).Concat(addedTags));
+                    tags = string.Join(',', itemPrefab.Tags.Where(t => !removedTags.Contains(t)).Union(addedTags));
                 }
             }
             
@@ -1921,12 +2501,24 @@ namespace Barotrauma
 
             if (inventory != null)
             {
-                if (inventorySlotIndex >= 0 && inventorySlotIndex < 255 &&
-                    inventory.TryPutItem(item, inventorySlotIndex, false, false, null, false))
+                if (inventorySlotIndex is >= 0 and < 255 &&
+                    !inventory.TryPutItem(item, inventorySlotIndex, allowSwapping: false, allowCombine: false, user: null, createNetworkEvent: false, ignoreCondition: true) &&
+                    inventory.IsSlotEmpty(inventorySlotIndex))
                 {
-                    return item;
+                    //If the item won't go nicely, force it to the slot. If the server says the item is in the slot, it should go in the slot.
+                    //May happen e.g. when a character is configured to spawn with an item that won't normally go in its inventory slots.
+                    inventory.ForceToSlot(item, index: inventorySlotIndex);
                 }
-                inventory.TryPutItem(item, null, item.AllowedSlots, false);
+                else
+                {
+                    inventory.TryPutItem(item, user: null, allowedSlots: item.AllowedSlots, createNetworkEvent: false);
+                }
+                item.SetTransform(inventory.Owner.SimPosition, 0.0f);
+                item.Submarine = inventory.Owner.Submarine;
+                if (inventory.Owner is Character { Enabled: false } && item.body != null)
+                {
+                    item.body.Enabled = false;
+                }                
             }
 
             return item;
@@ -1938,6 +2530,14 @@ namespace Barotrauma
             {
                 Inventory.DraggingItems.Clear();
                 Inventory.DraggingSlot = null;
+            }
+        }
+
+        public void OnPlayerSkillsChanged()
+        {
+            foreach (ItemComponent ic in components)
+            {
+                ic.OnPlayerSkillsChanged();
             }
         }
     }

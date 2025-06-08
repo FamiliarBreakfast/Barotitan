@@ -4,6 +4,7 @@ using FarseerPhysics;
 using FarseerPhysics.Dynamics;
 using Microsoft.Xna.Framework;
 using System;
+using System.Linq;
 
 namespace Barotrauma.Items.Components
 {
@@ -11,8 +12,8 @@ namespace Barotrauma.Items.Components
     {
         private ISpatialEntity source;
         private Item target;
-
         private Vector2? launchDir;
+        private float currentRopeLength;
 
         private void SetSource(ISpatialEntity source)
         {
@@ -73,6 +74,13 @@ namespace Barotrauma.Items.Components
             get;
             set;
         }
+        
+        [Serialize(200.0f, IsPropertySaveable.No, description: "At which distance the user stops pulling the target?")]
+        public float MinPullDistance
+        {
+            get;
+            set;
+        }
 
         [Serialize(360.0f, IsPropertySaveable.No, description: "The maximum angle from the source to the target until the rope breaks.")]
         public float MaxAngle
@@ -95,6 +103,20 @@ namespace Barotrauma.Items.Components
             set;
         }
 
+        [Serialize(true, IsPropertySaveable.No, description: "Should the rope snap when the weapon it was fired from is fired again? I.e. can there be multiple ropes coming from the weapon at the same time?")]
+        public bool SnapWhenWeaponFiredAgain
+        {
+            get;
+            set;
+        }
+
+        [Serialize(0.9f, IsPropertySaveable.No, description: "Multiplier for the length of the barrel when determining where the rope should start from.")]
+        public float BarrelLengthMultiplier
+        {
+            get;
+            set;
+        }
+
         [Serialize(30.0f, IsPropertySaveable.No, description: "How much mass is required for the target to pull the source towards it. Static and kinematic targets are always treated heavy enough.")]
         public float TargetMinMass
         {
@@ -109,6 +131,14 @@ namespace Barotrauma.Items.Components
             set;
         }
 
+        [Serialize(true, IsPropertySaveable.No, description: "Should the force be dynamically adjusted to make it more difficult for targets to escape the pull?")]
+        public bool IncreaseForceForEscapingTargets
+        {
+            get;
+            set;
+        }
+
+        private bool isReelingIn;
         private bool snapped;
         public bool Snapped
         {
@@ -134,6 +164,15 @@ namespace Barotrauma.Items.Components
                 {
                     snapTimer = 0;
                 }
+                else if (target != null && source != null && target != source)
+                {
+#if CLIENT
+                    // Play a sound at both ends. Initially tested playing the sound in the middle when the rope snaps in the middle,
+                    // but I think it's more important to ensure that the players hear the sound.
+                    PlaySound(snapSound, source.WorldPosition);
+                    PlaySound(snapSound, target.WorldPosition);
+#endif
+                }
             }
         }
 
@@ -156,14 +195,16 @@ namespace Barotrauma.Items.Components
             ApplyStatusEffects(ActionType.OnUse, 1.0f, worldPosition: item.WorldPosition);
             IsActive = true;
         }
-
+        
         public override void Update(float deltaTime, Camera cam)
         {
-            var user = item.GetComponent<Projectile>()?.User;
+            UpdateProjSpecific();
+            isReelingIn = false;
+            Character user = item.GetComponent<Projectile>()?.User;
             if (source == null || target == null || target.Removed ||
-                (source is Entity sourceEntity && sourceEntity.Removed) ||
-                (source is Limb limb && limb.Removed) ||
-                (user != null && user.Removed))
+                source is Entity { Removed: true } ||
+                source is Limb { Removed: true } ||
+                user is { Removed: true })
             {
                 ResetSource();
                 target = null;
@@ -191,11 +232,8 @@ namespace Barotrauma.Items.Components
 
             if (MaxAngle < 180 && lengthSqr > 2500)
             {
-                if (launchDir == null)
-                {
-                    launchDir = diff;
-                }
-                float angle = MathHelper.ToDegrees(VectorExtensions.Angle(launchDir.Value, diff));
+                launchDir ??= diff;
+                float angle = MathHelper.ToDegrees(launchDir.Value.Angle(diff));
                 if (angle > MaxAngle)
                 {
                     Snap();
@@ -262,8 +300,8 @@ namespace Barotrauma.Items.Components
             }
 
             Vector2 forceDir = diff;
-            float distance = diff.Length();
-            if (distance > 0.001f)
+            currentRopeLength = diff.Length();
+            if (currentRopeLength > 0.001f)
             {
                 forceDir = Vector2.Normalize(forceDir);
             }
@@ -277,87 +315,178 @@ namespace Barotrauma.Items.Components
             {
                 float targetMass = float.MaxValue;
                 Character targetCharacter = null;
-                if (projectile.StickTarget.UserData is Limb targetLimb)
+                switch (projectile.StickTarget.UserData)
                 {
-                    targetCharacter = targetLimb.character;
-                    targetMass = targetLimb.ragdoll.Mass;
-                }
-                else if (projectile.StickTarget.UserData is Character character)
-                {
-                    targetCharacter = character;
-                    targetMass = character.Mass;
-                }
-                else if (projectile.StickTarget.UserData is Item item)
-                {
-                    targetMass = projectile.StickTarget.Mass;
+                    case Limb targetLimb:
+                        targetCharacter = targetLimb.character;
+                        targetMass = targetLimb.ragdoll.Mass;
+                        break;
+                    case Character character:
+                        targetCharacter = character;
+                        targetMass = character.Mass;
+                        break;
+                    case Item _:
+                        targetMass = projectile.StickTarget.Mass;
+                        break;
                 }
                 if (projectile.StickTarget.BodyType != BodyType.Dynamic)
                 {
                     targetMass = float.MaxValue;
                 }
-                if (targetMass > TargetMinMass)
+                // Currently can only apply pull forces to the source, when it's a character, not e.g. when the item would be auto-operated by an AI. Might have to change this.
+                if (user != null)
                 {
-                    if (Math.Abs(SourcePullForce) > 0.001f)
+                    if (!snapped &&
+                        //user can only hold on to the rope if it was launched from a holdable item, or by something else than an item (limb?)
+                        (projectile.Launcher == null || projectile.Launcher.GetComponent<Holdable>() != null))
                     {
+                        user.AnimController.HoldToRope();
+                        if (targetCharacter != null)
+                        {
+                            targetCharacter.AnimController.DragWithRope();
+                        }
+                        if (user.InWater)
+                        {
+                            user.AnimController.HangWithRope();
+                        }
+                    }
+                    if (Math.Abs(SourcePullForce) > 0.001f && targetMass > TargetMinMass)
+                    {
+                        // This should be the main collider.
                         var sourceBody = GetBodyToPull(source);
                         if (sourceBody != null)
                         {
-                            if (user != null && user.InWater)
+                            PhysicsBody targetBody = GetBodyToPull(target);
+                            if (sourceBody.UserData is Character)
                             {
-                                if (user.IsRagdolled)
+                                isReelingIn = user.InWater && user.IsRagdolled || !user.InWater && targetCharacter is { IsIncapacitated: false };
+                                if (isReelingIn)
                                 {
-                                    // Reel in towards the target.
-                                    user.AnimController.Hang();
-                                    float force = LerpForces ? MathHelper.Lerp(0, SourcePullForce, MathUtils.InverseLerp(0, MaxLength / 2, distance)) : SourcePullForce;
-                                    sourceBody.ApplyForce(forceDir * force);
-                                }
-                                // Take the target velocity into account.
-                                if (targetCharacter != null)
-                                {
-                                    var myCollider = user.AnimController.Collider;
-                                    var targetCollider = targetCharacter.AnimController.Collider;
-                                    if (myCollider.LinearVelocity != Vector2.Zero && targetCollider.LinearVelocity != Vector2.Zero)
+                                    float pullForce = SourcePullForce;
+                                    if (!user.InWater)
                                     {
-                                        if (Vector2.Dot(Vector2.Normalize(myCollider.LinearVelocity), Vector2.Normalize(targetCollider.LinearVelocity)) < 0)
+                                        // Apply a tiny amount to the character holding the rope, so that the connection "feels" more real.
+                                        pullForce *= 0.1f;
+                                    }
+                                    float lengthFactor = MathUtils.InverseLerp(0, MaxLength / 2, currentRopeLength);
+                                    float force = LerpForces ? MathHelper.Lerp(0, pullForce, lengthFactor) : pullForce;
+                                    sourceBody.ApplyForce(forceDir * force);
+                                    // Take the target velocity into account.
+                                    if (targetBody != null)
+                                    {
+                                        if (targetCharacter != null)
                                         {
-                                            myCollider.ApplyForce(targetCollider.LinearVelocity * targetCollider.Mass);
+                                            if (targetBody.LinearVelocity != Vector2.Zero && sourceBody.LinearVelocity != Vector2.Zero)
+                                            {
+                                                Vector2 targetDir = Vector2.Normalize(targetBody.LinearVelocity);
+                                                float movementDot = Vector2.Dot(Vector2.Normalize(sourceBody.LinearVelocity), targetDir);
+                                                if (movementDot < 0)
+                                                {
+                                                    // Pushing to a different dir -> add some counter force
+                                                    const float multiplier = 5;
+                                                    float inverseLengthFactor = MathHelper.Lerp(1, 0, lengthFactor);
+                                                    sourceBody.ApplyForce(targetBody.LinearVelocity * Math.Min(targetBody.Mass * multiplier, 250) * sourceBody.Mass * -movementDot * inverseLengthFactor);
+                                                }
+                                                float forceDot = Vector2.Dot(forceDir, targetDir);
+                                                if (forceDot > 0)
+                                                {
+                                                    // Pulling to the same dir -> add extra force
+                                                    float targetSpeed = targetBody.LinearVelocity.Length();
+                                                    const float multiplier = 25;
+                                                    sourceBody.ApplyForce(forceDir * targetSpeed * sourceBody.Mass * multiplier * forceDot * lengthFactor);
+                                                }
+                                                float colliderMainLimbDistance = Vector2.Distance(sourceBody.SimPosition, user.AnimController.MainLimb.SimPosition);
+                                                const float minDist = 1;
+                                                const float maxDist = 10;
+                                                if (colliderMainLimbDistance > minDist && sourceBody.UserData is not Submarine)
+                                                {
+                                                    // Move the ragdoll closer to the collider, if it's too far (the correction force in HumanAnimController is not enough -> the ragdoll would lag behind and get teleported).
+                                                    float correctionForce = MathHelper.Lerp(10.0f, NetConfig.MaxPhysicsBodyVelocity, MathUtils.InverseLerp(minDist, maxDist, colliderMainLimbDistance));
+                                                    Vector2 targetPos = sourceBody.SimPosition + new Vector2((float)Math.Sin(-sourceBody.Rotation), (float)Math.Cos(-sourceBody.Rotation)) * 0.4f;
+                                                    user.AnimController.MainLimb.MoveToPos(targetPos, correctionForce);
+                                                }
+                                            }
+                                        }
+                                        else
+                                        {
+                                            sourceBody.ApplyForce(targetBody.LinearVelocity * sourceBody.Mass);
                                         }
                                     }
                                 }
-                                else
-                                {
-                                    var targetBody = GetBodyToPull(target);
-                                    if (targetBody != null)
-                                    {
-                                        sourceBody.ApplyForce(targetBody.LinearVelocity * sourceBody.Mass);
-                                    }
-                                }
+                            }
+                            else
+                            {
+                                float distance = Vector2.Distance(source.WorldPosition, target.WorldPosition);
+                                float force = LerpForces ? MathHelper.Lerp(0, SourcePullForce, MathUtils.InverseLerp(0, MaxLength / 2, distance)) : SourcePullForce;
+                                sourceBody.ApplyForce(forceDir * force);
                             }
                         }
                     }
                 }
-                if (Math.Abs(TargetPullForce) > 0.001f)
+
+                if (Math.Abs(TargetPullForce) > 0.001f && user is not { IsRagdolled: true})
                 {
-                    var targetBody = GetBodyToPull(target);
+                    PhysicsBody targetBody = GetBodyToPull(target);
+                    if (targetBody == null) { return; }
                     bool lerpForces = LerpForces;
-                    if (!lerpForces && user != null && targetCharacter != null && !user.AnimController.InWater)
+                    float maxVelocity = NetConfig.MaxPhysicsBodyVelocity * 0.25f;
+                    // The distance where we start pulling with max force.
+                    float maxPullDistance = MaxLength / 3;
+                    float minPullDistance = MinPullDistance;
+                    const float absoluteMinPullDistance = 50;
+                    if (targetCharacter != null)
                     {
-                        if ((forceDir.X < 0) != (user.AnimController.Dir < 0))
+                        if (targetCharacter.IsRagdolled || targetCharacter.IsUnconscious)
                         {
-                            // Prevents rubberbanding horizontally when dragging a corpse.
-                            lerpForces = true;
+                            if (!targetCharacter.InWater)
+                            {
+                                // Limits the velocity of ragdolled characters on ground/air, because otherwise they tend to move with too high forces.
+                                maxVelocity = NetConfig.MaxPhysicsBodyVelocity * 0.075f;
+                            }
+                        }
+                        else
+                        {
+                            // Target alive and kicking -> Use the absolute min pull distance and full forces to pull.
+                            // Keep some lerping, because it results into smoothing when the target is close by.
+                            minPullDistance = absoluteMinPullDistance;
+                            maxPullDistance = 200;
                         }
                     }
-                    float force = lerpForces ? MathHelper.Lerp(0, TargetPullForce, MathUtils.InverseLerp(0, MaxLength / 3, distance - 50)) : TargetPullForce;
-                    targetBody?.ApplyForce(-forceDir * force);
-                    var targetRagdoll = targetCharacter?.AnimController;
-                    if (targetRagdoll?.Collider != null && (targetRagdoll.InWater || targetRagdoll.OnGround))
+                    minPullDistance = MathHelper.Max(minPullDistance, absoluteMinPullDistance);
+                    if (currentRopeLength < minPullDistance) { return; }
+                    maxPullDistance = MathHelper.Max(minPullDistance * 2, maxPullDistance);
+                    float force = lerpForces
+                        ? MathHelper.Lerp(0, TargetPullForce, MathUtils.InverseLerp(minPullDistance, maxPullDistance, currentRopeLength))
+                        : TargetPullForce;
+                    targetBody.ApplyForce(-forceDir * force, maxVelocity);
+                    AnimController targetRagdoll = targetCharacter?.AnimController;
+                    if (targetRagdoll?.Collider != null)
                     {
-                        targetRagdoll.Collider.ApplyForce(-forceDir * force * 3);
+                        isReelingIn = true;
+                        if (targetRagdoll.InWater || targetRagdoll.OnGround)
+                        {
+                            float forceMultiplier = 1;
+                            if (!targetCharacter.IsRagdolled && !targetCharacter.IsIncapacitated && IncreaseForceForEscapingTargets)
+                            {
+                                // Pulling the main collider requires higher forces when the target is trying to move away.
+                                Vector2 targetMovement = targetCharacter.AnimController.TargetMovement;
+                                float dot = Vector2.Dot(Vector2.Normalize(targetMovement), forceDir);
+                                if (dot > 0)
+                                {
+                                    const float constMultiplier = 2.5f;
+                                    float targetVelocity = targetMovement.Length();
+                                    float massFactor = Math.Max((float)Math.Log(targetCharacter.Mass / 10), 1);
+                                    forceMultiplier = Math.Max(targetVelocity * massFactor * constMultiplier * dot, 1);
+                                }
+                            }
+                            targetRagdoll.Collider.ApplyForce(-forceDir * force * forceMultiplier, maxVelocity);   
+                        }
                     }
                 }
             }
         }
+        
+        partial void UpdateProjSpecific();
 
         public override void UpdateBroken(float deltaTime, Camera cam)
         {
@@ -409,34 +538,25 @@ namespace Barotrauma.Items.Components
         {
             if (target is Item targetItem)
             {
-                if (targetItem.ParentInventory is CharacterInventory characterInventory &&
-                    characterInventory.Owner is Character ownerCharacter)
+                if (targetItem.ParentInventory is CharacterInventory { Owner: Character ownerCharacter })
                 {
                     if (ownerCharacter.Removed) { return null; }
                     return ownerCharacter.AnimController.Collider;
                 }
                 var projectile = targetItem.GetComponent<Projectile>();
-                if (projectile != null && projectile.StickTarget != null)
+                if (projectile is { StickTarget: not null })
                 {
-                    if (projectile.StickTarget.UserData is Structure structure)
+                    return projectile.StickTarget.UserData switch
                     {
-                        return structure.Submarine?.PhysicsBody;
-                    }
-                    else if (projectile.StickTarget.UserData is Submarine sub)
-                    {
-                        return sub.PhysicsBody;
-                    }
-                    else if (projectile.StickTarget.UserData is Item item)
-                    {
-                        return item.body;
-                    }
-                    else if (projectile.StickTarget.UserData is Limb limb)
-                    {
-                        return limb.body;
-                    }
-                    return null;
+                        Structure structure => structure.Submarine?.PhysicsBody,
+                        Submarine sub => sub.PhysicsBody,
+                        Item item => item.body,
+                        Limb limb => limb.body,
+                        _ => null
+                    };
                 }
                 if (targetItem.body != null) { return targetItem.body; }
+                if (targetItem.StaticFixtures.Any() && targetItem.Submarine != null) { return targetItem.Submarine.PhysicsBody; }
             }
             else if (target is Limb targetLimb)
             {

@@ -340,13 +340,11 @@ namespace Barotrauma
         public static Submarine GetRespawnSub()
         {
 #if SERVER
-                if (GameMain.Server.RespawnManager == null)
-                    return null;
-                return GameMain.Server.RespawnManager.RespawnShuttle;
+            if (GameMain.Server.RespawnManager == null) { return null; }
+            return GameMain.Server.RespawnManager.GetShuttle(CharacterTeamType.Team1);
 #else
-            if (GameMain.Client.RespawnManager == null)
-                return null;
-            return GameMain.Client.RespawnManager.RespawnShuttle;
+            if (GameMain.Client.RespawnManager == null) { return null; }
+            return GameMain.Client.RespawnManager.GetShuttle(CharacterTeamType.Team1);
 #endif
         }
 
@@ -409,7 +407,7 @@ namespace Barotrauma
         private List<DebugConsole.Command> luaAddedCommand = new List<DebugConsole.Command>();
         public IEnumerable<DebugConsole.Command> LuaAddedCommand { get { return luaAddedCommand; } }
 
-        public bool IsCustomCommandPermitted(string command)
+        public bool IsCustomCommandPermitted(Identifier command)
         {
             DebugConsole.Command[] permitted = new DebugConsole.Command[] 
             { 
@@ -420,7 +418,7 @@ namespace Barotrauma
 
             foreach (var consoleCommand in LuaAddedCommand.Concat(permitted.AsEnumerable())) 
             { 
-                if (consoleCommand.names.Contains(command))
+                if (consoleCommand.Names.Contains(command))
                 {
                     return true;
                 }
@@ -433,7 +431,7 @@ namespace Barotrauma
         {
             for (var i = 0; i < DebugConsole.Commands.Count; i++)
             {
-                foreach (var cmdname in DebugConsole.Commands[i].names)
+                foreach (var cmdname in DebugConsole.Commands[i].Names)
                 {
                     if (cmdname == name)
                     {
@@ -470,18 +468,18 @@ namespace Barotrauma
         public void SaveGame(string path)
         {
             if (!LuaCsFile.CanWriteToPath(path)) { throw new ScriptRuntimeException($"Saving files to {path} is disallowed."); }
-            SaveUtil.SaveGame(path);
+            SaveUtil.SaveGame(CampaignDataPath.CreateRegular(path));
         }
 
         public void LoadGame(string path)
         {
-            SaveUtil.LoadGame(path);
+            SaveUtil.LoadGame(CampaignDataPath.CreateRegular(path));
         }
 
 #if SERVER
-        public void LoadCampaign(string path)
+        public void LoadCampaign(string path, Client client = null)
         {
-            MultiPlayerCampaign.LoadCampaign(path);
+            MultiPlayerCampaign.LoadCampaign(CampaignDataPath.CreateRegular(path), client);
         }
 
         public static void SendMessage(string msg, ChatMessageType? messageType = null, Client sender = null, Character character = null)
@@ -513,10 +511,10 @@ namespace Barotrauma
 
         public static void DispatchRespawnSub()
         {
-            GameMain.Server.RespawnManager.DispatchShuttle();
+            GameMain.Server.RespawnManager.DispatchShuttle(GameMain.Server.RespawnManager.GetTeamSpecificState(CharacterTeamType.Team1));
         }
 
-        public static bool StartGame()
+        public static GameServer.TryStartGameResult StartGame()
         {
             return GameMain.Server.TryStartGame();
         }

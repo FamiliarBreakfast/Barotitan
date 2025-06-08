@@ -20,7 +20,8 @@ namespace Barotrauma
 
         public override bool IsVisible(Rectangle worldView)
         {
-            return Screen.Selected == GameMain.SubEditorScreen || GameMain.DebugDraw;
+            if (Screen.Selected != GameMain.SubEditorScreen && !GameMain.DebugDraw) { return false; }
+            return base.IsVisible(worldView);
         }
 
         public override void Draw(SpriteBatch sb, bool editing, bool back = true)
@@ -95,9 +96,13 @@ namespace Barotrauma
                     new Vector2(Math.Sign(targetHull.Rect.Center.X - rect.Center.X), 0.0f)
                     : new Vector2(0.0f, Math.Sign((rect.Y - rect.Height / 2.0f) - (targetHull.Rect.Y - targetHull.Rect.Height / 2.0f)));
 
-                Vector2 arrowPos = new Vector2(WorldRect.Center.X, -(WorldRect.Y - WorldRect.Height / 2));
+                Vector2 arrowPos = new Vector2(WorldRect.Center.X, WorldRect.Y - WorldRect.Height / 2);
+                if (Submarine != null)
+                {
+                    arrowPos += (Submarine.DrawPosition - Submarine.Position);
+                }
+                arrowPos.Y = -arrowPos.Y;
                 arrowPos += new Vector2(dir.X * (WorldRect.Width / 2), dir.Y * (WorldRect.Height / 2));
-
                 bool invalidDir = false;
                 if (dir == Vector2.Zero)
                 {
@@ -215,7 +220,9 @@ namespace Barotrauma
                 }
                 else
                 {
-                    if (Math.Sign(flowTargetHull.Rect.Y - rect.Y) != Math.Sign(lerpedFlowForce.Y)) { return; }
+                    //do not emit particles unless water is flowing towards the target hull
+                    //(using lerpedFlowForce smooths out "flickers" when the direction of flow is rapidly changing)
+                    if (Math.Sign(flowTargetHull.WorldPosition.Y - WorldPosition.Y) != Math.Sign(lerpedFlowForce.Y)) { return; }
 
                     float particlesPerSec = Math.Max(open * rect.Width * particleAmountMultiplier, 10.0f);
                     float emitInterval = 1.0f / particlesPerSec;
@@ -331,7 +338,6 @@ namespace Barotrauma
         }
         private GUIComponent CreateEditingHUD(bool inGame = false)
         {
-
             editingHUD = new GUIFrame(new RectTransform(new Vector2(0.3f, 0.15f), GUI.Canvas, Anchor.CenterRight) { MinSize = new Point(400, 0) })
             {
                 UserData = this

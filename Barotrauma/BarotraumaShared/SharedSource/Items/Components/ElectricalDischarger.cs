@@ -172,7 +172,7 @@ namespace Barotrauma.Items.Components
                 if (item.Connections == null)
                 {
                     //no connections and can't be wired = must be powered by something like batteries
-                    hasPower = Voltage > MinVoltage;
+                    hasPower = HasPower;
                 }
                 else
                 {
@@ -226,7 +226,8 @@ namespace Barotrauma.Items.Components
                 foreach ((Character character, Node node) in charactersInRange)
                 {
                     if (character == null || character.Removed) { continue; }
-                    character.ApplyAttack(user, node.WorldPosition, attack, MathHelper.Clamp(Voltage, 1.0f, MaxOverVoltageFactor));
+                    character.ApplyAttack(user, node.WorldPosition, attack, MathHelper.Clamp(Voltage, 1.0f, MaxOverVoltageFactor), 
+                        impulseDirection: character.WorldPosition - node.WorldPosition);
                 }
             }
             DischargeProjSpecific();

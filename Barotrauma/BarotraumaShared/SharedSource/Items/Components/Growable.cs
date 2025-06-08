@@ -59,7 +59,8 @@ namespace Barotrauma.Items.Components
                         StatusEffect effect = StatusEffect.Load(subElement, Prefab?.Name.Value);
                         if (effect.type != ActionType.OnProduceSpawned)
                         {
-                            DebugConsole.ThrowError("Only OnProduceSpawned type can be used in <ProducedItem>.");
+                            DebugConsole.ThrowError("Only OnProduceSpawned type can be used in <ProducedItem>.", 
+                                contentPackage: element.ContentPackage);
                             continue;
                         }
 
@@ -76,6 +77,9 @@ namespace Barotrauma.Items.Components
     {
         Stem = 0b0000,
         CrossJunction = 0b1111,
+        HorizontalLine = 0b1010,
+        VerticalLine = 0b0101,
+        /*backwards compatibility, the vertical and horizontal "lane" used to be backwards*/
         VerticalLane = 0b1010,
         HorizontalLane = 0b0101,
         TurnTopRight = 0b1001,
@@ -552,7 +556,7 @@ namespace Barotrauma.Items.Components
 
             if (spawnProduct || spawnSeed)
             {
-                VineTile vine = Vines.GetRandomUnsynced();
+                VineTile vine = Vines.GetRandomUnsynced()!;
                 spawnPos = vine.GetWorldPosition(planter, slot.Offset);
             }
             else
@@ -892,9 +896,9 @@ namespace Barotrauma.Items.Components
             return element;
         }
 
-        public override void Load(ContentXElement componentElement, bool usePrefabValues, IdRemap idRemap)
+        public override void Load(ContentXElement componentElement, bool usePrefabValues, IdRemap idRemap, bool isItemSwap)
         {
-            base.Load(componentElement, usePrefabValues, idRemap);
+            base.Load(componentElement, usePrefabValues, idRemap, isItemSwap);
             flowerTiles = componentElement.GetAttributeIntArray("flowertiles", Array.Empty<int>())!;
             Decayed = componentElement.GetAttributeBool("decayed", false);
 

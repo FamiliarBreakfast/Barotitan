@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using Voronoi2;
 
 namespace Barotrauma
 {
@@ -27,11 +28,14 @@ namespace Barotrauma
             UpdateMoney = 13,
             UpdatePermanentStats = 14,
             RemoveFromCrew = 15,
-            
+            LatchOntoTarget = 16,
+            UpdateTalentRefundPoints = 17,
+            ConfirmTalentRefund = 18,
+
             MinValue = 0,
-            MaxValue = 15
+            MaxValue = 18
         }
-        
+
         private interface IEventData : NetEntityEvent.IData
         {
             public EventType EventType { get; }
@@ -135,7 +139,56 @@ namespace Barotrauma
                 ObjectiveType = objectiveType;
             }
         }
-        
+
+        public readonly struct LatchedOntoTargetEventData : IEventData
+        {
+            public EventType EventType => EventType.LatchOntoTarget;
+            public readonly bool IsLatched;
+            public readonly UInt16 TargetCharacterID = NullEntityID;
+            public readonly UInt16 TargetStructureID = NullEntityID;
+            public readonly int TargetLevelWallIndex = -1;
+
+            public readonly Vector2 AttachSurfaceNormal = Vector2.Zero;
+            public readonly Vector2 AttachPos = Vector2.Zero;
+
+            public readonly Vector2 CharacterSimPos;
+
+            private LatchedOntoTargetEventData(Character character, Vector2 attachSurfaceNormal, Vector2 attachPos)
+            {
+                CharacterSimPos = character.SimPosition;
+                IsLatched = true;
+                AttachSurfaceNormal = attachSurfaceNormal;
+                AttachPos = attachPos;
+            }
+
+            public LatchedOntoTargetEventData(Character character, Character targetCharacter, Vector2 attachSurfaceNormal, Vector2 attachPos)
+                : this(character, attachSurfaceNormal, attachPos)
+            {
+                TargetCharacterID = targetCharacter.ID;
+            }
+
+            public LatchedOntoTargetEventData(Character character, Structure targetStructure, Vector2 attachSurfaceNormal, Vector2 attachPos)
+                : this(character, attachSurfaceNormal, attachPos)
+            {
+                TargetStructureID = targetStructure.ID;
+            }
+
+            public LatchedOntoTargetEventData(Character character, VoronoiCell levelWall, Vector2 attachSurfaceNormal, Vector2 attachPos)
+                : this(character, attachSurfaceNormal, attachPos)
+            {
+                TargetLevelWallIndex = Level.Loaded.GetAllCells().IndexOf(levelWall);
+            }
+
+            /// <summary>
+            /// Signifies detaching (not attached to any target)
+            /// </summary>
+            public LatchedOntoTargetEventData()
+            {
+                CharacterSimPos = Vector2.Zero;
+                IsLatched = false;
+            }
+        }
+
         private struct TeamChangeEventData : IEventData
         {
             public EventType EventType => EventType.TeamChange;
@@ -179,9 +232,18 @@ namespace Barotrauma
 
         public struct UpdateSkillsEventData : IEventData
         {
-            public EventType EventType => EventType.UpdateSkills;
+            public readonly EventType EventType => EventType.UpdateSkills;
+
+            public readonly bool ForceNotification;
+            public readonly Identifier SkillIdentifier;
+
+            public UpdateSkillsEventData(Identifier skillIdentifier, bool forceNotification)
+            {
+                SkillIdentifier = skillIdentifier;
+                ForceNotification = forceNotification;
+            }
         }
-        
+
         private struct UpdateMoneyEventData : IEventData
         {
             public EventType EventType => EventType.UpdateMoney;
@@ -191,11 +253,21 @@ namespace Barotrauma
         {
             public EventType EventType => EventType.UpdatePermanentStats;
             public readonly StatTypes StatType;
-            
+
             public UpdatePermanentStatsEventData(StatTypes statType)
             {
                 StatType = statType;
             }
+        }
+
+        public struct UpdateRefundPointsEventData : IEventData
+        {
+            public EventType EventType => EventType.UpdateTalentRefundPoints;
+        }
+
+        public struct ConfirmRefundEventData : IEventData
+        {
+            public EventType EventType => EventType.ConfirmTalentRefund;
         }
     }
 }

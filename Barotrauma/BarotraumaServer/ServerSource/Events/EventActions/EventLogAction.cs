@@ -20,24 +20,25 @@ partial class EventLogAction : EventAction
                 if (target is Character character)
                 {
                     var ownerClient = GameMain.Server.ConnectedClients.Find(c => c.Character == character);
-                    if (ownerClient != null && eventLog != null)
+                    if (ownerClient != null)
                     {
                         targetClients.Add(ownerClient);
                     }
                 }
                 else
                 {
-                    DebugConsole.AddWarning($"{target} is not a valid target for an EventLogAction. The target should be a character.");
+                    DebugConsole.AddWarning($"{target} is not a valid target for an EventLogAction. The target should be a character.",
+                        ParentEvent.Prefab.ContentPackage);
                 }
             }
-            if (eventLog.TryAddEntry(ParentEvent.Prefab.Identifier, Id, displayText, targetClients) && ShowInServerLog)
+            if (eventLog!.TryAddEntry(ParentEvent.Prefab.Identifier, Id, displayText, targetClients) && ShowInServerLog)
             {
                 Log(targetClients);
             }
         }
         else
         {
-            if (eventLog != null && eventLog.TryAddEntry(ParentEvent.Prefab.Identifier, Id, displayText, GameMain.Server.ConnectedClients) && ShowInServerLog)
+            if (eventLog.TryAddEntry(ParentEvent.Prefab.Identifier, Id, displayText, GameMain.Server.ConnectedClients) && ShowInServerLog)
             {
                 Log(targetClients: null);
             }

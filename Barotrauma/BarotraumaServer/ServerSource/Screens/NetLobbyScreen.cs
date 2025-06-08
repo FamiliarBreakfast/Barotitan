@@ -1,7 +1,9 @@
-﻿using Barotrauma.Networking;
+﻿using Barotrauma.Extensions;
+using Barotrauma.Networking;
 using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 
 namespace Barotrauma
@@ -9,6 +11,7 @@ namespace Barotrauma
     partial class NetLobbyScreen : Screen
     {
         private SubmarineInfo selectedSub;
+        private SubmarineInfo selectedEnemySub;
         private SubmarineInfo selectedShuttle;
 
         public bool RadiationEnabled = true;
@@ -26,6 +29,18 @@ namespace Barotrauma
                 }
             }
         }
+
+        [MaybeNull, AllowNull]
+        public SubmarineInfo SelectedEnemySub
+        {
+            get => selectedEnemySub;
+            set
+            {
+                selectedEnemySub = value;
+                lastUpdateID++;
+            }
+        }
+
         public SubmarineInfo SelectedShuttle
         {
             get { return selectedShuttle; }
@@ -81,46 +96,16 @@ namespace Barotrauma
             get { return GameModes[SelectedModeIndex]; }
         }
 
-        private MissionType missionType;
-        public MissionType MissionType
+        public IEnumerable<Identifier> MissionTypes
         {
-            get { return missionType; }
+            get { return GameMain.NetworkMember.ServerSettings.AllowedRandomMissionTypes; }
             set
             {
                 lastUpdateID++;
-                missionType = value;
                 if (GameMain.NetworkMember?.ServerSettings != null)
                 {
-                    GameMain.NetworkMember.ServerSettings.MissionType = missionType.ToString();
+                    GameMain.NetworkMember.ServerSettings.MissionTypes = string.Join(",", value.Select(t => t.ToIdentifier()));
                 }
-            }
-        }
-
-        public string MissionTypeName
-        {
-            get { return missionType.ToString(); }
-            set
-            {
-                Enum.TryParse(value, out MissionType type);
-                MissionType = type;
-            }
-        }
-
-        public void ChangeServerName(string n)
-        {
-            GameMain.Server.ServerSettings.ServerName = n; lastUpdateID++;
-        }
-
-        public void ChangeServerMessage(string m)
-        {
-            GameMain.Server.ServerSettings.ServerMessageText = m; lastUpdateID++;
-        }
-        
-        public List<JobPrefab> JobPreferences
-        {
-            get
-            {
-                return null;
             }
         }
 
@@ -175,7 +160,7 @@ namespace Barotrauma
             }
             set
             {
-                if (levelSeed == value) return;
+                if (levelSeed == value) { return; }
 
                 lastUpdateID++;
                 levelSeed = value;
@@ -204,6 +189,12 @@ namespace Barotrauma
             if (SelectedMode != GameModePreset.MultiPlayerCampaign && GameMain.GameSession?.GameMode is CampaignMode && Selected == this)
             {
                 GameMain.GameSession = null;
+            }
+            if (GameMain.Server.ServerSettings.SelectedSubmarine.IsNullOrEmpty())
+            {
+                //if no sub is selected in the settings,
+                //select the random sub we selected in the constructor
+                GameMain.Server.ServerSettings.SelectedSubmarine = SelectedSub?.Name;
             }
         }
 

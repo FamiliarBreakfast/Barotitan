@@ -96,8 +96,20 @@ namespace Barotrauma.Items.Components
         [Editable, Serialize("> ", IsPropertySaveable.Yes)]
         public string LineStartSymbol { get; set; }
 
-        [Editable, Serialize(false, IsPropertySaveable.No)]
-        public bool Readonly { get; set; }
+        private bool _readonly;
+
+        [Editable, Serialize(false, IsPropertySaveable.Yes)]
+        public bool Readonly 
+        {
+            get => _readonly;
+            set
+            {
+                _readonly = value;
+#if CLIENT
+                RefreshInputElements();
+#endif
+            }
+        }
 
         [Serialize(true, IsPropertySaveable.No)]
         public bool AutoScrollToBottom { get; set; }
@@ -188,9 +200,9 @@ namespace Barotrauma.Items.Components
             return componentElement;
         }
 
-        public override void Load(ContentXElement componentElement, bool usePrefabValues, IdRemap idRemap)
+        public override void Load(ContentXElement componentElement, bool usePrefabValues, IdRemap idRemap, bool isItemSwap)
         {
-            base.Load(componentElement, usePrefabValues, idRemap);
+            base.Load(componentElement, usePrefabValues, idRemap, isItemSwap);
             for (int i = 0; i < MaxMessages; i++)
             {
                 string msg = componentElement.GetAttributeString("msg" + i, null);

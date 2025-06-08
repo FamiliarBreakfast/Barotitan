@@ -623,7 +623,8 @@ namespace Barotrauma.MapCreatures.Behavior
                         List<BallastFloraBranch> list = branches[hull];
                         if (!list.Any(HasAcidEmitter))
                         {
-                            BallastFloraBranch randomBranch = branches[hull].GetRandomUnsynced();
+                            BallastFloraBranch? randomBranch = branches[hull].GetRandomUnsynced();
+                            if (randomBranch == null) { continue; }
                             randomBranch.SpawningItem = true;
                     
                             ItemPrefab prefab = ItemPrefab.Find(null, AttackItemPrefab);
@@ -1009,8 +1010,8 @@ namespace Barotrauma.MapCreatures.Behavior
             Body branchBody = GameMain.World.CreateRectangle(ConvertUnits.ToSimUnits(rect.Width * scale), ConvertUnits.ToSimUnits(rect.Height * scale), 1.5f);
             branchBody.BodyType = BodyType.Static;
             branchBody.UserData = branch;
-            branchBody.SetCollidesWith(Physics.CollisionRepair);
-            branchBody.SetCollisionCategories(Physics.CollisionRepair);
+            branchBody.SetCollidesWith(Physics.CollisionRepairableWall);
+            branchBody.SetCollisionCategories(Physics.CollisionRepairableWall);
             branchBody.Position = ConvertUnits.ToSimUnits(pos);
             branchBody.Enabled = HasBrokenThrough;
 

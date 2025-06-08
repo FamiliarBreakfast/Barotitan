@@ -64,19 +64,20 @@ namespace Barotrauma.Items.Components
                 spriteBatch,
                 new Vector2(attachPos.X, -attachPos.Y),
                 item.SpriteColor * 0.5f,
-                0.0f, item.Scale, SpriteEffects.None, 0.0f);
+                item.RotationRad, 
+                item.Scale, SpriteEffects.None, 0.0f);
 
             GUI.DrawRectangle(spriteBatch, new Vector2(attachPos.X - 2, -attachPos.Y - 2), Vector2.One * 5, GUIStyle.Red, thickness: 3);
         }
 
         public override bool ValidateEventData(NetEntityEvent.IData data)
-            => TryExtractEventData<EventData>(data, out _);
+            => TryExtractEventData<AttachEventData>(data, out _);
 
         public void ClientEventWrite(IWriteMessage msg, NetEntityEvent.IData extraData = null)
         {
             if (!attachable || body == null) { return; }
             
-            var eventData = ExtractEventData<EventData>(extraData);
+            var eventData = ExtractEventData<AttachEventData>(extraData);
 
             Vector2 attachPos = eventData.AttachPos;
             msg.WriteSingle(attachPos.X);
@@ -93,7 +94,9 @@ namespace Barotrauma.Items.Components
             bool shouldBeAttached = msg.ReadBoolean();
             Vector2 simPosition = new Vector2(msg.ReadSingle(), msg.ReadSingle());
             UInt16 submarineID = msg.ReadUInt16();
+            UInt16 attacherID = msg.ReadUInt16();
             Submarine sub = Entity.FindEntityByID(submarineID) as Submarine;
+            Character attacher = Entity.FindEntityByID(attacherID) as Character;
 
             if (shouldBeAttached)
             {
@@ -103,6 +106,8 @@ namespace Barotrauma.Items.Components
                     item.SetTransform(simPosition, 0.0f);
                     item.Submarine = sub;
                     AttachToWall();
+                    PlaySound(ActionType.OnUse, attacher);
+                    ApplyStatusEffects(ActionType.OnUse, (float)Timing.Step, character: attacher, user: attacher);
                 }
             }
             else

@@ -57,7 +57,7 @@ namespace Barotrauma.Items.Components
                 RelativeSpacing = 0.08f
             };
 
-            new GUITextBlock(new RectTransform(new Vector2(1f, 0.07f), paddedFrame.RectTransform) { MinSize = new Point(0, GUI.IntScale(25)) }, item.Name, font: GUIStyle.SubHeadingFont)
+            new GUITextBlock(new RectTransform(new Vector2(1f, 0.07f), paddedFrame.RectTransform) { MinSize = new Point(0, GUI.IntScale(25)) }, item.Prefab.Name, font: GUIStyle.SubHeadingFont)
             {
                 TextAlignment = Alignment.Center,
                 AutoScaleHorizontal = true
@@ -154,12 +154,14 @@ namespace Barotrauma.Items.Components
                 {
                     infoArea.Text = TextManager.Get(InfoText).Fallback(InfoText);
                 }
+                
                 if (IsActive)
                 {
                     activateButton.Text = TextManager.Get("DeconstructorCancel");
                     infoArea.Text = string.Empty;
                     return;
                 }
+                
                 bool outputsFound = false;
                 foreach (var (inputItem, deconstructItem) in GetAvailableOutputs(checkRequiredOtherItems: true))
                 {
@@ -174,27 +176,34 @@ namespace Barotrauma.Items.Components
                         }
                         inputItem.GetComponent<GeneticMaterial>()?.ModifyDeconstructInfo(this, ref buttonText, ref infoText);
                         activateButton.Text = buttonText;
-                        if (infoArea != null)
-                        {
-                            infoArea.Text = infoText;
-                        }
+                        infoArea.Text = infoText;
+                        
                         return;
                     }
                 }
+                
+                LocalizedString activateButtonText = TextManager.Get(ActivateButtonText);
+                activateButton.Enabled = outputsFound || !InputContainer.Inventory.IsEmpty();
+                activateButton.Text = activateButtonText;
+                
                 //no valid outputs found: check if we're missing some required items from the input slots and display a message about it if possible
                 if (!outputsFound && infoArea != null)
                 {
                     foreach (var (inputItem, deconstructItem) in GetAvailableOutputs(checkRequiredOtherItems: false))
                     {
+                        LocalizedString infoText =  string.Empty;
                         if (deconstructItem.RequiredOtherItem.Any() && !string.IsNullOrEmpty(deconstructItem.InfoTextOnOtherItemMissing))
                         {
                             LocalizedString missingItemName = TextManager.Get("entityname." + deconstructItem.RequiredOtherItem.First());
-                            infoArea.Text = TextManager.GetWithVariable(deconstructItem.InfoTextOnOtherItemMissing, "[itemname]", missingItemName);
+                            infoText = TextManager.GetWithVariable(deconstructItem.InfoTextOnOtherItemMissing, "[itemname]", missingItemName);
                         }
+                        
+                        inputItem.GetComponent<GeneticMaterial>()?.ModifyDeconstructInfo(this, ref activateButtonText, ref infoText);
+                        
+                        activateButton.Text = activateButtonText;
+                        infoArea.Text = infoText;
                     }
                 }
-                activateButton.Enabled = outputsFound || !InputContainer.Inventory.IsEmpty();
-                activateButton.Text = TextManager.Get(ActivateButtonText);
             };
         }
 
@@ -341,7 +350,7 @@ namespace Barotrauma.Items.Components
                 GUIFrame itemFrame = new GUIFrame(new RectTransform(new Vector2(0.1f, 1f), parent.RectTransform), style: null)
                 {
                     UserData = identifier,
-                    ToolTip = GetTooltip(prefab)
+                    ToolTip = prefab.CreateTooltipText()
                 };
 
                 Sprite icon = prefab.InventoryIcon ?? prefab.Sprite;
@@ -371,21 +380,6 @@ namespace Barotrauma.Items.Components
                 if (!(component.FindChild(outputItemCountUserData, recursive: true) is GUITextBlock textBlock)) { return; }
 
                 textBlock.Text = TextManager.GetWithVariable("campaignstore.quantity", "[amount]", count.ToString());
-            }
-
-            static RichString GetTooltip(ItemPrefab prefab)
-            {
-                LocalizedString toolTip = $"‖color:{Color.White.ToStringHex()}‖{prefab.Name}‖color:end‖";
-
-                LocalizedString description = prefab.Description;
-                if (!description.IsNullOrEmpty()) { toolTip += '\n' + description; }
-
-                if (prefab.ContentPackage != GameMain.VanillaContent && prefab.ContentPackage != null)
-                {
-                    toolTip += $"\n‖color:{Color.MediumPurple.ToStringHex()}‖{prefab.ContentPackage.Name}‖color:end‖";
-                }
-
-                return RichString.Rich(toolTip);
             }
         }
 
@@ -430,7 +424,7 @@ namespace Barotrauma.Items.Components
 
         public override void UpdateHUDComponentSpecific(Character character, float deltaTime, Camera cam)
         {
-            inSufficientPowerWarning.Visible = IsActive && !hasPower;
+            inSufficientPowerWarning.Visible = IsActive && !HasPower;
         }
 
         private bool OnActivateButtonClicked(GUIButton button, object obj)

@@ -2,6 +2,7 @@
 using Barotrauma.IO;
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Xml.Linq;
 
@@ -73,7 +74,7 @@ namespace Barotrauma.Networking
             {
                 var property = netProperties[key];
                 property.SyncValue();
-                if (NetIdUtils.IdMoreRecent(property.LastUpdateID, c.LastRecvLobbyUpdate))
+                if (NetIdUtils.IdMoreRecent(property.LastUpdateID, c.LastRecvLobbyUpdate) || !c.InitialLobbyUpdateSent)
                 {
                     outMsg.WriteUInt32(key);
                     netProperties[key].Write(outMsg);
@@ -94,15 +95,6 @@ namespace Barotrauma.Networking
         {
             NetFlags requiredFlags = GetRequiredFlags(c);
             outMsg.WriteByte((byte)requiredFlags);
-            if (requiredFlags.HasFlag(NetFlags.Name))
-            {
-                outMsg.WriteString(ServerName);
-            }
-
-            if (requiredFlags.HasFlag(NetFlags.Message))
-            {
-                outMsg.WriteString(ServerMessageText);
-            }
             outMsg.WriteByte((byte)PlayStyle);
             outMsg.WriteByte((byte)MaxPlayers);
             outMsg.WriteBoolean(HasPassword);
@@ -114,6 +106,7 @@ namespace Barotrauma.Networking
             if (requiredFlags.HasFlag(NetFlags.Properties))
             {
                 WriteExtraCargo(outMsg);
+                WritePerks(outMsg);
             }
 
             if (requiredFlags.HasFlag(NetFlags.HiddenSubs))
@@ -121,8 +114,7 @@ namespace Barotrauma.Networking
                 WriteHiddenSubs(outMsg);
             }
 
-            if (c.HasPermission(Networking.ClientPermissions.ManageSettings)
-                && NetIdUtils.IdMoreRecent(
+            if (NetIdUtils.IdMoreRecent(
                     newID: LastUpdateIdForFlag[NetFlags.Properties],
                     oldID: c.LastRecvServerSettingsUpdate))
             {
@@ -138,6 +130,40 @@ namespace Barotrauma.Networking
             }
         }
 
+        public void ReadPerks(IReadMessage incMsg, Client c)
+        {
+            if (!HasPermissionToChangePerks(c)) return;
+
+            bool changed = ReadPerks(incMsg);
+            if (!changed) { return; }
+
+            UpdateFlag(NetFlags.Properties);
+            SaveSettings();
+            GameMain.NetLobbyScreen.LastUpdateID++;
+
+            static bool HasPermissionToChangePerks(Client client)
+            {
+                if (client.HasPermission(Networking.ClientPermissions.ManageSettings)) { return true; }
+
+                bool isPvP = GameMain.NetLobbyScreen?.SelectedMode == GameModePreset.PvP;
+                bool hasSelectedTeam = client.PreferredTeam is CharacterTeamType.Team1 or CharacterTeamType.Team2;
+                var otherClients = GameMain.NetworkMember?.ConnectedClients?.Where(c => c != client).ToImmutableArray() ?? ImmutableArray<Client>.Empty;
+
+                if (isPvP)
+                {
+                    if (!hasSelectedTeam) { return false; }
+
+                    return !otherClients
+                            .Where(c => c.PreferredTeam == client.PreferredTeam)
+                            .Any(static c => c.HasPermission(Networking.ClientPermissions.ManageSettings));
+                }
+                else
+                {
+                    return !otherClients.Any(static c => c.HasPermission(Networking.ClientPermissions.ManageSettings));
+                }
+            }
+        }
+
         public void ServerRead(IReadMessage incMsg, Client c)
         {
             if (!c.HasPermission(Networking.ClientPermissions.ManageSettings)) return;
@@ -145,21 +171,7 @@ namespace Barotrauma.Networking
             NetFlags flags = (NetFlags)incMsg.ReadByte();
 
             bool changed = false;
-            
-            if (flags.HasFlag(NetFlags.Name))
-            {
-                string serverName = incMsg.ReadString();
-                if (ServerName != serverName) { changed = true; }
-                ServerName = serverName;
-            }
-            
-            if (flags.HasFlag(NetFlags.Message))
-            {
-                string serverMessageText = incMsg.ReadString();
-                if (ServerMessageText != serverMessageText) { changed = true; }
-                ServerMessageText = serverMessageText;
-            }
-                        
+
             if (flags.HasFlag(NetFlags.Properties))
             {
                 bool propertiesChanged = ReadExtraCargo(incMsg);
@@ -199,6 +211,7 @@ namespace Barotrauma.Networking
                 if (propertiesChanged)
                 {
                     UpdateFlag(NetFlags.Properties);
+                    GameMain.Server.RefreshPvpTeamAssignments(); // the changed settings might be relevant to team logic, so refresh
                 }
                 changed |= propertiesChanged;
             }
@@ -212,45 +225,21 @@ namespace Barotrauma.Networking
             
             if (flags.HasFlag(NetFlags.Misc))
             {
-                int orBits = incMsg.ReadRangedInteger(0, (int)Barotrauma.MissionType.All) & (int)Barotrauma.MissionType.All;
-                int andBits = incMsg.ReadRangedInteger(0, (int)Barotrauma.MissionType.All) & (int)Barotrauma.MissionType.All;
-                GameMain.NetLobbyScreen.MissionType = (MissionType)(((int)GameMain.NetLobbyScreen.MissionType | orBits) & andBits);
-
-                bool changedTraitorProbability = incMsg.ReadBoolean();
-                float traitorProbability = incMsg.ReadSingle();
-                if (changedTraitorProbability)
+                List<Identifier> missionTypes = new List<Identifier>(GameMain.NetLobbyScreen.MissionTypes);
+                Identifier addedMissionType = incMsg.ReadIdentifier();
+                Identifier removedMissionType = incMsg.ReadIdentifier();
+                if (!addedMissionType.IsEmpty)
                 {
-                    TraitorProbability = traitorProbability;
+                    missionTypes.Add(addedMissionType);
                 }
+                if (!removedMissionType.IsEmpty)
+                {
+                    missionTypes.Remove(removedMissionType);
+                }
+                GameMain.NetLobbyScreen.MissionTypes = missionTypes;
+
                 //the byte indicates the direction we're changing the value, subtract one to get negative values from a byte
                 TraitorDangerLevel = TraitorDangerLevel + incMsg.ReadByte() - 1;
-
-                int botCount = BotCount + incMsg.ReadByte() - 1;
-                if (botCount < 0) { botCount = MaxBotCount; }
-                if (botCount > MaxBotCount) { botCount = 0; }
-                BotCount = botCount;
-
-                int botSpawnMode = (int)BotSpawnMode + incMsg.ReadByte() - 1;
-                if (botSpawnMode < 0) { botSpawnMode = 1; }
-                if (botSpawnMode > 1) { botSpawnMode = 0; }
-                BotSpawnMode = (BotSpawnMode)botSpawnMode;
-
-                float levelDifficulty = incMsg.ReadSingle();
-                if (levelDifficulty >= 0.0f) { SelectedLevelDifficulty = levelDifficulty; }
-
-                bool changedUseRespawnShuttle = incMsg.ReadBoolean();
-                bool useRespawnShuttle = incMsg.ReadBoolean();
-                if (changedUseRespawnShuttle)
-                {
-                    UseRespawnShuttle = useRespawnShuttle;
-                }
-
-                bool changedAutoRestart = incMsg.ReadBoolean();
-                bool autoRestart = incMsg.ReadBoolean();
-                if (changedAutoRestart)
-                {
-                    AutoRestart = autoRestart;
-                }
 
                 changed |= true;
                 UpdateFlag(NetFlags.Misc);
@@ -279,19 +268,16 @@ namespace Barotrauma.Networking
         {
             XDocument doc = new XDocument(new XElement("serversettings"));
 
-            doc.Root.SetAttributeValue("name", ServerName);
             doc.Root.SetAttributeValue("port", Port);
-#if USE_STEAM
-            doc.Root.SetAttributeValue("queryport", QueryPort);
-#endif
+
+            if (QueryPort != 0)
+            {
+                doc.Root.SetAttributeValue("queryport", QueryPort);
+            }
             doc.Root.SetAttributeValue("password", password ?? "");
 
             doc.Root.SetAttributeValue("enableupnp", EnableUPnP);
             doc.Root.SetAttributeValue("autorestart", autoRestart);
-
-            doc.Root.SetAttributeValue("LevelDifficulty", ((int)selectedLevelDifficulty).ToString());
-
-            doc.Root.SetAttributeValue("ServerMessage", ServerMessageText);
 
             doc.Root.SetAttributeValue("HiddenSubs", string.Join(",", HiddenSubs));
 
@@ -300,6 +286,8 @@ namespace Barotrauma.Networking
 
             SerializableProperty.SerializeProperties(this, doc.Root, true);
             doc.Root.Add(CampaignSettings.Save());
+
+            doc.Root.SetAttributeValue("DisabledMonsters", string.Join(",", MonsterEnabled.Where(kvp => !kvp.Value).Select(kvp => kvp.Key.Value)));
 
             System.Xml.XmlWriterSettings settings = new System.Xml.XmlWriterSettings
             {
@@ -334,6 +322,11 @@ namespace Barotrauma.Networking
 
             SerializableProperties = SerializableProperty.DeserializeProperties(this, doc.Root);
 
+            //backwards compatibility
+            if (serverName.IsNullOrEmpty()) { ServerName = doc.Root.GetAttributeString("name", ""); }
+            if (ServerName.Length > NetConfig.ServerNameMaxLength) { ServerName = ServerName.Substring(0, NetConfig.ServerNameMaxLength); }
+            if (ServerMessageText.IsNullOrEmpty()) { ServerMessageText = doc.Root.GetAttributeString("ServerMessage", ""); }
+
             if (string.IsNullOrEmpty(doc.Root.GetAttributeString("losmode", "")))
             {
                 LosMode = GameSettings.CurrentConfig.Graphics.LosMode;
@@ -348,9 +341,6 @@ namespace Barotrauma.Networking
             AllowSubVoting = SubSelectionMode == SelectionMode.Vote;            
             AllowModeVoting = ModeSelectionMode == SelectionMode.Vote;
 
-            selectedLevelDifficulty = doc.Root.GetAttributeFloat("LevelDifficulty", 20.0f);
-            GameMain.NetLobbyScreen.SetLevelDifficulty(selectedLevelDifficulty);
-            
             GameMain.NetLobbyScreen.SetTraitorProbability(traitorProbability);
 
             HiddenSubs.UnionWith(doc.Root.GetAttributeStringArray("HiddenSubs", Array.Empty<string>()));
@@ -418,33 +408,29 @@ namespace Barotrauma.Networking
                 if (min > -1 && max > -1) { AllowedClientNameChars.Add(new Range<int>(min, max)); }
             }
 
-            AllowedRandomMissionTypes = new List<MissionType>();
-            string[] allowedMissionTypeNames = doc.Root.GetAttributeStringArray(
-                "AllowedRandomMissionTypes", Enum.GetValues(typeof(MissionType)).Cast<MissionType>().Select(m => m.ToString()).ToArray());
-            foreach (string missionTypeName in allowedMissionTypeNames)
-            {
-                if (Enum.TryParse(missionTypeName, out MissionType missionType))
-                {
-                    if (missionType == Barotrauma.MissionType.None) { continue; }
-                    if (MissionPrefab.HiddenMissionClasses.Contains(missionType)) { continue; }
-                    AllowedRandomMissionTypes.Add(missionType);
-                }
-            }
-
-            ServerName = doc.Root.GetAttributeString("name", "");
-            if (ServerName.Length > NetConfig.ServerNameMaxLength) { ServerName = ServerName.Substring(0, NetConfig.ServerNameMaxLength); }
-            ServerMessageText = doc.Root.GetAttributeString("ServerMessage", "");
+            AllowedRandomMissionTypes = doc.Root.GetAttributeIdentifierArray(
+                "AllowedRandomMissionTypes", MissionPrefab.GetAllMultiplayerSelectableMissionTypes().ToArray()).ToList();
 
             GameMain.NetLobbyScreen.SelectedModeIdentifier = GameModeIdentifier;
-            //handle Random as the mission type, which is no longer a valid setting
-            //MissionType.All offers equivalent functionality
-            if (MissionType == "Random") { MissionType = "All"; }
-            GameMain.NetLobbyScreen.MissionTypeName = MissionType;
+            if (AllowedRandomMissionTypes.Contains(Tags.MissionTypeAll))
+            {
+                AllowedRandomMissionTypes = MissionPrefab.GetAllMultiplayerSelectableMissionTypes().ToList();
+            }
+            AllowedRandomMissionTypes = AllowedRandomMissionTypes.Distinct().ToList();
+            ValidateMissionTypes();
 
             GameMain.NetLobbyScreen.SetBotSpawnMode(BotSpawnMode);
             GameMain.NetLobbyScreen.SetBotCount(BotCount);
 
             MonsterEnabled ??= CharacterPrefab.Prefabs.Select(p => (p.Identifier, true)).ToDictionary();
+            var disabledMonsters = doc.Root.GetAttributeIdentifierArray("DisabledMonsters", Array.Empty<Identifier>());
+            foreach (var disabledMonster in disabledMonsters)
+            {
+                if (MonsterEnabled.ContainsKey(disabledMonster))
+                {
+                    MonsterEnabled[disabledMonster] = false;
+                }
+            }
 
             foreach (XElement element in doc.Root.Elements())
             {
@@ -453,6 +439,20 @@ namespace Barotrauma.Networking
                     CampaignSettings = new CampaignSettings(element);
                 }
             }
+
+            HashSet<Identifier> selectedCoalitionPerks = SelectedCoalitionPerks.ToHashSet();
+            HashSet<Identifier> selectedSeparatistsPerks = SelectedSeparatistsPerks.ToHashSet();
+            foreach (DisembarkPerkPrefab prefab in DisembarkPerkPrefab.Prefabs)
+            {
+                if (prefab.Cost == 0)
+                {
+                    selectedSeparatistsPerks.Add(prefab.Identifier);
+                    selectedCoalitionPerks.Add(prefab.Identifier);
+                }
+            }
+
+            SelectedCoalitionPerks = selectedCoalitionPerks.ToArray();
+            SelectedSeparatistsPerks = selectedSeparatistsPerks.ToArray();
         }
 
         public string SelectNonHiddenSubmarine(string current = null)
@@ -628,7 +628,7 @@ namespace Barotrauma.Networking
                 {
                     foreach (DebugConsole.Command command in clientPermission.PermittedCommands)
                     {
-                        clientElement.Add(new XElement("command", new XAttribute("name", command.names[0])));
+                        clientElement.Add(new XElement("command", new XAttribute("name", command.Names[0])));
                     }
                 }
                 doc.Root.Add(clientElement);

@@ -4,7 +4,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using static Barotrauma.MissionPrefab;
 
 namespace Barotrauma
 {
@@ -59,6 +58,16 @@ namespace Barotrauma
         {
             LocalizedString rewardText = GetRewardAmountText(sub);
             return RichString.Rich(TextManager.GetWithVariable("missionreward", "[reward]", "‖color:gui.orange‖" + rewardText + "‖end‖"));
+        }
+
+        public RichString GetDifficultyToolTipText()
+        {
+            // 2 skulls give +10% XP, 3 skulls +20% XP and 4 skulls give +30% XP.
+            float xpBonusMultiplier = CalculateDifficultyXPMultiplier();
+            float xpBonusPercentage = (xpBonusMultiplier - 1f) * 100f;
+            int bonusRounded = (int)Math.Round(xpBonusPercentage);
+            LocalizedString tooltipText = TextManager.GetWithVariable(tag: "missiondifficultyxpbonustooltip", varName: "[bonus]", value: bonusRounded.ToString());
+            return RichString.Rich(tooltipText);
         }
 
         public RichString GetReputationRewardText()
@@ -117,6 +126,7 @@ namespace Barotrauma
                 return string.Empty;
             }
         }
+        
         partial void DistributeExperienceToCrew(IEnumerable<Character> crew, int experienceGain)
         {
             foreach (Character character in crew)
@@ -126,7 +136,13 @@ namespace Barotrauma
             void GiveMissionExperience(CharacterInfo info)
             {
                 if (info == null) { return; }
-                var experienceGainMultiplierIndividual = new AbilityMissionExperienceGainMultiplier(this, 1f);
+                var experienceGainMultiplierIndividual = new AbilityMissionExperienceGainMultiplier(this, 1f, info.Character);
+                //check if anyone else in the crew has talents that could give a bonus to this one
+                foreach (var c in crew)
+                {
+                    if (c == info.Character) { continue; }
+                    c.CheckTalents(AbilityEffectType.OnAllyGainMissionExperience, experienceGainMultiplierIndividual);
+                }
                 info.Character?.CheckTalents(AbilityEffectType.OnGainMissionExperience, experienceGainMultiplierIndividual);
                 info.GiveExperience((int)(experienceGain * experienceGainMultiplierIndividual.Value));
             }
@@ -145,10 +161,10 @@ namespace Barotrauma
                 message = ModifyMessage(message);
             }
 
-            CoroutineManager.StartCoroutine(ShowMessageBoxAfterRoundSummary(header, message));
+            CoroutineManager.StartCoroutine(ShowMessageBoxWhenRoundSummaryIsNotActive(header, message));
         }
 
-        private IEnumerable<CoroutineStatus> ShowMessageBoxAfterRoundSummary(LocalizedString header, LocalizedString message)
+        private IEnumerable<CoroutineStatus> ShowMessageBoxWhenRoundSummaryIsNotActive(LocalizedString header, LocalizedString message)
         {
             while (GUIMessageBox.VisibleBox?.UserData is RoundSummary)
             {

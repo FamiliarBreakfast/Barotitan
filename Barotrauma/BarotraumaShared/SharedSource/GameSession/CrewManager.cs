@@ -5,11 +5,16 @@ using Barotrauma.Tutorials;
 using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Xml.Linq;
 
 namespace Barotrauma
 {
+
+    /// <summary>
+    /// Responsible for keeping track of the characters in the player crew, saving and loading their orders, managing the crew list UI
+    /// </summary>
     partial class CrewManager
     {
         const float ConversationIntervalMin = 100.0f;
@@ -22,20 +27,31 @@ namespace Barotrauma
 
         private readonly List<CharacterInfo> characterInfos = new List<CharacterInfo>();
         private readonly List<Character> characters = new List<Character>();
+        
+        private readonly List<CharacterInfo> reserveBench = new List<CharacterInfo>();
 
-        public IEnumerable<Character> GetCharacters()
+        /// <summary>
+        /// NOTE: When called from client code, this method will include players, but NOT when called from server code.
+        /// CrewManager is used for dealing with things relevant to AI characters, like hiring, firing, renaming, and the reserve bench.
+        /// In single player/client code, player CharacterInfos are still stored in it but only for displaying crew listings in the GUI correctly.
+        /// Use <see cref="GetSessionCrewCharacters"/> to get all the characters regardless if they're player or AI controlled.
+        /// </summary>
+        /// <param name="includeReserveBench">Should characters on the reserve be included? Defaults to false.</param>
+        public IEnumerable<CharacterInfo> GetCharacterInfos(bool includeReserveBench = false)
         {
-            return characters;
-        }
-
-        public IEnumerable<CharacterInfo> GetCharacterInfos()
-        {
+            if (includeReserveBench)
+            {
+                return characterInfos.Concat(reserveBench);
+            }
             return characterInfos;
+        }
+        
+        public IEnumerable<CharacterInfo> GetReserveBenchInfos()
+        {
+            return reserveBench;
         }
 
         private Character welcomeMessageNPC;
-
-        public List<CharacterInfo> CharacterInfos => characterInfos;
 
         public bool HasBots { get; set; }
 
@@ -74,8 +90,9 @@ namespace Barotrauma
             }
 
             // Ignore orders work a bit differently since the "unignore" order counters the "ignore" order
-            var isUnignoreOrder = order.Identifier == "unignorethis";
-            var orderPrefab = !isUnignoreOrder ? order.Prefab : OrderPrefab.Prefabs["ignorethis"];
+            var isUnignoreOrder = order.Identifier == Tags.UnignoreThis;
+            var isIgnoreOrder = order.Identifier == Tags.IgnoreThis;
+            var orderPrefab = !isUnignoreOrder ? order.Prefab : OrderPrefab.Prefabs[Tags.IgnoreThis];
             ActiveOrder existingOrder = ActiveOrders.Find(o =>
                     o.Order.Prefab == orderPrefab && MatchesTarget(o.Order.TargetEntity, order.TargetEntity) &&
                     (o.Order.TargetType != Order.OrderTargetType.WallSection || o.Order.WallSectionIndex == order.WallSectionIndex));
@@ -90,12 +107,54 @@ namespace Barotrauma
                 else
                 {
                     ActiveOrders.Remove(existingOrder);
+                    if (isIgnoreOrder && order.TargetEntity is Item targetItem)
+                    {
+                        foreach (var stackedItem in targetItem.GetStackedItems())
+                        {
+                            ActiveOrders.RemoveAll(o => o.Order.Prefab == orderPrefab && o.Order.TargetEntity == stackedItem);
+                            stackedItem.OrderedToBeIgnored = false;
+                        }
+                    }
                     return true;
                 }
             }
             else if (!isUnignoreOrder)
             {
-                ActiveOrders.Add(new ActiveOrder(order, fadeOutTime));
+                if (order.IsDeconstructOrder)
+                {
+                    if (order.TargetEntity is Item item)
+                    {
+                        if (order.Identifier == Tags.DeconstructThis)
+                        {
+                            foreach (var stackedItem in item.GetStackedItems())
+                            {
+                                Item.DeconstructItems.Add(stackedItem);
+                            }
+#if CLIENT
+                            HintManager.OnItemMarkedForDeconstruction(order.OrderGiver);
+#endif
+                        }
+                        else
+                        {
+                            foreach (var stackedItem in item.GetStackedItems())
+                            {
+                                Item.DeconstructItems.Remove(stackedItem);
+                            }
+                        }
+                    }
+                }
+                if (isIgnoreOrder && order.TargetEntity is Item targetItem)
+                {
+                    foreach (var stackedItem in targetItem.GetStackedItems())
+                    {
+                        ActiveOrders.Add(new ActiveOrder(order.WithTargetEntity(stackedItem), fadeOutTime));
+                        stackedItem.OrderedToBeIgnored = true;
+                    }
+                }
+                else
+                {
+                    ActiveOrders.Add(new ActiveOrder(order, fadeOutTime));
+                }
 #if CLIENT
                 HintManager.OnActiveOrderAdded(order);
 #endif
@@ -120,12 +179,19 @@ namespace Barotrauma
             foreach (var characterElement in element.Elements())
             {
                 if (!characterElement.Name.ToString().Equals("character", StringComparison.OrdinalIgnoreCase)) { continue; }
-                CharacterInfo characterInfo = new CharacterInfo(characterElement);
+                CharacterInfo characterInfo = new CharacterInfo(new ContentXElement(contentPackage: null, characterElement));
 #if CLIENT
                 if (characterElement.GetAttributeBool("lastcontrolled", false)) { characterInfo.LastControlled = true; }
                 characterInfo.CrewListIndex = characterElement.GetAttributeInt("crewlistindex", -1);
 #endif
-                characterInfos.Add(characterInfo);
+                if (characterElement.GetAttributeBool(nameof(CharacterInfo.IsOnReserveBench), false))
+                {
+                    reserveBench.Add(characterInfo);
+                }
+                else
+                {
+                    characterInfos.Add(characterInfo);
+                }
                 foreach (var subElement in characterElement.Elements())
                 {
                     switch (subElement.Name.ToString().ToLowerInvariant())
@@ -150,10 +216,17 @@ namespace Barotrauma
         /// <param name="characterInfo"></param>
         public void RemoveCharacterInfo(CharacterInfo characterInfo)
         {
+            if (characterInfo is { IsOnReserveBench: true })
+            {
+                reserveBench.Remove(characterInfo);
+            }
             characterInfos.Remove(characterInfo);
+#if CLIENT
+            GameMain.GameSession?.DeathPrompt?.UpdateBotList();
+#endif
         }
         
-        public void AddCharacter(Character character, bool sortCrewList = true)
+        public void AddCharacter(Character character)
         {
             if (character.Removed)
             {
@@ -164,6 +237,17 @@ namespace Barotrauma
             {
                 DebugConsole.ThrowError("Tried to add a dead character to CrewManager!\n" + Environment.StackTrace.CleanupStackTrace());
                 return;
+            }
+            if (character.Info == null)
+            {
+                if (character.Prefab.ContentPackage == GameMain.VanillaContent)
+                {
+                    DebugConsole.ThrowError($"Added a character with no {nameof(CharacterInfo)} to the crew." + Environment.StackTrace.CleanupStackTrace());
+                }
+                else
+                {
+                    DebugConsole.ThrowError($"Added add a character with no {nameof(CharacterInfo)} to the crew. This may lead to issues: consider adding {nameof(CharacterPrefab.HasCharacterInfo)}=\"True\" to the character config.");
+                }
             }
 
             if (!characters.Contains(character))
@@ -176,10 +260,6 @@ namespace Barotrauma
             }
 #if CLIENT
             var characterComponent = AddCharacterToCrewList(character);
-            if (sortCrewList)
-            {
-                SortCrewList();
-            }
             if (character.CurrentOrders != null)
             {
                 foreach (var order in character.CurrentOrders)
@@ -196,6 +276,11 @@ namespace Barotrauma
                     idleObjective.Behavior = character.Info.Job.Prefab.IdleBehavior;
                 }
             }            
+        }
+
+        public bool IsFired(Character character)
+        {
+            return !GetCharacterInfos().Contains(character.Info);
         }
 
         /// <summary>
@@ -228,6 +313,15 @@ namespace Barotrauma
 
         public void AddCharacterInfo(CharacterInfo characterInfo)
         {
+            if (GameMain.GameSession?.Campaign is MultiPlayerCampaign)
+            {
+                Debug.Assert(characterInfo.BotStatus == BotStatus.ActiveService);
+                if (characterInfo.BotStatus != BotStatus.ActiveService)
+                {
+                    DebugConsole.ThrowError($"CrewManager.AddCharacterInfo called on a bot ({characterInfo.DisplayName}) with the wrong status ({characterInfo.BotStatus})");
+                }
+            }
+            
             if (characterInfos.Contains(characterInfo))
             {
                 DebugConsole.ThrowError("Tried to add the same character info to CrewManager twice.\n" + Environment.StackTrace.CleanupStackTrace());
@@ -235,6 +329,15 @@ namespace Barotrauma
             }
 
             characterInfos.Add(characterInfo);
+#if CLIENT
+            GameMain.GameSession?.DeathPrompt?.UpdateBotList();
+#endif
+        }
+
+        public void ClearCharacterInfos()
+        {
+            characterInfos.Clear();
+            reserveBench.Clear();
         }
 
         public void InitRound()
@@ -247,14 +350,10 @@ namespace Barotrauma
 
             List<WayPoint> spawnWaypoints = null;
             List<WayPoint> mainSubWaypoints = WayPoint.SelectCrewSpawnPoints(characterInfos, Submarine.MainSub).ToList();
-
+            
             if (Level.Loaded != null && Level.Loaded.ShouldSpawnCrewInsideOutpost())
             {
-                spawnWaypoints = WayPoint.WayPointList.FindAll(wp =>
-                    wp.SpawnType == SpawnType.Human &&
-                    wp.Submarine == Level.Loaded.StartOutpost &&
-                    wp.CurrentHull != null &&
-                    wp.CurrentHull.OutpostModuleTags.Contains("airlock".ToIdentifier()));
+                spawnWaypoints = GetOutpostSpawnpoints();
                 while (spawnWaypoints.Count > characterInfos.Count)
                 {
                     spawnWaypoints.RemoveAt(Rand.Int(spawnWaypoints.Count));
@@ -276,46 +375,9 @@ namespace Barotrauma
                 var info = characterInfos[i];
                 info.TeamID = CharacterTeamType.Team1;
                 Character character = Character.Create(info, spawnWaypoints[i].WorldPosition, info.Name);
-                if (character.Info != null)
-                {
-                    if (!character.Info.StartItemsGiven && character.Info.InventoryData != null)
-                    {
-                        DebugConsole.AddWarning($"Error when initializing a round: character \"{character.Name}\" has not been given their initial items but has saved inventory data. Using the saved inventory data instead of giving the character new items.");
-                    }
-                    if (character.Info.InventoryData != null)
-                    {
-                        character.SpawnInventoryItems(character.Inventory, character.Info.InventoryData.FromPackage(null));
-                    }
-                    else if (!character.Info.StartItemsGiven)
-                    {
-                        character.GiveJobItems(mainSubWaypoints[i]);
-                        foreach (Item item in character.Inventory.AllItems)
-                        {
-                            //if the character is loaded from a human prefab with preconfigured items, its ID card gets assigned to the sub it spawns in
-                            //we don't want that in this case, the crew's cards shouldn't be submarine-specific
-                            var idCard = item.GetComponent<Items.Components.IdCard>();
-                            if (idCard != null)
-                            {
-                                idCard.SubmarineSpecificID = 0;
-                            }
-                        }
-                    }
-                    if (character.Info.HealthData != null)
-                    {
-                        CharacterInfo.ApplyHealthData(character, character.Info.HealthData);
-                    }
+                InitializeCharacter(character, mainSubWaypoints[i], spawnWaypoints[i]);
 
-                    character.LoadTalents();
-                    character.GiveIdCardTags(new List<WayPoint>() { mainSubWaypoints[i], spawnWaypoints[i] });
-                    character.Info.StartItemsGiven = true;
-
-                    if (character.Info.OrderData != null)
-                    {
-                        character.Info.ApplyOrderData();
-                    }
-                }
-
-                AddCharacter(character, sortCrewList: false);
+                AddCharacter(character);
 #if CLIENT
                 if (IsSinglePlayer && (Character.Controlled == null || character.Info.LastControlled)) { Character.Controlled = character; }
 #endif
@@ -329,17 +391,65 @@ namespace Barotrauma
             conversationTimer = IsSinglePlayer ? Rand.Range(5.0f, 10.0f) : Rand.Range(45.0f, 60.0f);
         }
 
+        /// <summary>
+        /// Returns the potential crew spawnpositions for the crew in the loaded outpost
+        /// </summary>
+        public List<WayPoint> GetOutpostSpawnpoints()
+        {
+            return WayPoint.WayPointList.FindAll(wp =>
+                    wp.SpawnType == SpawnType.Human &&
+                    wp.Submarine == Level.Loaded.StartOutpost &&
+                    wp.CurrentHull != null &&
+                    wp.CurrentHull.OutpostModuleTags.Contains("airlock".ToIdentifier()));
+        }
+
+        public void InitializeCharacter(Character character, WayPoint mainSubWaypoint, WayPoint spawnWaypoint)
+        {
+            if (character.Info != null)
+            {
+                if (!character.Info.StartItemsGiven && character.Info.InventoryData != null)
+                {
+                    DebugConsole.AddWarning($"Error when initializing a round: character \"{character.Name}\" has not been given their initial items but has saved inventory data. Using the saved inventory data instead of giving the character new items.");
+                }
+                if (character.Info.InventoryData != null)
+                {
+                    character.SpawnInventoryItems(character.Inventory, character.Info.InventoryData.FromPackage(null));
+                }
+                else if (!character.Info.StartItemsGiven)
+                {
+                    character.GiveJobItems(isPvPMode: GameMain.GameSession?.GameMode is PvPMode, mainSubWaypoint);
+                    foreach (Item item in character.Inventory.AllItems)
+                    {
+                        //if the character is loaded from a human prefab with preconfigured items, its ID card gets assigned to the sub it spawns in
+                        //we don't want that in this case, the crew's cards shouldn't be submarine-specific
+                        var idCard = item.GetComponent<Items.Components.IdCard>();
+                        if (idCard != null)
+                        {
+                            idCard.SubmarineSpecificID = 0;
+                        }
+                    }
+                }
+                if (character.Info.HealthData != null)
+                {
+                    CharacterInfo.ApplyHealthData(character, character.Info.HealthData);
+                }
+
+                character.LoadTalents();
+
+                character.GiveIdCardTags(mainSubWaypoint);
+                character.GiveIdCardTags(spawnWaypoint);
+                character.Info.StartItemsGiven = true;
+                if (character.Info.OrderData != null)
+                {
+                    character.Info.ApplyOrderData();
+                }
+            }
+        }
+
         public void RenameCharacter(CharacterInfo characterInfo, string newName)
         {
-            int identifier = characterInfo.GetIdentifierUsingOriginalName();
-            var match = characterInfos.FirstOrDefault(ci => ci.GetIdentifierUsingOriginalName() == identifier);
-            if (match == null)
-            {
-                DebugConsole.ThrowError($"Tried to rename an invalid crew member ({identifier})");
-                return;
-            }
-            match.Rename(newName);
-            RenameCharacterProjSpecific(match);
+            characterInfo.Rename(newName);
+            RenameCharacterProjSpecific(characterInfo);
         }
 
         partial void RenameCharacterProjSpecific(CharacterInfo characterInfo);
@@ -501,7 +611,7 @@ namespace Barotrauma
 
         public static IEnumerable<Character> GetCharactersSortedForOrder(Order order, IEnumerable<Character> characters, Character controlledCharacter, bool includeSelf, IEnumerable<Character> extraCharacters = null)
         {
-            var filteredCharacters = characters.Where(c => controlledCharacter == null || ((includeSelf || c != controlledCharacter) && c.TeamID == controlledCharacter.TeamID));
+            var filteredCharacters = characters.Where(c => c.Info != null && (controlledCharacter == null || ((includeSelf || c != controlledCharacter) && c.TeamID == controlledCharacter.TeamID)));
             if (extraCharacters != null)
             {
                 filteredCharacters = filteredCharacters.Union(extraCharacters);

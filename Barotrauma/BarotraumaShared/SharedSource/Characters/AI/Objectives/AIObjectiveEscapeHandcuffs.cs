@@ -8,13 +8,13 @@ namespace Barotrauma
         // Used for prisoner escorts to allow them to escape their binds
         public override Identifier Identifier { get; set; } = "escape handcuffs".ToIdentifier();
         public override bool AllowAutomaticItemUnequipping => true;
-        public override bool AllowOutsideSubmarine => true;
-        public override bool AllowInAnySub => true;
+        protected override bool AllowOutsideSubmarine => true;
+        protected override bool AllowInAnySub => true;
 
         private int escapeProgress;
         private bool isBeingWatched;
 
-        private bool shouldSwitchTeams;
+        private readonly bool shouldSwitchTeams;
 
         const string EscapeTeamChangeIdentifier = "escape";
 
@@ -28,8 +28,7 @@ namespace Barotrauma
         }
 
         public override bool CanBeCompleted => true;
-        public override bool IsLoop { get => true; set => throw new Exception("Trying to set the value for IsLoop from: " + Environment.StackTrace.CleanupStackTrace()); }
-        protected override bool CheckObjectiveSpecific() => false;
+        protected override bool CheckObjectiveState() => false;
 
         // escape timer is set to 60 by default to allow players to locate prisoners in time
         private float escapeTimer = 60f;
@@ -88,10 +87,12 @@ namespace Barotrauma
                 escapeProgress += Rand.Range(2, 5);
                 if (escapeProgress > 15)
                 {
-                    Item handcuffs = character.Inventory.FindItemByTag(Tags.HandLockerItem);
-                    if (handcuffs != null)
+                    foreach (var it in character.HeldItems)
                     {
-                        handcuffs.Drop(character);
+                        if (it.HasTag(Tags.HandLockerItem) && it.IsInteractable(character))
+                        {
+                            it.Drop(character);
+                        }
                     }
                 }
                 escapeTimer = EscapeIntervalTimer * Rand.Range(0.75f, 1.25f);

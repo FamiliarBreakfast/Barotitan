@@ -1,4 +1,5 @@
 ﻿using Barotrauma.Items.Components;
+using Barotrauma.Extensions;
 using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
@@ -13,9 +14,9 @@ namespace Barotrauma
 
         public override bool AllowAutomaticItemUnequipping => true;
         public override bool AllowMultipleInstances => true;
-        public override bool AllowInAnySub => true;
-        public override bool AllowWhileHandcuffed => false;
-        public override bool PrioritizeIfSubObjectivesActive => component != null && (component is Reactor || component is Turret);
+        protected override bool AllowInAnySub => true;
+        protected override bool AllowWhileHandcuffed => false;
+        public override bool PrioritizeIfSubObjectivesActive => component is Reactor or Turret;
 
         private readonly ItemComponent component, controller;
         private readonly Entity operateTarget;
@@ -29,7 +30,12 @@ namespace Barotrauma
         /// </summary>
         public Func<PathNode, bool> EndNodeFilter;
 
-        public bool Override { get; set; } = true;
+        public bool Override { get; init; } = true;
+        
+        /// <summary>
+        /// When true, the operate objective is never completed, unless it's abandoned.
+        /// </summary>
+        public bool Repeat { get; init; }
 
         public override bool CanBeCompleted => base.CanBeCompleted && (!useController || controller != null);
 
@@ -50,7 +56,7 @@ namespace Barotrauma
             bool isOrder = objectiveManager.IsOrder(this);
             if (!IsAllowed)
             {
-                HandleNonAllowed();
+                HandleDisallowed();
                 return Priority;
             }
             if (!isOrder && component.Item.ConditionPercentage <= 0)
@@ -83,12 +89,23 @@ namespace Barotrauma
                     Priority = 0;
                     return Priority;
                 }
-                var reactor = component?.Item.GetComponent<Reactor>();
+                Hull targetHull = targetItem.CurrentHull;
+                if (HumanAIController.UnsafeHulls.Contains(targetHull))
+                {
+                    // Ignore the objective, if the target hull is dangerous.
+                    Priority = 0;
+                    if (isOrder && this == objectiveManager.CurrentObjective && character.IsOnPlayerTeam)
+                    {
+                        character.Speak(TextManager.GetWithVariable("dialogoperatetargetroomisunsafe", "[item]", targetItem.Name).Value, delay: 1.0f, identifier: "dialogoperatetargetroomisunsafe".ToIdentifier(), minDurationBetweenSimilar: 5.0f);
+                    }
+                    return Priority;
+                }
+                var reactor = component.Item.GetComponent<Reactor>();
                 if (reactor != null)
                 {
                     if (!isOrder)
                     {
-                        if (reactor.LastUserWasPlayer && character.TeamID != CharacterTeamType.FriendlyNPC)
+                        if (reactor.LastUserWasPlayer && character.IsOnPlayerTeam)
                         {
                             // The reactor was previously operated by a player -> ignore.
                             Priority = 0;
@@ -121,7 +138,7 @@ namespace Barotrauma
                 }
                 else if (!isOrder)
                 {
-                    var steering = component?.Item.GetComponent<Steering>();
+                    var steering = component.Item.GetComponent<Steering>();
                     if (steering != null && (steering.AutoPilot || HumanAIController.IsTrueForAnyCrewMember(c => c != character && c.IsCaptain, onlyActive: true, onlyConnectedSubs: true)))
                     {
                         // Ignore if already set to autopilot or if there's a captain onboard
@@ -131,10 +148,8 @@ namespace Barotrauma
                 }
                 if (targetItem.CurrentHull == null ||
                     targetItem.Submarine != character.Submarine && !isOrder ||
-                    targetItem.CurrentHull.FireSources.Any() ||
-                    HumanAIController.IsItemOperatedByAnother(target, out _) ||
-                    Character.CharacterList.Any(c => c.CurrentHull == targetItem.CurrentHull && !HumanAIController.IsFriendly(c) && HumanAIController.IsActive(c))
-                    || component.Item.IgnoreByAI(character) || useController && controller.Item.IgnoreByAI(character))
+                    IsItemOperatedByAnother(target) ||
+                    component.Item.IgnoreByAI(character) || useController && controller.Item.IgnoreByAI(character))
                 {
                     Priority = 0;
                 }
@@ -149,8 +164,8 @@ namespace Barotrauma
                     else if (!OverridePriority.HasValue)
                     {
                         float value = CumulatedDevotion + (AIObjectiveManager.LowestOrderPriority * PriorityModifier);
-                        float max = AIObjectiveManager.LowestOrderPriority - 1;
-                        if (reactor != null && reactor.PowerOn && reactor.FissionRate > 1 && reactor.AutoTemp && Option == "powerup")
+                        const float max = AIObjectiveManager.LowestOrderPriority - 1;
+                        if (reactor is { PowerOn: true, FissionRate: > 1, AutoTemp: true } && Option == "powerup")
                         {
                             // Already on, no need to operate.
                             value = 0;
@@ -166,12 +181,12 @@ namespace Barotrauma
             Entity operateTarget = null, bool useController = false, ItemComponent controller = null, float priorityModifier = 1)
             : base(character, objectiveManager, priorityModifier, option)
         {
-            component = item ?? throw new ArgumentNullException("item", "Attempted to create an AIObjectiveOperateItem with a null target.");
+            component = item ?? throw new ArgumentNullException(nameof(item), "Attempted to create an AIObjectiveOperateItem with a null target.");
             this.requireEquip = requireEquip;
             this.operateTarget = operateTarget;
             this.useController = useController;
-            if (useController) { this.controller = controller ?? component?.Item?.FindController(); }
-            var target = GetTarget();
+            if (useController) { this.controller = controller ?? component.Item?.FindController(); }
+            ItemComponent target = GetTarget();
             if (target == null)
             {
                 Abandon = true;
@@ -211,6 +226,10 @@ namespace Barotrauma
                     return;
                 }
             }
+
+            //the character shouldn't be grabbing anyone if it's trying to operate an item
+            character.SelectedCharacter = null;
+
             if (target.CanBeSelected)
             {
                 if (!character.IsClimbing && character.CanInteractWith(target.Item, out _, checkLinked: false))
@@ -236,6 +255,7 @@ namespace Barotrauma
                 {
                     TryAddSubObjective(ref goToObjective, () => new AIObjectiveGoTo(target.Item, character, objectiveManager, closeEnough: 50)
                     {
+                        DialogueIdentifier = AIObjectiveGoTo.DialogCannotReachTarget,
                         TargetName = target.Item.Name,
                         endNodeFilter = EndNodeFilter ?? AIObjectiveGetItem.CreateEndNodeFilter(target.Item)
                     },
@@ -303,13 +323,76 @@ namespace Barotrauma
             }
         }
 
-        protected override bool CheckObjectiveSpecific() => isDoneOperating && !IsLoop;
+        protected override bool CheckObjectiveState() => isDoneOperating && !Repeat;
 
         public override void Reset()
         {
             base.Reset();
             goToObjective = null;
             getItemObjective = null;
+        }
+        
+        private bool IsItemOperatedByAnother(ItemComponent target)
+        {
+            if (target?.Item == null) { return false; }
+            bool isOrdered = IsOrderedToOperateTarget(HumanAIController);
+            foreach (Character c in Character.CharacterList)
+            {
+                if (!HumanAIController.IsActive(c)) { continue; }
+                if (c == character) { continue; }
+                if (c.TeamID != character.TeamID) { continue; }
+                if (c.IsPlayer)
+                {
+                    if (c.SelectedItem == target.Item)
+                    {
+                        // If the other character is player, don't try to operate
+                        return true;
+                    }
+                }
+                else if (c.AIController is HumanAIController otherAI)
+                {
+                    if (otherAI.ObjectiveManager.Objectives.None(o => o is AIObjectiveOperateItem operateObjective && operateObjective.Component.Item == target.Item))
+                    {
+                        // Not targeting the same item.
+                        continue;
+                    }
+                    bool isOtherCharacterOrdered = IsOrderedToOperateTarget(otherAI);
+                    switch (isOrdered)
+                    {
+                        case false when isOtherCharacterOrdered:
+                            // We are not ordered and the target is ordered -> let the other character operate the target item.
+                            return true;
+                        case true when !isOtherCharacterOrdered:
+                            // We are ordered and the other character is not -> allow to us to operate the target item.
+                            continue;
+                        default:
+                        {
+                            // Neither or both are ordered to operate this item.
+                            if (!IsOperatingTarget(otherAI))
+                            {
+                                // The other bot is doing something else -> stick to the target.
+                                continue;
+                            }
+                            if (target is Steering)
+                            {
+                                // Steering is hard-coded -> cannot use the required skills collection defined in the xml
+                                if (character.GetSkillLevel(Tags.HelmSkill) <= c.GetSkillLevel(Tags.HelmSkill))
+                                {
+                                    return true;
+                                }
+                            }
+                            else if (target.DegreeOfSuccess(character) <= target.DegreeOfSuccess(c))
+                            {
+                                return true;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            return false;
+            bool IsOrderedToOperateTarget(HumanAIController ai) => ai.ObjectiveManager.CurrentOrder is AIObjectiveOperateItem operateOrder && operateOrder.Component.Item == target.Item;
+            bool IsOperatingTarget(HumanAIController ai) => ai.ObjectiveManager.CurrentObjective is AIObjectiveOperateItem operateObjective && operateObjective.Component.Item == target.Item;
         }
     }
 }

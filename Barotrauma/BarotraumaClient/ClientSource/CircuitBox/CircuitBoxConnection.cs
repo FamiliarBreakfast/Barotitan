@@ -29,6 +29,12 @@ namespace Barotrauma
             Length = Rect.Width + Padding + Label.Size.X;
         }
 
+        public void SetLabel(LocalizedString label, CircuitBoxNode node)
+        {
+            Label = new CircuitBoxLabel(label, GUIStyle.SubHeadingFont);
+            Length = Rect.Width + Padding + Label.Size.X;
+        }
+
         public void Draw(SpriteBatch spriteBatch, Vector2 drawPos, Vector2 parentPos, Color color)
         {
             if (CircuitBox.UI is not { } circuitBoxUi) { return; }
@@ -73,13 +79,16 @@ namespace Barotrauma
 
             if (isMouseOver)
             {
-                var glowSprite = GUIStyle.UIGlowCircular.Value.Sprite;
-                float glowScale = 40f / glowSprite.size.X;
-                if (isScrewed)
+                var glowSprite = GUIStyle.UIGlowCircular.Value?.Sprite;
+                if (glowSprite is not null)
                 {
-                    glowScale *= 1.2f;
+                    float glowScale = 40f / glowSprite.size.X;
+                    if (isScrewed)
+                    {
+                        glowScale *= 1.2f;
+                    }
+                    glowSprite.Draw(spriteBatch, position, GUIStyle.Yellow, glowSprite.size / 2, scale: glowScale);
                 }
-                glowSprite.Draw(spriteBatch, position, GUIStyle.Yellow, glowSprite.size / 2, scale: glowScale);
             }
 
             tooltip = Option.None;

@@ -7,7 +7,21 @@ namespace Barotrauma
 {
     class ScriptedEvent : Event
     {
-        private readonly Dictionary<Identifier, List<Predicate<Entity>>> targetPredicates = new Dictionary<Identifier, List<Predicate<Entity>>>();
+        public sealed record TargetPredicate(
+            TargetPredicate.EntityType Type,
+            Predicate<Entity> Predicate)
+        {
+            public enum EntityType
+            {
+                Character,
+                Hull,
+                Item,
+                Structure,
+                Submarine
+            }
+        }
+
+        private readonly Dictionary<Identifier, List<TargetPredicate>> targetPredicates = new Dictionary<Identifier, List<TargetPredicate>>();
 
         private readonly Dictionary<Identifier, List<Entity>> cachedTargets = new Dictionary<Identifier, List<Entity>>();
 
@@ -17,14 +31,16 @@ namespace Barotrauma
         /// </summary>
         private readonly Dictionary<Identifier, int> initialAmounts = new Dictionary<Identifier, int>();
 
-        private int prevEntityCount;
+        private bool newEntitySpawned;
         private int prevPlayerCount, prevBotCount;
         private Character prevControlled;
 
         public readonly OnRoundEndAction OnRoundEndAction;
 
-        private readonly string[] requiredDestinationTypes;
+        private readonly Identifier[] requiredDestinationTypes;
         public readonly bool RequireBeaconStation;
+
+        public readonly Identifier RequiredDestinationFaction;
 
         public int CurrentActionIndex { get; private set; }
         public List<EventAction> Actions { get; } = new List<EventAction>();
@@ -37,7 +53,7 @@ namespace Barotrauma
             return $"{nameof(ScriptedEvent)} ({prefab.Identifier})";
         }
         
-        public ScriptedEvent(EventPrefab prefab) : base(prefab)
+        public ScriptedEvent(EventPrefab prefab, int seed) : base(prefab, seed)
         {
             foreach (var element in prefab.ConfigElement.Elements())
             {
@@ -50,7 +66,8 @@ namespace Barotrauma
                 }
                 if (elementId == "statuseffect")
                 {
-                    DebugConsole.ThrowError($"Error in event prefab \"{prefab.Identifier}\". Status effect configured as an action. Please configure status effects as child elements of a StatusEffectAction.");
+                    DebugConsole.ThrowError($"Error in event prefab \"{prefab.Identifier}\". Status effect configured as an action. Please configure status effects as child elements of a StatusEffectAction.", 
+                        contentPackage: prefab.ContentPackage);
                     continue;
                 }
                 var action = EventAction.Instantiate(this, element);
@@ -59,18 +76,87 @@ namespace Barotrauma
 
             if (!Actions.Any())
             {
-                DebugConsole.ThrowError($"Scripted event \"{prefab.Identifier}\" has no actions. The event will do nothing.");
+                DebugConsole.ThrowError($"Scripted event \"{prefab.Identifier}\" has no actions. The event will do nothing.", 
+                    contentPackage: prefab.ContentPackage);
             }
 
-            requiredDestinationTypes = prefab.ConfigElement.GetAttributeStringArray("requireddestinationtypes", null);
+            requiredDestinationTypes = prefab.ConfigElement.GetAttributeIdentifierArray("requireddestinationtypes", Array.Empty<Identifier>());
             RequireBeaconStation = prefab.ConfigElement.GetAttributeBool("requirebeaconstation", false);
+            RequiredDestinationFaction = prefab.ConfigElement.GetAttributeIdentifier(nameof(RequiredDestinationFaction), Identifier.Empty);
 
-            var allActions = GetAllActions().Select(a => a.action);
+            var allActionsWithIndent = GetAllActions();
+            var allActions = allActionsWithIndent.Select(a => a.action);
+
+            //attempt to check if the event has ConversationActions with options that don't close the prompt and don't lead to any follow-up conversation
+            foreach (var action in allActions)
+            {
+                if (action is ConversationAction conversationAction && conversationAction.Options.Any())
+                {
+                    int thisActionIndex = allActionsWithIndent.FindIndex(a => a.action == action);
+                    int thisIndentationLevel = allActionsWithIndent[thisActionIndex].indent;
+                    bool isLast = true;
+
+                    //go through all the actions after this one
+                    foreach (var actionWithIndent in allActionsWithIndent.Skip(thisActionIndex + 1))
+                    {
+                        //if it's an action with the same indentation level, it means it's a ConversationAction coming after this one
+                        if (actionWithIndent.action is ConversationAction && actionWithIndent.indent == thisIndentationLevel)
+                        {
+                            isLast = false;
+                            break;
+                        }
+                        //if the indentation level went back down, we've already searched everything inside this ConversationAction
+                        if (actionWithIndent.indent < thisIndentationLevel) { break; }
+                    }
+                    if (isLast)
+                    {
+                        foreach (var option in conversationAction.Options)
+                        {
+                            if (!conversationAction.GetEndingOptions().Contains(conversationAction.Options.IndexOf(option)) &&
+                                option.Actions.None(a => 
+                                    a is ConversationAction || HasConversationSubAction(a) ||
+                                    /* if there's a goto action explicitly set to end the conversation, assume it's intentional*/
+                                    a is GoTo { EndConversation: false }))
+                            {
+                                DebugConsole.AddWarning($"Potential error in event \"{prefab.Identifier}\": {nameof(ConversationAction)} ({conversationAction.Text}) has an option ({option.Text}) that doesn't end the conversation, but could not find any follow-ups to the conversation.");
+                            }
+                        }
+                    }
+                }
+
+                static bool HasConversationSubAction(EventAction action)
+                {
+                    foreach (var subAction in action.GetSubActions())
+                    {
+                        if (subAction is ConversationAction) { return true; }
+                        if (HasConversationSubAction(subAction)) { return true; }
+                    }
+                    return false;
+                }
+            }
+
+            foreach (var label in allActions.OfType<Label>())
+            {
+                if (allActions.None(a => a is GoTo gotoAction && label.Name == gotoAction.Name))
+                {
+                    //this can be safe, because a label with no gotos leading to it does nothing (but it's still a sign that something's misconfigured)
+                    DebugConsole.AddWarning($"Error in event \"{prefab.Identifier}\". Could not find a GoTo matching the Label \"{label.Name}\".",
+                        contentPackage: prefab.ContentPackage);
+                }
+            }
+
             foreach (var gotoAction in allActions.OfType<GoTo>())
             {
-                if (allActions.None(a => a is Label label && label.Name == gotoAction.Name))
+                int labelCount = allActions.Count(a => a is Label label && label.Name == gotoAction.Name);
+                if (labelCount == 0)
+                {                    
+                    DebugConsole.ThrowError($"Error in event \"{prefab.Identifier}\". Could not find a label matching the GoTo \"{gotoAction.Name}\".", 
+                        contentPackage: prefab.ContentPackage);
+                }
+                else if (labelCount > 1)
                 {
-                    DebugConsole.ThrowError($"Error in event \"{prefab.Identifier}\". Could not find a label matching the GoTo \"{gotoAction.Name}\".");
+                    DebugConsole.ThrowError($"Error in event \"{prefab.Identifier}\". Multiple labels with the name \"{gotoAction.Name}\".",
+                        contentPackage: prefab.ContentPackage);
                 }
             }
 
@@ -108,7 +194,8 @@ namespace Barotrauma
                     if (target is Character character) { return character.Name; }
                     if (target is Hull hull) { return hull.DisplayName.Value; }
                     if (target is Submarine sub) { return sub.Info.DisplayName.Value; }
-                    DebugConsole.AddWarning($"Failed to get the name of the event target {target} as a replacement for the tag {tag} in an event text.");
+                    DebugConsole.AddWarning($"Failed to get the name of the event target {target} as a replacement for the tag {tag} in an event text.",
+                        prefab.ContentPackage);
                     return target.ToString();
                 }
                 else
@@ -125,7 +212,7 @@ namespace Barotrauma
         }
 
         /// <summary>
-        /// Finds all actions in the ScriptedEvent (recursively going through the subactions as well). 
+        /// Finds all actions in the ScriptedEvent using a depth-first search (recursively going through the subactions as well). 
         /// Returns a list of tuples where the first value is the indentation level (or "how deep in the hierarchy") the action is.
         /// </summary>
         public List<(int indent, EventAction action)> GetAllActions()
@@ -187,13 +274,13 @@ namespace Barotrauma
             }
         }
 
-        public void AddTargetPredicate(Identifier tag, Predicate<Entity> predicate)
+        public void AddTargetPredicate(Identifier tag, TargetPredicate.EntityType entityType, Predicate<Entity> predicate)
         {
             if (!targetPredicates.ContainsKey(tag))
             {
-                targetPredicates.Add(tag, new List<Predicate<Entity>>());
+                targetPredicates.Add(tag, new List<TargetPredicate>());
             }
-            targetPredicates[tag].Add(predicate);
+            targetPredicates[tag].Add(new TargetPredicate(entityType, predicate));
             // force re-search for this tag
             if (cachedTargets.ContainsKey(tag))
             {
@@ -225,7 +312,6 @@ namespace Barotrauma
             }
 
             List<Entity> targetsToReturn = new List<Entity>();
-
             if (Targets.ContainsKey(tag)) 
             { 
                 foreach (Entity e in Targets[tag])
@@ -236,11 +322,24 @@ namespace Barotrauma
             }
             if (targetPredicates.ContainsKey(tag))
             {
-                foreach (Entity entity in Entity.GetEntities())
+                foreach (var targetPredicate in targetPredicates[tag])
                 {
-                    if (targetPredicates[tag].Any(p => p(entity)) && !targetsToReturn.Contains(entity))
+                    IEnumerable<Entity> entityList = targetPredicate.Type switch
                     {
-                        targetsToReturn.Add(entity);
+                        TargetPredicate.EntityType.Character => Character.CharacterList,
+                        TargetPredicate.EntityType.Item => Item.ItemList,
+                        TargetPredicate.EntityType.Structure => MapEntity.MapEntityList.Where(m => m is Structure),
+                        TargetPredicate.EntityType.Hull => Hull.HullList,
+                        TargetPredicate.EntityType.Submarine => Submarine.Loaded,
+                        _ => Entity.GetEntities(),
+                    };
+                    foreach (Entity entity in entityList)
+                    {
+                        if (targetsToReturn.Contains(entity)) { continue; }
+                        if (targetPredicate.Predicate(entity))
+                        {
+                            targetsToReturn.Add(entity);
+                        }
                     }
                 }
             }
@@ -289,14 +388,8 @@ namespace Barotrauma
         {
             int botCount = 0;
             int playerCount = 0;
-            bool forceRefreshTargets = false;
             foreach (Character c in Character.CharacterList)
             {
-                if (c.Removed)
-                {
-                    forceRefreshTargets = true;
-                    continue;
-                }
                 if (c.IsPlayer)
                 {
                     playerCount++;
@@ -306,10 +399,11 @@ namespace Barotrauma
                     botCount++;
                 }
             }
-            if (forceRefreshTargets || Entity.EntityCount != prevEntityCount || botCount != prevBotCount || playerCount != prevPlayerCount || prevControlled != Character.Controlled)
+
+            if (botCount != prevBotCount || playerCount != prevPlayerCount || prevControlled != Character.Controlled || NeedsToRefreshCachedTargets())
             {
                 cachedTargets.Clear();
-                prevEntityCount = Entity.EntityCount;
+                newEntitySpawned = false;
                 prevBotCount = botCount;
                 prevPlayerCount = playerCount;
                 prevControlled = Character.Controlled;
@@ -349,7 +443,8 @@ namespace Barotrauma
                     }
                     if (CurrentActionIndex == -1)
                     {
-                        DebugConsole.AddWarning($"Could not find the GoTo label \"{goTo}\" in the event \"{Prefab.Identifier}\". Ending the event.");
+                        DebugConsole.AddWarning($"Could not find the GoTo label \"{goTo}\" in the event \"{Prefab.Identifier}\". Ending the event.",
+                            prefab.ContentPackage);
                     }
                 }
 
@@ -364,21 +459,67 @@ namespace Barotrauma
             }
         }
 
+        private bool NeedsToRefreshCachedTargets()
+        {
+            if (newEntitySpawned) { return true; }
+            foreach (var cachedTargetList in cachedTargets.Values)
+            {
+                foreach (var target in cachedTargetList)
+                {
+                    //one of the previously cached entities has been removed -> force refresh
+                    if (target.Removed)
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+        
+        public void EntitySpawned(Entity entity)
+        {
+            if (newEntitySpawned) { return; }
+            if (entity is Character character &&
+                Level.Loaded?.StartOutpost != null &&
+                Level.Loaded.StartOutpost.Info.OutpostNPCs.Values.Any(npcList => npcList.Contains(character)))
+            {
+                newEntitySpawned = true;
+                return;
+            }
+            //new entity matches one of the existing predicates -> force refresh
+            foreach (var targetPredicateList in targetPredicates.Values)
+            {
+                foreach (var targetPredicate in targetPredicateList)
+                {
+                    if (targetPredicate.Predicate(entity))
+                    {
+                        newEntitySpawned = true;
+                        return;
+                    }
+                }
+            }
+        }
+
         public override bool LevelMeetsRequirements()
         {
-            if (requiredDestinationTypes == null) { return true; }
             var currLocation = GameMain.GameSession?.Campaign?.Map.CurrentLocation;
             if (currLocation?.Connections == null) { return true; }
             foreach (LocationConnection c in currLocation.Connections)
             {
                 if (RequireBeaconStation && !c.LevelData.HasBeaconStation) { continue; }
-                if (requiredDestinationTypes.Any(t => c.OtherLocation(currLocation).Type.Identifier == t))
+
+                var otherLocation = c.OtherLocation(currLocation);
+                if (!RequiredDestinationFaction.IsEmpty && otherLocation.Faction?.Prefab.Identifier != RequiredDestinationFaction) { continue; }
+
+                if (requiredDestinationTypes.Contains(Tags.AnyOutpost) && otherLocation.HasOutpost() && otherLocation.Type.IsAnyOutpost) { return true; }
+                if (requiredDestinationTypes.Any(t => otherLocation.Type.Identifier == t))
                 {
                     return true;
                 }
             }
-            return false;
+            return RequiredDestinationFaction.IsEmpty && requiredDestinationTypes.None();
         }
+
 
         public override void Finish()
         {

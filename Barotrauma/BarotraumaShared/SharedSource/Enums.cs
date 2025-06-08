@@ -12,6 +12,13 @@ namespace Barotrauma
         Exponential
     }
 
+    public enum SelectedSubType
+    {
+        Shuttle,
+        Sub,
+        EnemySub
+    }
+
     /// <summary>
     /// ActionTypes define when a <see cref="StatusEffect"/> is executed.
     /// </summary>
@@ -116,6 +123,14 @@ namespace Barotrauma
         /// </summary>
         OnAbility = 23,
         /// <summary>
+        /// Executes once when a specific Containable is placed inside an ItemContainer. Only valid for Containables defined in an ItemContainer component.
+        /// </summary>
+        OnInserted = 24,
+        /// <summary>
+        /// Executes once when a specific Containable is removed from an ItemContainer. Only valid for Containables defined in an ItemContainer component.
+        /// </summary>
+        OnRemoved = 25,
+        /// <summary>
         /// Executes when the character dies. Only valid for characters.
         /// </summary>
         OnDeath = OnBroken
@@ -152,6 +167,7 @@ namespace Barotrauma
         OnAllyGainMissionExperience,
         OnGainMissionExperience,
         OnGainMissionMoney,
+        OnCrewGainMissionReputation,
         OnLocationDiscovered,
         OnItemDeconstructed,
         OnItemDeconstructedByAlly,
@@ -159,11 +175,13 @@ namespace Barotrauma
         OnItemDeconstructedInventory,
         OnStopTinkering,
         OnItemPicked,
+        OnItemSelected,
         OnGeneticMaterialCombinedOrRefined,
         OnCrewGeneticMaterialCombinedOrRefined,
         AfterSubmarineAttacked,
         OnApplyTreatment,
         OnStatusEffectIdentifier,
+        OnRepairedOutsideLeak
     }
 
     /// <summary>
@@ -251,6 +269,11 @@ namespace Barotrauma
         SwimmingSpeed,
 
         /// <summary>
+        /// Increases the character's speed by a percentage when using an item that propels the character forwards (such as a diving scooter).
+        /// </summary>
+        PropulsionSpeed,
+
+        /// <summary>
         /// Decreases how long it takes for buffs applied to the character decay over time by a percentage.
         /// Buffs are afflictions that have isBuff set to true.
         /// </summary>
@@ -287,6 +310,11 @@ namespace Barotrauma
         /// Decreases the reload time of ranged weapons held by the character by a percentage.
         /// </summary>
         RangedAttackSpeed,
+
+        /// <summary>
+        /// Increases the damage dealt by ranged weapons held by the character by a percentage.
+        /// </summary>
+        RangedAttackMultiplier,
 
         /// <summary>
         /// Decreases the reload time of submarine turrets operated by the character by a percentage.
@@ -327,6 +355,11 @@ namespace Barotrauma
         /// Increases the repair speed of the character when repairing mechanical items by a percentage.
         /// </summary>
         MechanicalRepairSpeed,
+        
+        /// <summary>
+        /// Increases the repair speed of the character when repairing electrical items by a percentage.
+        /// </summary>
+        ElectricalRepairSpeed,
 
         /// <summary>
         /// Increase deconstruction speed of deconstructor operated by the character by a percentage.
@@ -550,7 +583,42 @@ namespace Barotrauma
         /// <summary>
         /// Can be used to prevent certain talents from being unlocked by specifying the talent's identifier via CharacterAbilityGivePermanentStat.
         /// </summary>
-        LockedTalents
+        LockedTalents,
+
+        /// <summary>
+        /// Used to reduce or increase the cost of hiring certain jobs by a percentage.
+        /// </summary>
+        HireCostMultiplier,
+
+        /// <summary>
+        /// Used to increase how much items can stack in the characters inventory.
+        /// </summary>
+        InventoryExtraStackSize,
+
+        /// <summary>
+        /// Modifies the range of the sounds emitted by the character (can be used to make the character easier or more difficult for monsters to hear)
+        /// </summary>
+        SoundRangeMultiplier,
+
+        /// <summary>
+        /// Modifies how far the character can be seen from (can be used to make the character easier or more difficult for monsters to see)
+        /// </summary>
+        SightRangeMultiplier,
+        
+        /// <summary>
+        /// Reduces the dual wielding penalty by a percentage.
+        /// </summary>
+        DualWieldingPenaltyReduction,
+        
+        /// <summary>
+        /// Multiplier bonus to melee attacks coming from a natural weapon (limb).
+        /// </summary>
+        NaturalMeleeAttackMultiplier,
+        
+        /// <summary>
+        /// Multiplier bonus to ranged attacks coming from a natural weapon (limb).
+        /// </summary>
+        NaturalRangedAttackMultiplier
     }
 
     internal enum ItemTalentStats
@@ -561,11 +629,13 @@ namespace Barotrauma
         EngineSpeed,
         EngineMaxSpeed,
         PumpSpeed,
-        PumpMaxFlow,
         ReactorMaxOutput,
         ReactorFuelConsumption,
         DeconstructorSpeed,
-        FabricationSpeed
+        FabricationSpeed,
+        ExtraStackSize,
+        [Obsolete("Use PumpSpeed instead.")]
+        PumpMaxFlow = PumpSpeed,
     }
 
     /// <summary>
@@ -649,18 +719,26 @@ namespace Barotrauma
         Both = Bot | Player
     }
 
-    public enum StartingBalanceAmount
+    public enum StartingBalanceAmountOption
     {
         Low,
         Medium,
         High,
     }
 
-    public enum GameDifficulty
+    public enum PatdownProbabilityOption
     {
-        Easy,
+        Off,
+        Low,
         Medium,
-        Hard,
+        High,
+    }
+
+    public enum WorldHostilityOption
+    {
+        Low,
+        Medium,
+        High,
         Hellish
     }
 
@@ -675,5 +753,19 @@ namespace Barotrauma
         None,
         Local,
         Radio
+    }
+    
+    public enum PvpTeamSelectionMode
+    {
+        PlayerPreference,
+        PlayerChoice,
+    }
+    
+    public enum BotStatus
+    {
+        PendingHireToActiveService,
+        PendingHireToReserveBench,
+        ActiveService,
+        ReserveBench
     }
 }

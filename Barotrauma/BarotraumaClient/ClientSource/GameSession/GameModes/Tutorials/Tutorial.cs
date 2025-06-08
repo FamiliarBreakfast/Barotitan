@@ -86,7 +86,7 @@ namespace Barotrauma.Tutorials
 
             yield return CoroutineStatus.Running;
 
-            GameMain.GameSession = new GameSession(subInfo, GameModePreset.Tutorial, missionPrefabs: null);
+            GameMain.GameSession = new GameSession(subInfo, Option.None, GameModePreset.Tutorial, missionPrefabs: null);
             (GameMain.GameSession.GameMode as TutorialMode).Tutorial = this;
 
             if (generationParams is not null)
@@ -138,7 +138,7 @@ namespace Barotrauma.Tutorials
             character = Character.Create(charInfo, wayPoint.WorldPosition, "", isRemotePlayer: false, hasAi: false);
             character.TeamID = CharacterTeamType.Team1;
             Character.Controlled = character;
-            character.GiveJobItems(null);
+            character.GiveJobItems(isPvPMode: false, null);
 
             var idCard = character.Inventory.FindItemByTag("identitycard".ToIdentifier());
             if (idCard == null)
@@ -179,7 +179,7 @@ namespace Barotrauma.Tutorials
 
         public void Start()
         {
-            GameMain.LuaCs.Initialize();
+            GameMain.LuaCs.CheckInitialize();
 
             GameMain.Instance.ShowLoading(Loading());
             ObjectiveManager.ResetObjectives();
@@ -190,9 +190,9 @@ namespace Barotrauma.Tutorials
                 var door = item.GetComponent<Door>();
                 if (door != null)
                 {
-                    if (door.requiredItems.Values.None(ris => ris.None(ri => ri.Identifiers.None(i => i == "locked"))))
+                    if (door.RequiredItems.Values.None(ris => ris.None(ri => ri.Identifiers.None(i => i == "locked"))))
                     {
-                        door.requiredItems.Clear();
+                        door.RequiredItems.Clear();
                     }
                 }
             }
@@ -264,7 +264,7 @@ namespace Barotrauma.Tutorials
                 yield return CoroutineStatus.Failure;
             }
 
-            if (eventPrefab.CreateInstance() is Event eventInstance)
+            if (eventPrefab.CreateInstance(GameMain.GameSession.EventManager.RandomSeed) is Event eventInstance)
             {
                 GameMain.GameSession.EventManager.QueuedEvents.Enqueue(eventInstance);
                 while (!eventInstance.IsFinished)

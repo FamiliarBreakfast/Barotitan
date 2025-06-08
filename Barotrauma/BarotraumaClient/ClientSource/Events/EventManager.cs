@@ -47,7 +47,7 @@ namespace Barotrauma
             }
 
             float theoreticalMaxMonsterStrength = 10000;
-            float relativeMaxMonsterStrength = theoreticalMaxMonsterStrength * (GameMain.GameSession?.LevelData?.Difficulty ?? 0f) / 100;
+            float relativeMaxMonsterStrength = theoreticalMaxMonsterStrength * (GameMain.GameSession?.Level?.Difficulty ?? 0f) / 100;
             float absoluteMonsterStrength = monsterStrength / theoreticalMaxMonsterStrength;
             float relativeMonsterStrength = monsterStrength / relativeMaxMonsterStrength;
 
@@ -550,6 +550,33 @@ namespace Barotrauma
 
         public void ClientRead(IReadMessage msg)
         {
+            if (GameMain.GameSession.IsRunning && !GameMain.Instance.LoadingScreenOpen)
+            {
+                ClientApplyNetworkMessage(msg);
+            }
+            else
+            {
+                //if the game session is not currently running (round still loading),
+                //we need to wait because the entities the status effect / conversation / etc targets may not exist yet
+                CoroutineManager.StartCoroutine(ApplyNetworkMessageWhenRoundLoaded(msg));
+            }
+        }
+
+        public IEnumerable<CoroutineStatus> ApplyNetworkMessageWhenRoundLoaded(IReadMessage msg)
+        {
+            while (GameMain.GameSession is { IsRunning: false } || GameMain.Instance.LoadingScreenOpen)
+            {
+                yield return new WaitForSeconds(1.0f);
+            }
+            if (GameMain.GameSession != null && GameMain.Client != null)
+            {
+                ClientApplyNetworkMessage(msg);
+            }
+            yield return CoroutineStatus.Success;
+        }
+
+        public void ClientApplyNetworkMessage(IReadMessage msg)
+        {
             NetworkEventType eventType = (NetworkEventType)msg.ReadByte();
             switch (eventType)
             {
@@ -581,7 +608,14 @@ namespace Barotrauma
                             StatusEffect effect = StatusEffect.Load(subElement, $"EventManager.ClientRead ({eventIdentifier})");
                             foreach (Entity target in targets)
                             {
-                                effect.Apply(effect.type, 1.0f, target, target as ISerializableEntity);
+                                if (target is Item item)
+                                {
+                                    effect.Apply(effect.type, 1.0f, item, item.AllPropertyObjects);
+                                }
+                                else
+                                {
+                                    effect.Apply(effect.type, 1.0f, target, target as ISerializableEntity);
+                                }
                             }
                         }
                         break;

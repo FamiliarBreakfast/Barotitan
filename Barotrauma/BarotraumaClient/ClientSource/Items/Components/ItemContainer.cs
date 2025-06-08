@@ -79,7 +79,8 @@ namespace Barotrauma.Items.Components
             set;
         }
 
-        [Serialize(false, IsPropertySaveable.No, description: "If true, the contained state indicator calculates how full the item is based on the total amount of items that can be stacked inside it, as opposed to how many of the inventory slots are occupied.")]
+        [Serialize(false, IsPropertySaveable.No, description: "If true, the contained state indicator calculates how full the item is based on the total amount of items that can be stacked inside it, as opposed to how many of the inventory slots are occupied." +
+                                                              " Note that only items in the main container or in the subcontainer are counted, depending on which container the first containable item match is found in. The item determining this can be defined with ContainedStateIndicatorSlot")]
         public bool ShowTotalStackCapacityInContainedStateIndicator { get; set; }
 
         [Serialize(false, IsPropertySaveable.No, description: "Should the inventory of this item be kept open when the item is equipped by a character.")]
@@ -158,7 +159,8 @@ namespace Barotrauma.Items.Components
                 IndicatorStyle = GUIStyle.GetComponentStyle("ContainedStateIndicator." + ContainedStateIndicatorStyle);
                 if (ContainedStateIndicator != null || ContainedStateIndicatorEmpty != null)
                 {
-                    DebugConsole.AddWarning($"Item \"{item.Name}\" defines both a contained state indicator style and a custom indicator sprite. Will use the custom sprite...");
+                    DebugConsole.AddWarning($"Item \"{item.Name}\" defines both a contained state indicator style and a custom indicator sprite. Will use the custom sprite...",
+                        contentPackage: item.Prefab.ContentPackage);
                 }
             }
             if (GuiFrame == null)
@@ -204,7 +206,7 @@ namespace Barotrauma.Items.Components
             int buttonSize = GUIStyle.ItemFrameTopBarHeight;
             Point margin = new Point(buttonSize / 4, buttonSize / 6);
 
-            GUILayoutGroup buttonArea = new GUILayoutGroup(new RectTransform(new Point(GuiFrame.Rect.Width - margin.X * 2, buttonSize - margin.Y * 2), GuiFrame.RectTransform, Anchor.TopCenter) { AbsoluteOffset = new Point(0, margin.Y) }, 
+            GUILayoutGroup buttonArea = new GUILayoutGroup(new RectTransform(new Point(content.Rect.Width, buttonSize - margin.Y * 2), content.RectTransform, Anchor.TopRight) { AbsoluteOffset = new Point(0, margin.Y) }, 
                 isHorizontal: true, childAnchor: Anchor.TopRight)
             {
                 AbsoluteSpacing = margin.X / 2
@@ -273,8 +275,14 @@ namespace Barotrauma.Items.Components
                 }
             }
 
-            itemsPerSlot.Sort((i1, i2) => i1.First().Name.CompareTo(i2.First().Name));
-            foreach (var items in itemsPerSlot)
+            var sortedItems = itemsPerSlot
+                .OrderBy(i => i.First().Name)
+                //if there's multiple items with the same name, sort largest stacks first
+                .ThenByDescending(i => i.Count)
+                //same name and stack size, sort items with most items inside first
+                .ThenByDescending(i => i.First().ContainedItems.Count());
+
+            foreach (var items in sortedItems)
             {
                 int firstFreeSlot = -1;
                 for (int i = 0; i < Inventory.Capacity; i++)
@@ -333,7 +341,7 @@ namespace Barotrauma.Items.Components
             }
             else
             {
-                return item?.Name;
+                return item?.Prefab.Name;
             }            
         }
 
@@ -345,9 +353,9 @@ namespace Barotrauma.Items.Components
 
         public bool KeepOpenWhenEquippedBy(Character character)
         {
-            if (!character.CanAccessInventory(Inventory) ||
-                !KeepOpenWhenEquipped ||
-                !character.HasEquippedItem(Item))
+            if (!KeepOpenWhenEquipped ||
+                !character.HasEquippedItem(Item) ||
+                !character.CanAccessInventory(Inventory))
             {
                 return false;
             }
@@ -450,54 +458,14 @@ namespace Barotrauma.Items.Components
 
         public void DrawContainedItems(SpriteBatch spriteBatch, float itemDepth, Color? overrideColor = null)
         {
-            Vector2 transformedItemPos = ItemPos * item.Scale;
-            Vector2 transformedItemInterval = ItemInterval * item.Scale;
-            Vector2 transformedItemIntervalHorizontal = new Vector2(transformedItemInterval.X, 0.0f);
-            Vector2 transformedItemIntervalVertical = new Vector2(0.0f, transformedItemInterval.Y);
+            var rootBody = item.RootContainer?.body ?? item.body;
 
-            if (item.body == null)
-            {
-                if (item.FlippedX)
-                {
-                    transformedItemPos.X = -transformedItemPos.X;
-                    transformedItemPos.X += item.Rect.Width;
-                    transformedItemInterval.X = -transformedItemInterval.X;
-                    transformedItemIntervalHorizontal.X = -transformedItemIntervalHorizontal.X;
-                }
-                if (item.FlippedY)
-                {
-                    transformedItemPos.Y = -transformedItemPos.Y;
-                    transformedItemPos.Y -= item.Rect.Height;
-                    transformedItemInterval.Y = -transformedItemInterval.Y;
-                    transformedItemIntervalVertical.Y = -transformedItemIntervalVertical.Y;
-                }
-                transformedItemPos += new Vector2(item.Rect.X, item.Rect.Y);
-                if (item.Submarine != null) { transformedItemPos += item.Submarine.DrawPosition; }
-
-                if (Math.Abs(item.RotationRad) > 0.01f)
-                {
-                    Matrix transform = Matrix.CreateRotationZ(-item.RotationRad);
-                    transformedItemPos = Vector2.Transform(transformedItemPos - item.DrawPosition, transform) + item.DrawPosition;
-                    transformedItemInterval = Vector2.Transform(transformedItemInterval, transform);
-                    transformedItemIntervalHorizontal = Vector2.Transform(transformedItemIntervalHorizontal, transform);
-                    transformedItemIntervalVertical = Vector2.Transform(transformedItemIntervalVertical, transform);
-                }
-            }
-            else
-            {
-                Matrix transform = Matrix.CreateRotationZ(item.body.DrawRotation);
-                if (item.body.Dir == -1.0f)
-                {
-                    transformedItemPos.X = -transformedItemPos.X;
-                    transformedItemInterval.X = -transformedItemInterval.X;
-                    transformedItemIntervalHorizontal.X = -transformedItemIntervalHorizontal.X;
-                }
-
-                transformedItemPos = Vector2.Transform(transformedItemPos, transform);
-                transformedItemInterval = Vector2.Transform(transformedItemInterval, transform);
-                transformedItemIntervalHorizontal = Vector2.Transform(transformedItemIntervalHorizontal, transform);
-                transformedItemPos += item.body.DrawPosition;
-            }
+            Vector2 transformedItemPos = GetContainedPosition(
+                drawPosition: true,
+                out Vector2 transformedItemIntervalHorizontal,
+                out Vector2 transformedItemIntervalVertical,
+                out bool flippedX,
+                out bool flippedY);
 
             Vector2 currentItemPos = transformedItemPos;
 
@@ -506,30 +474,41 @@ namespace Barotrauma.Items.Components
             int i = 0;
             foreach (ContainedItem contained in containedItems)
             {
-                Vector2 itemPos = currentItemPos;
-
                 if (contained.Item?.Sprite == null) { continue; }
-
                 if (contained.Hide) { continue; }
+
+                Vector2 itemPos = transformedItemPos;
+                int targetSlotIndex = ItemsUseInventoryPlacement ? Inventory.FindIndex(contained.Item) : i;
+                //interval set on both axes -> use a grid layout
+                if (Math.Abs(ItemInterval.X) > 0.001f && Math.Abs(ItemInterval.Y) > 0.001f)
+                {
+                    itemPos += transformedItemIntervalHorizontal * (targetSlotIndex % ItemsPerRow);
+                    itemPos += transformedItemIntervalVertical * (targetSlotIndex / ItemsPerRow);                    
+                }
+                else
+                {
+                    itemPos += (transformedItemIntervalHorizontal + transformedItemIntervalVertical) * targetSlotIndex;
+                }
+
                 if (contained.ItemPos.HasValue)
                 {
                     Vector2 pos = contained.ItemPos.Value;
                     if (item.body != null)
                     {
                         Matrix transform = Matrix.CreateRotationZ(item.body.DrawRotation);
-                        pos.X *= item.body.Dir;
+                        pos.X *= rootBody.Dir;
                         itemPos = Vector2.Transform(pos, transform) + item.body.DrawPosition;
                     }
                     else
                     {
                         itemPos = pos;
                         // This code is aped based on above. Not tested.
-                        if (item.FlippedX)
+                        if (flippedX)
                         {
                             itemPos.X = -itemPos.X;
                             itemPos.X += item.Rect.Width;
                         }
-                        if (item.FlippedY)
+                        if (flippedY)
                         {
                             itemPos.Y = -itemPos.Y;
                             itemPos.Y -= item.Rect.Height;
@@ -547,15 +526,15 @@ namespace Barotrauma.Items.Components
                     }
                 }
                 
-                if (AutoInteractWithContained)
+                if (CanAutoInteractWithContained(contained.Item) && Screen.Selected is not { IsEditor: true })
                 {
                     contained.Item.IsHighlighted = item.IsHighlighted;
                     item.IsHighlighted = false;
                 }
 
                 Vector2 origin = contained.Item.Sprite.Origin;
-                if (item.FlippedX) { origin.X = contained.Item.Sprite.SourceRect.Width - origin.X; }
-                if (item.FlippedY) { origin.Y = contained.Item.Sprite.SourceRect.Height - origin.Y; }
+                if (flippedX) { origin.X = contained.Item.Sprite.SourceRect.Width - origin.X; }
+                if (flippedY) { origin.Y = contained.Item.Sprite.SourceRect.Height - origin.Y; }
 
                 float containedSpriteDepth = ContainedSpriteDepth < 0.0f ? contained.Item.Sprite.Depth : ContainedSpriteDepth;
                 if (i < containedSpriteDepths.Length)
@@ -563,18 +542,21 @@ namespace Barotrauma.Items.Components
                     containedSpriteDepth = containedSpriteDepths[i];
                 }
                 containedSpriteDepth = itemDepth + (containedSpriteDepth - (item.Sprite?.Depth ?? item.SpriteDepth)) / 10000.0f;
-
+                
                 SpriteEffects spriteEffects = SpriteEffects.None;
                 float spriteRotation = ItemRotation;
                 if (contained.Rotation != 0)
                 {
                     spriteRotation = contained.Rotation;
                 }
-                if ((item.body != null && item.body.Dir == -1) || item.FlippedX)
+
+                bool flipX = rootBody is { Dir: -1 } || flippedX;
+                if (flipX)
                 {
                     spriteEffects |= MathUtils.NearlyEqual(spriteRotation % 180, 90.0f) ? SpriteEffects.FlipVertically : SpriteEffects.FlipHorizontally;
                 }
-                if (item.FlippedY)
+                bool flipY = flippedY;
+                if (flipY)
                 {
                     spriteEffects |= MathUtils.NearlyEqual(spriteRotation % 180, 90.0f) ? SpriteEffects.FlipHorizontally : SpriteEffects.FlipVertically;
                 }
@@ -589,6 +571,9 @@ namespace Barotrauma.Items.Components
                     spriteEffects,
                     depth: containedSpriteDepth);
 
+                contained.Item.DrawDecorativeSprites(spriteBatch, itemPos, flipX, flipY, (contained.Item.body == null ? 0.0f : contained.Item.body.DrawRotation), 
+                    containedSpriteDepth, overrideColor);
+
                 foreach (ItemContainer ic in contained.Item.GetComponents<ItemContainer>())
                 {
                     if (ic.hideItems) { continue; }
@@ -596,20 +581,6 @@ namespace Barotrauma.Items.Components
                 }
 
                 i++;
-                if (Math.Abs(ItemInterval.X) > 0.001f && Math.Abs(ItemInterval.Y) > 0.001f)
-                {
-                    //interval set on both axes -> use a grid layout
-                    currentItemPos += transformedItemIntervalHorizontal;
-                    if (i % ItemsPerRow == 0)
-                    {
-                        currentItemPos = transformedItemPos;
-                        currentItemPos += transformedItemIntervalVertical * (i / ItemsPerRow);
-                    }
-                }
-                else
-                {
-                    currentItemPos += transformedItemInterval;
-                }
             }
         }
 

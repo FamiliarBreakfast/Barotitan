@@ -19,7 +19,8 @@ namespace Barotrauma.Networking
         Order = 8,
         ServerLog = 9,
         ServerMessageBox = 10,
-        ServerMessageBoxInGame = 11
+        ServerMessageBoxInGame = 11,
+        Team = 12,
     }
 
     public enum PlayerConnectionChangeType { None = 0, Joined = 1, Kicked = 2, Disconnected = 3, Banned = 4 }
@@ -31,6 +32,12 @@ namespace Barotrauma.Networking
         public const int MaxMessagesPerPacket = 10;
 
         public const float SpeakRange = 2000.0f;
+
+        /// <summary>
+        /// This is shorter than the text chat speak range, because the voice chat is still intelligible (just quiet) close to the maximum range,
+        /// while the text chat (which drops letters from the message) becomes unintelligible sooner
+        /// </summary>
+        public const float SpeakRangeVOIP = 1000.0f;
 
         private static readonly string dateTimeFormatLongTimePattern = System.Globalization.CultureInfo.CurrentCulture.DateTimeFormat.ShortTimePattern;
 
@@ -44,7 +51,12 @@ namespace Barotrauma.Networking
             new Color(64, 240, 89),     //private
             new Color(255, 255, 255),   //console
             new Color(255, 255, 255),   //messagebox
-            new Color(255, 128, 0)      //order
+            new Color(255, 128, 0),      //order
+            new Color(),                    // ServerLog
+            new Color(),                    // ServerMessageBox
+            new Color(),                    // ServerMessageBoxInGame
+            //new Color(128, 0, 255),     // team
+            new Color(86, 91, 205), // team
         };
 
         public string Text;
@@ -54,6 +66,15 @@ namespace Barotrauma.Networking
         {
             get
             {
+                if (Type == ChatMessageType.Radio && Sender is Item)
+                {
+                    if (translatedText.IsNullOrEmpty())
+                    {
+                        translatedText = TextManager.Get(Text).Fallback(Text).Value;
+                    }
+
+                    return translatedText;
+                }
                 if (Type.HasFlag(ChatMessageType.Server) || Type.HasFlag(ChatMessageType.Error) || Type.HasFlag(ChatMessageType.ServerLog))
                 {
                     if (translatedText.IsNullOrEmpty())
@@ -74,8 +95,9 @@ namespace Barotrauma.Networking
         public PlayerConnectionChangeType ChangeType;
         public string IconStyle;
 
-        public Character Sender;
-        public Client SenderClient;
+        public Character SenderCharacter => Sender as Character;
+        public readonly Entity Sender;
+        public readonly Client SenderClient;
 
         public readonly string SenderName;
 
@@ -114,7 +136,7 @@ namespace Barotrauma.Networking
 
         public ChatMode ChatMode { get; set; } = ChatMode.None; 
 
-        protected ChatMessage(string senderName, string text, ChatMessageType type, Character sender, Client client, PlayerConnectionChangeType changeType = PlayerConnectionChangeType.None, Color? textColor = null)
+        protected ChatMessage(string senderName, string text, ChatMessageType type, Entity sender, Client client, PlayerConnectionChangeType changeType = PlayerConnectionChangeType.None, Color? textColor = null)
         {
             Text = text;
             Type = type;
@@ -128,7 +150,7 @@ namespace Barotrauma.Networking
             customTextColor = textColor;
         }
 
-        public static ChatMessage Create(string senderName, string text, ChatMessageType type, Character sender, Client client = null, PlayerConnectionChangeType changeType = PlayerConnectionChangeType.None, Color? textColor = null)
+        public static ChatMessage Create(string senderName, string text, ChatMessageType type, Entity sender, Client client = null, PlayerConnectionChangeType changeType = PlayerConnectionChangeType.None, Color? textColor = null)
         {
             return new ChatMessage(senderName, text, type, sender, client ?? GameMain.NetworkMember?.ConnectedClients?.Find(c => c.Character != null && c.Character == sender), changeType, textColor);
         }
@@ -203,15 +225,17 @@ namespace Barotrauma.Networking
 
         public static string ApplyDistanceEffect(string text, float garbleAmount)
         {
-            if (garbleAmount < 0.3f) return text;
-            if (garbleAmount >= 1.0f) return "";
+            if (garbleAmount < 0.3f) { return text; }
+            if (garbleAmount >= 1.0f) { return ""; }
 
-            int startIndex = Math.Max(text.IndexOf(':') + 1, 1);
+            string textWithoutColorTags = RichString.Rich(text).SanitizedValue;
+
+            int startIndex = Math.Max(textWithoutColorTags.IndexOf(':') + 1, 1);
 
             StringBuilder sb = new StringBuilder(text.Length);
-            for (int i = 0; i < text.Length; i++)
+            for (int i = 0; i < textWithoutColorTags.Length; i++)
             {
-                sb.Append((i > startIndex && Rand.Range(0.0f, 1.0f) < garbleAmount) ? '-' : text[i]);
+                sb.Append((i > startIndex && Rand.Range(0.0f, 1.0f) < garbleAmount) ? '-' : textWithoutColorTags[i]);
             }
 
             return sb.ToString();

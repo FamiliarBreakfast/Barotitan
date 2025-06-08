@@ -14,6 +14,7 @@ namespace Barotrauma.Items.Components
 
         public override void AddTooltipInfo(ref LocalizedString name, ref LocalizedString description)
         {
+            bool mergedMaterialTainted = false;
             if (!materialName.IsNullOrEmpty() && item.ContainedItems.Count() > 0)
             {
                 LocalizedString mergedMaterialName = materialName;
@@ -22,11 +23,15 @@ namespace Barotrauma.Items.Components
                     var containedMaterial = containedItem.GetComponent<GeneticMaterial>();
                     if (containedMaterial == null) { continue; }
                     mergedMaterialName += ", " + containedMaterial.materialName;
+                    if (containedMaterial.Tainted)
+                    {
+                        mergedMaterialTainted = true;
+                    }
                 }
                 name = name.Replace(materialName, mergedMaterialName);
             }
 
-            if (Tainted)
+            if (Tainted || mergedMaterialTainted)
             {
                 name = TextManager.GetWithVariable("entityname.taintedgeneticmaterial", "[geneticmaterialname]", name);
             }
@@ -48,22 +53,45 @@ namespace Barotrauma.Items.Components
                     description += '\n' + containedDescription;
                 }
             }
+            
+            if (GameMain.DevMode && Tainted && selectedTaintedEffect != null)
+            {
+                description = $"{description}\n{selectedTaintedEffect.Name}: {selectedTaintedEffect.GetDescription(0f, AfflictionPrefab.Description.TargetType.OtherCharacter)}";
+            }
         }
 
         public void ModifyDeconstructInfo(Deconstructor deconstructor, ref LocalizedString buttonText, ref LocalizedString infoText)
         {
             if (deconstructor.InputContainer.Inventory.AllItems.Count() == 2)
             {
-                if (!deconstructor.InputContainer.Inventory.AllItems.All(it => it.Prefab == item.Prefab))
+                var otherItem = deconstructor.InputContainer.Inventory.AllItems.FirstOrDefault(it => it != item);
+                if (otherItem == null)
                 {
-                    buttonText = TextManager.Get("researchstation.combine");
-                    infoText = TextManager.Get("researchstation.combine.infotext");
+                    return;
+                }
+
+                var otherGeneticMaterial = otherItem.GetComponent<GeneticMaterial>();
+                if (otherGeneticMaterial == null)
+                {
+                    return;
+                }
+
+                var combineRefineResult = GetCombineRefineResult(otherGeneticMaterial);
+
+                if (combineRefineResult == CombineResult.None)
+                {
+                    infoText = TextManager.Get("researchstation.novalidcombination");
+                }
+                else if (combineRefineResult == CombineResult.Refined)
+                {
+                    buttonText = TextManager.Get("researchstation.refine");
+                    int taintedProbability = (int)(GetTaintedProbabilityOnRefine(otherGeneticMaterial, Character.Controlled) * 100);
+                    infoText = TextManager.GetWithVariable("researchstation.refine.infotext", "[taintedprobability]", taintedProbability.ToString());
                 }
                 else
                 {
-                    buttonText = TextManager.Get("researchstation.refine");
-                    int taintedProbability = (int)(GetTaintedProbabilityOnRefine(Character.Controlled) * 100);
-                    infoText = TextManager.GetWithVariable("researchstation.refine.infotext", "[taintedprobability]", taintedProbability.ToString());
+                    buttonText = TextManager.Get("researchstation.combine");
+                    infoText = TextManager.Get("researchstation.combine.infotext");
                 }
             }
         }

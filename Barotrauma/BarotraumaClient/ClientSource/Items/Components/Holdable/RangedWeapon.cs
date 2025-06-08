@@ -18,10 +18,32 @@ namespace Barotrauma.Items.Components
         protected float currentCrossHairScale, currentCrossHairPointerScale;
 
         private RoundSound chargeSound;
+
         private SoundChannel chargeSoundChannel;
+        
+        [Serialize(defaultValue: "0.5, 1.5", IsPropertySaveable.No, description: "Pitch slides from X to Y over the charge time")]
+        public Vector2 ChargeSoundWindupPitchSlide
+        {
+            get => _chargeSoundWindupPitchSlide;
+            set
+            {
+                _chargeSoundWindupPitchSlide = new Vector2(
+                        Math.Max(value.X, SoundChannel.MinFrequencyMultiplier), 
+                        Math.Min(value.Y, SoundChannel.MaxFrequencyMultiplier));
+            }
+        }
+        private Vector2 _chargeSoundWindupPitchSlide;
+
+        public Vector2 BarrelScreenPos => Screen.Selected.Cam.WorldToScreen(item.DrawPosition + ConvertUnits.ToDisplayUnits(TransformedBarrelPos));
 
         private readonly List<ParticleEmitter> particleEmitters = new List<ParticleEmitter>();
         private readonly List<ParticleEmitter> particleEmitterCharges = new List<ParticleEmitter>();
+
+        /// <summary>
+        /// The orientation of the item is briefly wrong after the character holding it flips and before the holding logic forces it to the correct position.
+        /// We disable the crosshair briefly during that time to prevent it from momentarily jumping to an incorrect position.
+        /// </summary>
+        private float crossHairPosDirtyTimer;
 
         [Serialize(1.0f, IsPropertySaveable.No, description: "The scale of the crosshair sprite (if there is one).")]
         public float CrossHairScale
@@ -30,9 +52,9 @@ namespace Barotrauma.Items.Components
             private set;
         }
 
-        partial void InitProjSpecific(ContentXElement element)
+        partial void InitProjSpecific(ContentXElement rangedWeaponElement)
         {
-            foreach (var subElement in element.Elements())
+            foreach (var subElement in rangedWeaponElement.Elements())
             {
                 string textureDir = GetTextureDirectory(subElement);
                 switch (subElement.Name.ToString().ToLowerInvariant())
@@ -62,34 +84,35 @@ namespace Barotrauma.Items.Components
 
         public override void UpdateHUDComponentSpecific(Character character, float deltaTime, Camera cam)
         {
+            crossHairPosDirtyTimer -= deltaTime;
             currentCrossHairScale = currentCrossHairPointerScale = cam == null ? 1.0f : cam.Zoom;
             if (crosshairSprite != null)
             {
-                Vector2 aimRefWorldPos = character.AimRefPosition;
-                if (character.Submarine != null) { aimRefWorldPos += character.Submarine.Position; }
-                Vector2 itemPos = cam.WorldToScreen(aimRefWorldPos);
-                float rotation = (item.body.Dir == 1.0f) ? item.body.Rotation : item.body.Rotation - MathHelper.Pi;
-                Vector2 barrelDir = new Vector2((float)Math.Cos(rotation), -(float)Math.Sin(rotation));
+                // Set position based on in-world aim
+                Vector2 barrelDir = (MathF.Cos(item.body.TransformedRotation), -MathF.Sin(item.body.TransformedRotation));
+                float mouseDist = Vector2.Distance(BarrelScreenPos, PlayerInput.MousePosition);
+                crosshairPos = Vector2.Clamp(BarrelScreenPos + barrelDir * mouseDist, Vector2.Zero, (GameMain.GraphicsWidth, GameMain.GraphicsHeight));
 
-                Vector2 mouseDiff = itemPos - PlayerInput.MousePosition;
-                crosshairPos = new Vector2(
-                    MathHelper.Clamp(itemPos.X + barrelDir.X * mouseDiff.Length(), 0, GameMain.GraphicsWidth),
-                    MathHelper.Clamp(itemPos.Y + barrelDir.Y * mouseDiff.Length(), 0, GameMain.GraphicsHeight));
-
+                // Resize pointer based on current spread
                 float spread = GetSpread(character);
-                Projectile projectile = FindProjectile();
-                if (projectile != null)
-                {
-                    spread += MathHelper.ToRadians(projectile.Spread);
+                if (FindProjectile() is Projectile projectile) 
+                { 
+                    spread += MathHelper.ToRadians(projectile.Spread); 
                 }
-
-                float crossHairDist = Vector2.Distance(item.WorldPosition, cam.ScreenToWorld(crosshairPos));
-                float spreadDist = (float)Math.Sin(spread) * crossHairDist;
-
-                currentCrossHairPointerScale = MathHelper.Clamp(spreadDist / Math.Min(crosshairSprite.size.X, crosshairSprite.size.Y), 0.1f, 10.0f);
+                float spreadAtRange = MathF.Sin(spread) * Vector2.Distance(BarrelScreenPos, crosshairPos);
+                currentCrossHairPointerScale = MathHelper.Clamp(spreadAtRange / Math.Min(crosshairSprite.size.X, crosshairSprite.size.Y), 0.1f, 10f);
             }
             currentCrossHairScale *= CrossHairScale;
             crosshairPointerPos = PlayerInput.MousePosition;
+        }
+
+        public override void FlipX(bool relativeToSub)
+        {
+            crossHairPosDirtyTimer = 0.02f;
+        }
+        public override void FlipY(bool relativeToSub)
+        {
+            crossHairPosDirtyTimer = 0.02f;
         }
 
         partial void UpdateProjSpecific(float deltaTime)
@@ -111,13 +134,13 @@ namespace Barotrauma.Items.Components
                     {
                         if (chargeSound != null)
                         {
-                            chargeSoundChannel = SoundPlayer.PlaySound(chargeSound.Sound, item.WorldPosition, chargeSound.Volume, chargeSound.Range, ignoreMuffling: chargeSound.IgnoreMuffling, freqMult: chargeSound.GetRandomFrequencyMultiplier());
+                            chargeSoundChannel = SoundPlayer.PlaySound(chargeSound, item.WorldPosition, hullGuess: item.CurrentHull);
                             if (chargeSoundChannel != null) { chargeSoundChannel.Looping = true; }
                         }
                     }
                     else if (chargeSoundChannel != null)
                     {
-                        chargeSoundChannel.FrequencyMultiplier = MathHelper.Lerp(0.5f, 1.5f, chargeRatio);
+                        chargeSoundChannel.FrequencyMultiplier = MathHelper.Lerp(ChargeSoundWindupPitchSlide.X, ChargeSoundWindupPitchSlide.Y, chargeRatio);
                         chargeSoundChannel.Position = new Vector3(item.WorldPosition, 0.0f);
                     }
                     break;
@@ -143,15 +166,21 @@ namespace Barotrauma.Items.Components
             if (character == null || !character.IsKeyDown(InputType.Aim) || !character.CanAim) { return; }
 
             //camera focused on some other item/device, don't draw the crosshair
-            if (character.ViewTarget != null && (character.ViewTarget is Item viewTargetItem) && viewTargetItem.Prefab.FocusOnSelected) { return; }
+            if (character.ViewTarget is Item viewTargetItem && viewTargetItem.Prefab.FocusOnSelected) { return; }
             //don't draw the crosshair if the item is in some other type of equip slot than hands (e.g. assault rifle in the bag slot)
             if (!character.HeldItems.Contains(item)) { return; }
 
+            base.DrawHUD(spriteBatch, character);
+
             GUI.HideCursor = (crosshairSprite != null || crosshairPointerSprite != null) &&
                 GUI.MouseOn == null && !Inventory.IsMouseOnInventory && !GameMain.Instance.Paused;
-            if (GUI.HideCursor)
+            
+            if (GUI.HideCursor && !character.AnimController.IsHoldingToRope)
             {
-                crosshairSprite?.Draw(spriteBatch, crosshairPos, ReloadTimer <= 0.0f ? Color.White : Color.White * 0.2f, 0, currentCrossHairScale);
+                if (crossHairPosDirtyTimer <= 0.0f)
+                {
+                    crosshairSprite?.Draw(spriteBatch, crosshairPos, ReloadTimer <= 0.0f ? Color.White : Color.White * 0.2f, 0, currentCrossHairScale);
+                }
                 crosshairPointerSprite?.Draw(spriteBatch, crosshairPointerPos, 0, currentCrossHairPointerScale);
             }
 

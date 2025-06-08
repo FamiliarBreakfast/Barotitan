@@ -41,7 +41,16 @@ namespace Barotrauma.Steam
                     }
                 }
 
-                Steamworks.SteamNetworkingUtils.OnDebugOutput += LogSteamworksNetworking;
+                Steamworks.SteamNetworkingUtils.OnDebugOutput += (Steamworks.NetDebugOutput nType, string pszMsg) =>
+                {
+                    if (GameSettings.CurrentConfig.VerboseLogging)
+                    {
+                        LogSteamworksNetworking(nType, pszMsg);
+                    }
+                };
+
+                // Needed to detect invites for social overlay
+                Steamworks.SteamFriends.ListenForFriendsMessages = true;
             }
             catch (DllNotFoundException)
             {
@@ -144,11 +153,6 @@ namespace Barotrauma.Steam
 
             Steamworks.SteamFriends.OpenWebOverlay(url);
             return true;
-        }
-
-        public static void OverlayProfile(SteamId steamId)
-        {
-            OverlayCustomUrl($"https://steamcommunity.com/profiles/{steamId.Value}");
         }
     }
 }

@@ -5,6 +5,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Linq;
 using System.Xml.Linq;
+using Barotrauma.Extensions;
 using Barotrauma.Items.Components;
 
 namespace Barotrauma
@@ -68,7 +69,7 @@ namespace Barotrauma
             SpeciesGroup,
 
             /// <summary>
-            /// Check against the target's tags. Only works on items.
+            /// Check against the target's tags. Only works on items and characters.
             ///
             /// Several tags can be checked against by using a comma-separated list.
             /// </summary>
@@ -99,7 +100,17 @@ namespace Barotrauma
             /// <summary>
             /// Check against the target's limb type. See <see cref="Barotrauma.LimbType"/>.
             /// </summary>
-            LimbType
+            LimbType,
+
+            /// <summary>
+            /// Check against the current World Hostility setting (previously known as "Difficulty").
+            /// </summary>
+            WorldHostility,
+
+            /// <summary>
+            /// Check against the difficulty of the current level.
+            /// </summary>
+            LevelDifficulty
         }
 
         public enum LogicalOperatorType
@@ -168,15 +179,22 @@ namespace Barotrauma
         public readonly ImmutableArray<Identifier> AttributeValueAsTags;
         public readonly float? FloatValue;
 
+        private readonly WorldHostilityOption cachedHostilityValue;
+
         /// <summary>
         /// If set to the name of one of the target's ItemComponents, the conditionals defined by this element check against the properties of that component.
         /// Only works on items.
         /// </summary>
         public readonly string TargetItemComponent;
+        
+        /// <summary>
+        /// When targeting item components, should we require them all to match the conditional or any (default).
+        /// </summary>
+        public readonly LogicalOperatorType ItemComponentComparison;
 
         /// <summary>
         /// If set to true, the conditionals defined by this element check against the attacking character instead of the attacked character.
-        /// Only applies to a character's attacks.
+        /// Only applies to a character's attacks and targeting parameters.
         /// </summary>
         public readonly bool TargetSelf;
 
@@ -196,13 +214,15 @@ namespace Barotrauma
         /// </summary>
         public readonly bool TargetContainedItem;
 
-        public static IEnumerable<PropertyConditional> FromXElement(XElement element, Predicate<XAttribute>? predicate = null)
+        public static IEnumerable<PropertyConditional> FromXElement(ContentXElement element, Predicate<XAttribute>? predicate = null)
         {
-            var targetItemComponent = element.GetAttributeString(nameof(TargetItemComponent), "");
-            var targetContainer = element.GetAttributeBool(nameof(TargetContainer), false);
-            var targetSelf = element.GetAttributeBool(nameof(TargetSelf), false);
-            var targetGrandParent = element.GetAttributeBool(nameof(TargetGrandParent), false);
-            var targetContainedItem = element.GetAttributeBool(nameof(TargetContainedItem), false);
+            string targetItemComponent = element.GetAttributeString(nameof(TargetItemComponent), string.Empty);
+            bool targetContainer = element.GetAttributeBool(nameof(TargetContainer), false);
+            bool targetSelf = element.GetAttributeBool(nameof(TargetSelf), false);
+            bool targetGrandParent = element.GetAttributeBool(nameof(TargetGrandParent), false);
+            bool targetContainedItem = element.GetAttributeBool(nameof(TargetContainedItem), false);
+            
+            LogicalOperatorType itemComponentComparison = element.GetAttributeEnum(nameof(ItemComponentComparison), LogicalOperatorType.Or);
 
             ConditionType? overrideConditionType = null;
             if (element.GetAttributeBool(nameof(ConditionType.SkillRequirement), false))
@@ -215,23 +235,22 @@ namespace Barotrauma
                 if (!IsValid(attribute)) { continue; }
                 if (predicate != null && !predicate(attribute)) { continue; }
 
-                var (comparisonOperator, attributeValueString) = ExtractComparisonOperatorFromConditionString(attribute.Value);
+                (ComparisonOperatorType comparisonOperator, string attributeValueString) = ExtractComparisonOperatorFromConditionString(attribute.Value);
                 if (string.IsNullOrWhiteSpace(attributeValueString))
                 {
-                    DebugConsole.ThrowError($"Conditional attribute value is empty: {element}");
+                    DebugConsole.ThrowError($"Conditional attribute value is empty: {element}", contentPackage: element.ContentPackage);
                     continue;
                 }
 
-                var conditionType = overrideConditionType ??
-                    (Enum.TryParse(attribute.Name.LocalName, ignoreCase: true, out ConditionType type)
-                        ? type
-                        : ConditionType.PropertyValueOrAffliction);
+                ConditionType conditionType = overrideConditionType ?? 
+                                              (Enum.TryParse(attribute.Name.LocalName, ignoreCase: true, out ConditionType type) ? type : ConditionType.PropertyValueOrAffliction);
 
                 yield return new PropertyConditional(
                     attributeName: attribute.NameAsIdentifier(),
                     comparisonOperator: comparisonOperator,
                     attributeValue: attributeValueString,
                     targetItemComponent: targetItemComponent,
+                    itemComponentComparison: itemComponentComparison,
                     targetSelf: targetSelf,
                     targetContainer: targetContainer,
                     targetGrandParent: targetGrandParent,
@@ -262,6 +281,7 @@ namespace Barotrauma
             ComparisonOperatorType comparisonOperator,
             string attributeValue,
             string targetItemComponent,
+            LogicalOperatorType itemComponentComparison,
             bool targetSelf,
             bool targetContainer,
             bool targetGrandParent,
@@ -271,6 +291,7 @@ namespace Barotrauma
             AttributeName = attributeName;
 
             TargetItemComponent = targetItemComponent;
+            ItemComponentComparison = itemComponentComparison;
             TargetSelf = targetSelf;
             TargetContainer = targetContainer;
             TargetGrandParent = targetGrandParent;
@@ -286,6 +307,11 @@ namespace Barotrauma
             if (float.TryParse(AttributeValue, NumberStyles.Float, CultureInfo.InvariantCulture, out float value))
             {
                 FloatValue = value;
+            }
+
+            if (Type == ConditionType.WorldHostility && Enum.TryParse(AttributeValue, ignoreCase: true, out WorldHostilityOption hostilityValue))
+            {
+                cachedHostilityValue = hostilityValue;
             }
         }
 
@@ -394,6 +420,11 @@ namespace Barotrauma
                     {
                         return PropertyMatchesRequirement(target, property);
                     }
+                    else if (targetChar?.SerializableProperties != null
+                        && targetChar.SerializableProperties.TryGetValue(AttributeName, out var characterProperty))
+                    {
+                        return PropertyMatchesRequirement(targetChar, characterProperty);
+                    }
                     return ComparisonOperatorIsNotEquals;
                 case ConditionType.SkillRequirement:
                     if (targetChar != null)
@@ -404,34 +435,63 @@ namespace Barotrauma
                     }
                     return ComparisonOperatorIsNotEquals;
                 case ConditionType.HasTag:
-                    return ItemMatchesTagCondition(target);
+                    if (targetChar != null)
+                    {
+                        return CheckMatchingTags(targetChar.Params.HasTag);
+                    }
+                    if (target is Item item)
+                    {
+                        return CheckMatchingTags(item.HasTag);
+                    }
+                    return ComparisonOperatorIsNotEquals;
                 case ConditionType.HasStatusTag:
                     if (target == null) { return ComparisonOperatorIsNotEquals; }
 
-                    // NOTE: This can be optimized further by returning
-                    // when a match passes with the Equals operator and
-                    // when a match fails with the NotEquals operator.
-                    // The current form has better readability.
-                    int numMatchingEffects = 0;
-                    int numEffectsAffectingTarget = 0;
-
-                    foreach (var durationEffect in StatusEffect.DurationList)
+                    int numTagsFound = 0;
+                    foreach (var tag in AttributeValueAsTags)
                     {
-                        if (!durationEffect.Targets.Contains(target)) { continue; }
-                        numEffectsAffectingTarget++;
-                        if (StatusEffectMatchesTagCondition(durationEffect.Parent)) { numMatchingEffects++; }
+                        bool tagFound = false;
+                        foreach (var durationEffect in StatusEffect.DurationList)
+                        {
+                            if (!durationEffect.Targets.Contains(target)) { continue; }
+                            if (durationEffect.Parent.HasTag(tag))
+                            {
+                                tagFound = true;
+                                break;
+                            }
+                        }
+                        if (!tagFound)
+                        {
+                            foreach (var delayedEffect in DelayedEffect.DelayList)
+                            {
+                                if (!delayedEffect.Targets.Contains(target)) { continue; }
+                                if (delayedEffect.Parent.HasTag(tag))
+                                {
+                                    tagFound = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (tagFound)
+                        {
+                            numTagsFound++;
+                        }
                     }
-
-                    foreach (var delayedEffect in DelayedEffect.DelayList)
-                    {
-                        if (!delayedEffect.Targets.Contains(target)) { continue; }
-                        numEffectsAffectingTarget++;
-                        if (StatusEffectMatchesTagCondition(delayedEffect.Parent)) { numMatchingEffects++; }
-                    }
-
                     return ComparisonOperatorIsNotEquals
-                        ? numMatchingEffects >= numEffectsAffectingTarget // true when none of the effects have any of the tags
-                        : numMatchingEffects > 0; // true when any effects have all tags
+                        ? numTagsFound < AttributeValueAsTags.Length // true when some tag wasn't found
+                        : numTagsFound >= AttributeValueAsTags.Length; // true when all the tags are found
+                case ConditionType.LevelDifficulty:                    
+                    if (Level.Loaded is { } level)
+                    {
+                        return NumberMatchesRequirement(level.Difficulty);
+                    }
+                    return false;                    
+                case ConditionType.WorldHostility:                
+                    if (GameMain.GameSession?.Campaign is CampaignMode campaign)
+                    {
+                        return Compare(campaign.Settings.WorldHostility, cachedHostilityValue, ComparisonOperator);
+                    }
+                    return false;                
                 default:
                     bool equals = CheckOnlyEquality(target);
                     return ComparisonOperatorIsNotEquals
@@ -513,15 +573,13 @@ namespace Barotrauma
                 ? matches <= 0
                 : matches >= AttributeValueAsTags.Length;
         }
-
-        private bool ItemMatchesTagCondition(ISerializableEntity? target)
+        
+        private bool CheckMatchingTags(Func<Identifier, bool> predicate)
         {
-            if (target is not Item item) { return ComparisonOperatorIsNotEquals; }
-
             int matches = 0;
-            foreach (var tag in AttributeValueAsTags)
+            foreach (Identifier tag in AttributeValueAsTags)
             {
-                if (item.HasTag(tag)) { matches++; }
+                if (predicate(tag)) { matches++; }
             }
             return SufficientTagMatches(matches);
         }
@@ -529,23 +587,7 @@ namespace Barotrauma
         public bool TargetTagMatchesTagCondition(Identifier targetTag)
         {
             if (targetTag.IsEmpty || Type != ConditionType.HasTag) { return false; }
-
-            int matches = 0;
-            foreach (var tag in AttributeValueAsTags)
-            {
-                if (targetTag == tag) { matches++; }
-            }
-            return SufficientTagMatches(matches);
-        }
-
-        private bool StatusEffectMatchesTagCondition(StatusEffect statusEffect)
-        {
-            int matches = 0;
-            foreach (var tag in AttributeValueAsTags)
-            {
-                if (statusEffect.HasTag(tag)) { matches++; }
-            }
-            return SufficientTagMatches(matches);
+            return CheckMatchingTags(targetTag.Equals);
         }
 
         private bool NumberMatchesRequirement(float testedValue)
@@ -624,5 +666,81 @@ namespace Barotrauma
             }
         }
 
+        public static bool Compare<T>(T leftValue, T rightValue, ComparisonOperatorType comparisonOperator) where T : IComparable
+        {
+            return comparisonOperator switch
+            {
+                ComparisonOperatorType.NotEquals => leftValue.CompareTo(rightValue) != 0,
+                ComparisonOperatorType.GreaterThan => leftValue.CompareTo(rightValue) > 0,
+                ComparisonOperatorType.LessThan => leftValue.CompareTo(rightValue) < 0,
+                ComparisonOperatorType.GreaterThanEquals => leftValue.CompareTo(rightValue) >= 0,
+                ComparisonOperatorType.LessThanEquals => leftValue.CompareTo(rightValue) <= 0,
+                _ => leftValue.CompareTo(rightValue) == 0,
+            };
+        }
+        
+        /// <summary>
+        /// Seeks for child elements of name "conditional" and bundles them with an attribute of name "comparison".
+        /// </summary>
+        public static LogicalComparison? LoadConditionals(ContentXElement element, LogicalOperatorType defaultOperatorType = LogicalOperatorType.And)
+        {
+            var conditionalElements = element.GetChildElements("conditional");
+            if (conditionalElements.None()) { return default; }
+            List<PropertyConditional> conditionals = new();
+            foreach (ContentXElement subElement in conditionalElements)
+            {
+                conditionals.AddRange(FromXElement(subElement));
+            }
+            var logicalOperator = element.GetAttributeEnum("comparison", defaultOperatorType);
+            return new LogicalComparison(conditionals, logicalOperator);
+        }
+        
+        public static bool CheckConditionals(ISerializableEntity conditionalTarget, IEnumerable<PropertyConditional> conditionals, LogicalOperatorType logicalOperator)
+        {
+            if (conditionals == null) { return true; }
+            if (conditionals.None()) { return true; }
+            switch (logicalOperator)
+            {
+                case LogicalOperatorType.And:
+                    foreach (var conditional in conditionals)
+                    {
+                        if (!conditional.Matches(conditionalTarget))
+                        {
+                            // Some conditional didn't match.
+                            return false;
+                        }
+                    }
+                    // All conditionals matched.
+                    return true;
+                case LogicalOperatorType.Or:
+                    foreach (var conditional in conditionals)
+                    {
+                        if (conditional.Matches(conditionalTarget))
+                        {
+                            // Some conditional matched.
+                            return true;
+                        }
+                    }
+                    // None of the conditionals matched.
+                    return false;
+                default:
+                    throw new NotSupportedException();
+            }
+        }
+        
+        /// <summary>
+        /// Bundles up a bunch of conditionals with a logical operator.
+        /// </summary>
+        public class LogicalComparison
+        {
+            public readonly ImmutableArray<PropertyConditional> Conditionals;
+            public readonly LogicalOperatorType LogicalOperator;
+            
+            public LogicalComparison(IEnumerable<PropertyConditional> conditionals, LogicalOperatorType logicalOperator)
+            {
+                Conditionals = conditionals.ToImmutableArray();
+                LogicalOperator = logicalOperator;
+            }
+        }
     }
 }

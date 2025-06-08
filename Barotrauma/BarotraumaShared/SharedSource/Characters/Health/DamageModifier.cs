@@ -53,7 +53,7 @@ namespace Barotrauma
             private set
             {
                 rawAfflictionIdentifierString = value;
-                ParseAfflictionIdentifiers();
+                parsedAfflictionIdentifiers = rawAfflictionIdentifierString.ToIdentifiers().ToImmutableArray();
             }
         }
 
@@ -67,7 +67,7 @@ namespace Barotrauma
             private set
             {
                 rawAfflictionTypeString = value;
-                ParseAfflictionTypes();
+                parsedAfflictionTypes = rawAfflictionTypeString.ToIdentifiers().ToImmutableArray();
             }
         }
 
@@ -79,12 +79,13 @@ namespace Barotrauma
 
         public ref readonly ImmutableArray<Identifier> ParsedAfflictionTypes => ref parsedAfflictionTypes;
 
-        public DamageModifier(XElement element, string parentDebugName, bool checkErrors = true)
+        public DamageModifier(ContentXElement element, string parentDebugName, bool checkErrors = true)
         {
             Deserialize(element);
-            if (element.Attribute("afflictionnames") != null)
+            if (element.GetAttribute("afflictionnames") != null)
             {
-                DebugConsole.ThrowError("Error in DamageModifier config (" + parentDebugName + ") - define afflictions using identifiers or types instead of names.");
+                DebugConsole.ThrowError("Error in DamageModifier config (" + parentDebugName + ") - define afflictions using identifiers or types instead of names.",
+                    contentPackage: element.ContentPackage);
             }
             if (checkErrors)
             {
@@ -108,38 +109,14 @@ namespace Barotrauma
                 }
             }
 
-            static void createWarningOrError(string msg)
+            void createWarningOrError(string msg)
             {
 #if DEBUG
-                DebugConsole.ThrowError(msg);
+                DebugConsole.ThrowError(msg, contentPackage: element.ContentPackage);
 #else
-                DebugConsole.AddWarning(msg);
+                DebugConsole.AddWarning(msg, contentPackage: element.ContentPackage);
 #endif
             }
-        }
-
-        private void ParseAfflictionTypes()
-        {
-            if (string.IsNullOrWhiteSpace(rawAfflictionTypeString)) 
-            {
-                parsedAfflictionTypes = Enumerable.Empty<Identifier>().ToImmutableArray();
-                return;
-            }
-
-            parsedAfflictionTypes = rawAfflictionTypeString.Split(',', '，')
-                .Select(s => s.Trim()).ToIdentifiers().ToImmutableArray();
-        }
-
-        private void ParseAfflictionIdentifiers()
-        {
-            if (string.IsNullOrWhiteSpace(rawAfflictionIdentifierString))
-            {
-                parsedAfflictionIdentifiers = Enumerable.Empty<Identifier>().ToImmutableArray();
-                return;
-            }
-            
-            parsedAfflictionIdentifiers = rawAfflictionIdentifierString.Split(',', '，')
-                .Select(s => s.Trim()).ToIdentifiers().ToImmutableArray();
         }
 
         public bool MatchesAfflictionIdentifier(string identifier) =>

@@ -1,9 +1,13 @@
 ﻿using Barotrauma.Networking;
 using Microsoft.Xna.Framework;
 using System;
+using System.Collections.Immutable;
 
 namespace Barotrauma
 {
+    [NetworkSerialize]
+    public readonly record struct RoundStartWarningData(float RoundStartsAnywaysTimeInSeconds, string Team1Sub, ImmutableArray<uint> Team1IncompatiblePerks, string Team2Sub, ImmutableArray<uint> Team2IncompatiblePerks) : INetSerializableStruct;
+
     partial class NetLobbyScreen : Screen
     {
         private UInt16 lastUpdateID;
@@ -31,8 +35,8 @@ namespace Barotrauma
                 lastUpdateID++;
             }
 #elif CLIENT
-            levelDifficultyScrollBar.BarScroll = difficulty / 100.0f;
-            levelDifficultyScrollBar.OnMoved(levelDifficultyScrollBar, levelDifficultyScrollBar.BarScroll);
+            levelDifficultySlider.BarScroll = difficulty / 100.0f;
+            levelDifficultySlider.OnMoved(levelDifficultySlider, levelDifficultySlider.BarScroll);
 #endif
         }
 
@@ -48,9 +52,6 @@ namespace Barotrauma
                 lastUpdateID++;
             }
 #endif
-#if CLIENT
-            botCountText.Text = botCount.ToString();
-#endif
         }
 
         public void SetBotSpawnMode(BotSpawnMode botSpawnMode)
@@ -62,15 +63,6 @@ namespace Barotrauma
                 lastUpdateID++;
             }
 #endif
-#if CLIENT
-
-            botSpawnModeText.Text = TextManager.Get(botSpawnMode.ToString());
-            botSpawnModeText.ToolTip = TextManager.Get($"botspawnmode.{botSpawnMode}.tooltip") + "\n\n" + TextManager.Get("botspawn.campaignnote");
-            foreach (var btn in botSpawnModeButtons)
-            {
-                btn.ToolTip = botSpawnModeText.ToolTip;
-            }
-#endif
         }
 
         public void SetTraitorProbability(float probability)
@@ -79,10 +71,6 @@ namespace Barotrauma
             {
                 GameMain.NetworkMember.ServerSettings.TraitorProbability = probability;
             }
-#if CLIENT
-            traitorProbabilitySlider.BarScroll = probability;
-            traitorProbabilitySlider.OnMoved(traitorProbabilitySlider, traitorProbabilitySlider.BarScroll);
-#endif
         }
 
         public void SetTraitorDangerLevel(int dangerLevel)

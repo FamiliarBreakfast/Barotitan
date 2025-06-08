@@ -1,5 +1,6 @@
 ﻿using Barotrauma.Items.Components;
 using Barotrauma.Networking;
+using FarseerPhysics;
 using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Immutable;
@@ -46,6 +47,7 @@ namespace Barotrauma
                         SelectedCharacter,
                         SelectedItem,
                         SelectedSecondaryItem,
+                        AnimController.TargetMovement,
                         AnimController.Anim);
 
                     memLocalState.Add(posInfo);
@@ -55,7 +57,7 @@ namespace Barotrauma
                     if (IsKeyDown(InputType.Right)) newInput |= InputNetFlags.Right;
                     if (IsKeyDown(InputType.Up)) newInput |= InputNetFlags.Up;
                     if (IsKeyDown(InputType.Down)) newInput |= InputNetFlags.Down;
-                    if (IsKeyDown(InputType.Run)) newInput |= InputNetFlags.Run;
+                    if (IsKeyDown(InputType.Run) || ToggleRun) newInput |= InputNetFlags.Run;
                     if (IsKeyDown(InputType.Crouch)) newInput |= InputNetFlags.Crouch;
                     if (IsKeyHit(InputType.Select)) newInput |= InputNetFlags.Select; //TODO: clean up the way this input is registered
                     if (IsKeyHit(InputType.Deselect)) newInput |= InputNetFlags.Deselect;
@@ -67,7 +69,7 @@ namespace Barotrauma
                     if (IsKeyDown(InputType.Attack)) newInput |= InputNetFlags.Attack;
                     if (IsKeyDown(InputType.Ragdoll)) newInput |= InputNetFlags.Ragdoll;
 
-                    if (AnimController.TargetDir == Direction.Left) newInput |= InputNetFlags.FacingLeft;
+                    if (AnimController.Dir < 0) newInput |= InputNetFlags.FacingLeft;
 
                     Vector2 relativeCursorPos = cursorPosition - AimRefPosition;
                     relativeCursorPos.Normalize();
@@ -153,6 +155,9 @@ namespace Barotrauma
                 case TreatmentEventData _:
                     msg.WriteBoolean(AnimController.Anim == AnimController.Animation.CPR);
                     break;
+                case ConfirmRefundEventData _:
+                    //do nothing
+                    break;
                 case CharacterStatusEventData _:
                     //do nothing
                     break;
@@ -201,11 +206,15 @@ namespace Barotrauma
                 keys[(int)InputType.Use].Held = useInput;
                 keys[(int)InputType.Use].SetState(false, useInput);
 
-                bool crouching = msg.ReadBoolean();
                 if (AnimController is HumanoidAnimController)
                 {
+                    bool crouching = msg.ReadBoolean();
                     keys[(int)InputType.Crouch].Held = crouching;
                     keys[(int)InputType.Crouch].SetState(false, crouching);
+                }
+                else if (AnimController is FishAnimController fishAnim)
+                {
+                    fishAnim.Reverse = msg.ReadBoolean();
                 }
 
                 bool attackInput = msg.ReadBoolean();
@@ -254,16 +263,21 @@ namespace Barotrauma
                 msg.ReadRangedSingle(-MaxVel, MaxVel, 12));
             linearVelocity = NetConfig.Quantize(linearVelocity, -MaxVel, MaxVel, 12);
 
+            Vector2 targetMovement = new Vector2(
+                msg.ReadRangedSingle(-Ragdoll.MAX_SPEED, Ragdoll.MAX_SPEED, 12),
+                msg.ReadRangedSingle(-Ragdoll.MAX_SPEED, Ragdoll.MAX_SPEED, 12));
+            targetMovement = NetConfig.Quantize(targetMovement, -Ragdoll.MAX_SPEED, Ragdoll.MAX_SPEED, 12);
+
             bool fixedRotation = msg.ReadBoolean();
             float? rotation = null;
             float? angularVelocity = null;
             if (!fixedRotation)
             {
                 rotation = msg.ReadSingle();
-                float MaxAngularVel = NetConfig.MaxPhysicsBodyAngularVelocity;
-                angularVelocity = msg.ReadRangedSingle(-MaxAngularVel, MaxAngularVel, 8);
-                angularVelocity = NetConfig.Quantize(angularVelocity.Value, -MaxAngularVel, MaxAngularVel, 8);
+                angularVelocity = msg.ReadSingle();
             }
+
+            bool ignorePlatforms = msg.ReadBoolean();
 
             bool readStatus = msg.ReadBoolean();
             if (readStatus)
@@ -286,7 +300,7 @@ namespace Barotrauma
                     {
                         byte happiness = msg.ReadByte();
                         byte hunger = msg.ReadByte();
-                        if ((AIController as EnemyAIController)?.PetBehavior is PetBehavior petBehavior)
+                        if (AIController is EnemyAIController { PetBehavior: PetBehavior petBehavior })
                         {
                             petBehavior.Happiness = (float)happiness / byte.MaxValue * petBehavior.MaxHappiness;
                             petBehavior.Hunger = (float)hunger / byte.MaxValue * petBehavior.MaxHunger;
@@ -302,13 +316,13 @@ namespace Barotrauma
             msg.ReadPadBits();
 
             int index = 0;
-            if (GameMain.Client.Character == this && CanMove)
+            if (GameMain.Client.Character == this)
             {
                 var posInfo = new CharacterStateInfo(
                     pos, rotation,
                     networkUpdateID,
                     facingRight ? Direction.Right : Direction.Left,
-                    selectedCharacter, selectedItem, selectedSecondaryItem, animation);
+                    selectedCharacter, selectedItem, selectedSecondaryItem, targetMovement, animation, ignorePlatforms);
 
                 while (index < memState.Count && NetIdUtils.IdMoreRecent(posInfo.ID, memState[index].ID))
                     index++;
@@ -320,7 +334,7 @@ namespace Barotrauma
                     pos, rotation,
                     linearVelocity, angularVelocity,
                     sendingTime, facingRight ? Direction.Right : Direction.Left,
-                    selectedCharacter, selectedItem, selectedSecondaryItem, animation);
+                    selectedCharacter, selectedItem, selectedSecondaryItem, targetMovement, animation, ignorePlatforms);
 
                 while (index < memState.Count && posInfo.Timestamp > memState[index].Timestamp)
                     index++;
@@ -356,6 +370,7 @@ namespace Barotrauma
                 case EventType.Control:
                     bool myCharacter = msg.ReadBoolean();
                     byte ownerID = msg.ReadByte();
+                    bool renamingEnabled = msg.ReadBoolean();
                     ResetNetState();
                     if (myCharacter)
                     {
@@ -369,6 +384,9 @@ namespace Barotrauma
                         GameMain.Client.HasSpawned = true;
                         GameMain.Client.Character = this;
                         GameMain.LightManager.LosEnabled = true;
+#if DEBUG
+                        GameMain.LightManager.LosEnabled = !GameMain.DevMode;
+#endif
                         GameMain.LightManager.LosAlpha = 1f;
                         GameMain.Client.WaitForNextRoundRespawn = null;
                     }
@@ -384,18 +402,23 @@ namespace Barotrauma
                         }
                         IsRemotePlayer = ownerID > 0;
                     }
+                    if (info != null)
+                    {
+                        info.RenamingEnabled = renamingEnabled;
+                    }
                     break;
                 case EventType.Status:
                     ReadStatus(msg);
+                    GodMode = msg.ReadBoolean();
                     break;
                 case EventType.UpdateSkills:
-                    int skillCount = msg.ReadByte();
-                    for (int i = 0; i < skillCount; i++)
+                    Identifier skillIdentifier = msg.ReadIdentifier();
+                    if (!skillIdentifier.IsEmpty)
                     {
-                        Identifier skillIdentifier = msg.ReadIdentifier();
+                        bool forceNotification = msg.ReadBoolean();
                         float skillLevel = msg.ReadSingle();
-                        info?.SetSkillLevel(skillIdentifier, skillLevel);
-                    }
+                        info?.SetSkillLevel(skillIdentifier, skillLevel, forceNotification: forceNotification);
+                    }                  
                     break;
                 case EventType.SetAttackTarget:
                 case EventType.ExecuteAttack:
@@ -506,7 +529,12 @@ namespace Barotrauma
                     break;
                 case EventType.UpdateExperience:
                     int experienceAmount = msg.ReadInt32();
-                    info?.SetExperience(experienceAmount);
+                    int additionalTalentPoints = msg.ReadInt32();
+                    if (info != null)
+                    {
+                        info.SetExperience(experienceAmount);
+                        info.AdditionalTalentPoints = additionalTalentPoints;
+                    }
                     break;
                 case EventType.UpdateTalents:
                     ushort talentCount = msg.ReadUInt16();
@@ -521,6 +549,20 @@ namespace Barotrauma
                     int moneyAmount = msg.ReadInt32();
                     SetMoney(moneyAmount);
                     break;
+                case EventType.UpdateTalentRefundPoints:
+                    int refundPoints = msg.ReadInt32();
+                    if (info != null)
+                    {
+                        if (refundPoints > info.TalentRefundPoints)
+                        {
+                            info.ShowTalentResetPopupOnOpen = true;
+                        }
+                        info.TalentRefundPoints = refundPoints;
+                    }
+                    break;
+                case EventType.ConfirmTalentRefund:
+                    Info?.RefundTalents();
+                    break;
                 case EventType.UpdatePermanentStats:
                     byte savedStatValueCount = msg.ReadByte();
                     StatTypes statType = (StatTypes)msg.ReadByte();                       
@@ -532,6 +574,47 @@ namespace Barotrauma
                         bool removeOnDeath = msg.ReadBoolean();
                         info?.ChangeSavedStatValue(statType, statValue, statIdentifier, removeOnDeath, setValue: true);
                     }
+                    break;
+                case EventType.LatchOntoTarget:
+                    bool attached = msg.ReadBoolean();
+                    if (attached)
+                    {
+                        Vector2 characterSimPos = new Vector2(msg.ReadSingle(), msg.ReadSingle());
+                        Vector2 attachSurfaceNormal = new Vector2(msg.ReadSingle(), msg.ReadSingle());
+                        Vector2 attachPos = new Vector2(msg.ReadSingle(), msg.ReadSingle());
+                        int attachWallIndex = msg.ReadInt32();
+                        UInt16 attachTargetId = msg.ReadUInt16();
+
+                        if (AIController is EnemyAIController { LatchOntoAI: { } latchOntoAi })
+                        {
+                            var attachTargetEntity = FindEntityByID(attachTargetId);
+                            switch (attachTargetEntity)
+                            {
+                                case Character attachTargetCharacter:
+                                    latchOntoAi.SetAttachTarget(attachTargetCharacter);
+                                    break;
+                                case Structure attachTargetStructure:
+                                    latchOntoAi.SetAttachTarget(attachTargetStructure, attachPos, attachSurfaceNormal);
+                                    break;
+                                default:                                    
+                                    var allLevelWalls = Level.Loaded.GetAllCells();
+                                    if (attachWallIndex >= 0 && attachWallIndex <= allLevelWalls.Count)
+                                    {
+                                        latchOntoAi.SetAttachTarget(allLevelWalls[attachWallIndex]);
+                                    }
+                                    break;                                    
+                            }
+                            latchOntoAi.AttachToBody(attachPos, attachSurfaceNormal, characterSimPos);
+                        }
+                    }
+                    else
+                    {
+                        if (AIController is EnemyAIController { LatchOntoAI: { } latchOntoAi })
+                        {
+                            latchOntoAi.DeattachFromBody(reset: false);
+                        }
+                    }
+
                     break;
             }
             msg.ReadPadBits();
@@ -681,11 +764,19 @@ namespace Barotrauma
                     character.ReadStatus(inc);
                 }
 
-                if (character.IsHuman && character.TeamID != CharacterTeamType.FriendlyNPC && character.TeamID != CharacterTeamType.None && !character.IsDead)
+                if (character.IsHuman && character.TeamID != CharacterTeamType.FriendlyNPC && character.TeamID != CharacterTeamType.None)
                 {
-                    CharacterInfo duplicateCharacterInfo = GameMain.GameSession.CrewManager.GetCharacterInfos().FirstOrDefault(c => c.ID == info.ID);
+                    CharacterInfo duplicateCharacterInfo = GameMain.GameSession.CrewManager.GetCharacterInfos(includeReserveBench: true).FirstOrDefault(c => c.ID == info.ID);
                     GameMain.GameSession.CrewManager.RemoveCharacterInfo(duplicateCharacterInfo);
-                    GameMain.GameSession.CrewManager.AddCharacter(character);
+                    if (character.isDead)
+                    {
+                        //just add the info if dead (displayed in the round summary, and crew list if the character is revived)
+                        GameMain.GameSession.CrewManager.AddCharacterInfo(character.info);
+                    }
+                    else
+                    {
+                        GameMain.GameSession.CrewManager.AddCharacter(character);
+                    }
                 }
 
                 if (GameMain.Client.SessionId == ownerId)
@@ -695,6 +786,9 @@ namespace Barotrauma
                     if (!character.IsDead) { Controlled = character; }
 
                     GameMain.LightManager.LosEnabled = true;
+#if DEBUG
+                    GameMain.LightManager.LosEnabled = !GameMain.DevMode;
+#endif
                     GameMain.LightManager.LosAlpha = 1f;
 
                     GameMain.NetLobbyScreen.CampaignCharacterDiscarded = false;
@@ -762,6 +856,7 @@ namespace Barotrauma
                 if (IsDead) { Revive(); }
                 CharacterHealth.ClientRead(msg);
             }
+
             byte severedLimbCount = msg.ReadByte();
             for (int i = 0; i < severedLimbCount; i++)
             {

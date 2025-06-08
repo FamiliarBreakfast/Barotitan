@@ -66,6 +66,7 @@ namespace Barotrauma.Items.Components
         private float editNodeDelay;
 
         private bool locked;
+
         public bool Locked
         {
             get
@@ -82,6 +83,13 @@ namespace Barotrauma.Items.Components
         }
 
         public float Length { get; private set; }
+
+        [Serialize(0.3f, IsPropertySaveable.No), Editable(MinValueFloat = 0.01f, MaxValueFloat = 10.0f, DecimalCount = 2)]
+        public float Width
+        {
+            get;
+            set;
+        }
 
         [Serialize(5000.0f, IsPropertySaveable.No, description: "The maximum distance the wire can extend (in pixels).")]
         public float MaxLength
@@ -268,8 +276,10 @@ namespace Barotrauma.Items.Components
                     CreateNetworkEvent();
                 }
 #endif
-                //the wire is active if only one end has been connected
-                IsActive = connections[0] == null ^ connections[1] == null;
+                //the wire is active if it's currently being wired to something (in character inventory and connected from one end)
+                IsActive = 
+                    item.ParentInventory is CharacterInventory &&
+                    connections[0] == null ^ connections[1] == null;
             }
 
             Drawable = IsActive || nodes.Any();
@@ -292,9 +302,8 @@ namespace Barotrauma.Items.Components
                 refSub = attachTarget?.Submarine;
             }
 
-            Vector2 nodePos = refSub == null ?
-                newConnection.Item.Position :
-                newConnection.Item.Position - refSub.HiddenSubPosition;
+            Vector2 nodePos = RoundNode(newConnection.Item.Position);
+            if (refSub != null) { nodePos -= refSub.HiddenSubPosition; }
 
             if (nodes.Count > 0 && nodes[0] == nodePos) { return; }
             if (nodes.Count > 1 && nodes[nodes.Count - 1] == nodePos) { return; }
@@ -469,9 +478,7 @@ namespace Barotrauma.Items.Components
             Vector2 mouseDiff = user.CursorWorldPosition - user.WorldPosition;
             mouseDiff = mouseDiff.ClampLength(MaxAttachDistance);
 
-            return new Vector2(
-                MathUtils.RoundTowardsClosest(user.Position.X + mouseDiff.X, Submarine.GridSize.X),
-                MathUtils.RoundTowardsClosest(user.Position.Y + mouseDiff.Y, Submarine.GridSize.Y));
+            return RoundNode(user.Position + mouseDiff);
         }
 
         public override bool Use(float deltaTime, Character character = null)
@@ -662,11 +669,14 @@ namespace Barotrauma.Items.Components
             Drawable = sections.Count > 0;
         }
 
-        private Vector2 RoundNode(Vector2 position)
+        private static Vector2 RoundNode(Vector2 position)
         {
-            position.X = MathUtils.Round(position.X, Submarine.GridSize.X / 2.0f);
-            position.Y = MathUtils.Round(position.Y, Submarine.GridSize.Y / 2.0f);
-            return position;
+            Vector2 halfGrid = Submarine.GridSize / 2;
+
+            position += halfGrid;
+            position.X = MathUtils.RoundTowardsClosest(position.X, Submarine.GridSize.X / 2.0f);
+            position.Y = MathUtils.RoundTowardsClosest(position.Y, Submarine.GridSize.Y / 2.0f);
+            return position - halfGrid;
         }
 
         public void SetConnectedDirty()
@@ -839,9 +849,9 @@ namespace Barotrauma.Items.Components
             }
         }
         
-        public override void Load(ContentXElement componentElement, bool usePrefabValues, IdRemap idRemap)
+        public override void Load(ContentXElement componentElement, bool usePrefabValues, IdRemap idRemap, bool isItemSwap)
         {
-            base.Load(componentElement, usePrefabValues, idRemap);
+            base.Load(componentElement, usePrefabValues, idRemap, isItemSwap);
 
             nodes.AddRange(ExtractNodes(componentElement));
 
@@ -882,8 +892,13 @@ namespace Barotrauma.Items.Components
 
         protected override void RemoveComponentSpecific()
         {
+            if (item.Container?.GetComponent<CircuitBox>() is { } circuitBox)
+            {
+                circuitBox.RemoveWire(this);
+            }
             ClearConnections();
             base.RemoveComponentSpecific();
+
 #if CLIENT
             if (DraggingWire == this) { draggingWire = null; }
             overrideSprite?.Remove();

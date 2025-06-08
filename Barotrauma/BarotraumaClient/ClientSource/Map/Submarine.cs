@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Text;
 
 namespace Barotrauma
 {
@@ -25,7 +26,7 @@ namespace Barotrauma
         /// <summary>
         /// Margin applied around the view area when culling entities (i.e. entities that are this far outside the view are still considered visible)
         /// </summary>
-        private const int CullMargin = 500;
+        private const int CullMargin = 50;
         /// <summary>
         /// Update entity culling when any corner of the view has moved more than this
         /// </summary>
@@ -133,7 +134,7 @@ namespace Barotrauma
                 foreach (Submarine sub in Loaded)
                 {
                     Rectangle worldBorders = sub.Borders;
-                    worldBorders.Location += sub.WorldPosition.ToPoint();
+                    worldBorders.Location += (sub.DrawPosition + sub.HiddenSubPosition).ToPoint();
                     worldBorders.Y = -worldBorders.Y;
 
                     GUI.DrawRectangle(spriteBatch, worldBorders, Color.White, false, 0, 5);
@@ -158,46 +159,38 @@ namespace Barotrauma
         }
 
         public static float DamageEffectCutoff;
-        public static Color DamageEffectColor;
 
-        private static readonly List<Structure> depthSortedDamageable = new List<Structure>();
         public static void DrawDamageable(SpriteBatch spriteBatch, Effect damageEffect, bool editing = false, Predicate<MapEntity> predicate = null)
         {
-            var entitiesToRender = !editing && visibleEntities != null ? visibleEntities : MapEntity.MapEntityList;
-
-            depthSortedDamageable.Clear();
-
-            //insertion sort according to draw depth
-            foreach (MapEntity e in entitiesToRender)
+            if (!editing && visibleEntities != null)
             {
-                if (e is Structure structure && structure.DrawDamageEffect)
+                foreach (MapEntity e in visibleEntities)
                 {
-                    if (predicate != null)
+                    if (e is Structure structure && structure.DrawDamageEffect)
                     {
-                        if (!predicate(e)) { continue; }
+                        if (predicate != null)
+                        {
+                            if (!predicate(structure)) { continue; }
+                        }
+                        structure.DrawDamage(spriteBatch, damageEffect, editing);
                     }
-                    float drawDepth = structure.GetDrawDepth();
-                    int i = 0;
-                    while (i < depthSortedDamageable.Count)
+                }
+            }
+            else
+            {
+                foreach (Structure structure in Structure.WallList)
+                {
+                    if (structure.DrawDamageEffect)
                     {
-                        float otherDrawDepth = depthSortedDamageable[i].GetDrawDepth();
-                        if (otherDrawDepth < drawDepth) { break; }
-                        i++;
+                        if (predicate != null)
+                        {
+                            if (!predicate(structure)) { continue; }
+                        }
+                        structure.DrawDamage(spriteBatch, damageEffect, editing);
                     }
-                    depthSortedDamageable.Insert(i, structure);
                 }
             }
 
-            foreach (Structure s in depthSortedDamageable)
-            {
-                s.DrawDamage(spriteBatch, damageEffect, editing);
-            }
-            if (damageEffect != null)
-            {
-                damageEffect.Parameters["aCutoff"].SetValue(0.0f);
-                damageEffect.Parameters["cCutoff"].SetValue(0.0f);
-                DamageEffectCutoff = 0.0f;
-            }
         }
 
         public static void DrawPaintedColors(SpriteBatch spriteBatch, bool editing = false, Predicate<MapEntity> predicate = null)
@@ -499,6 +492,64 @@ namespace Barotrauma
                 }
             }
 
+            if (Hull.HullList.Any(h => h.WaterVolume > 0.0f))
+            {
+                errorMsgs.Add(TextManager.Get("WaterInHullsWarning").Value);
+                warnings.Add(SubEditorScreen.WarningType.WaterInHulls);
+                Hull.ShowHulls = true;
+            }
+            
+            if (Info.IsWreck)
+            {
+                Point vanillaBrainSize = new Point(204, 204);
+                if (WreckAI.GetPotentialBrainRooms(this, WreckAIConfig.GetRandom(), minSize: vanillaBrainSize).None())
+                {
+                    errorMsgs.Add(TextManager.Get("NoSuitableBrainRoomsWarning").Value);
+                    warnings.Add(SubEditorScreen.WarningType.NoSuitableBrainRooms);
+                }
+            }
+
+            if (!IsWarningSuppressed(SubEditorScreen.WarningType.NotEnoughContainers))
+            {
+                HashSet<ContainerTagPrefab> missingContainerTags = new();
+                foreach (var prefab in ContainerTagPrefab.Prefabs)
+                {
+                    if (!prefab.IsRecommendedForSub(this) || !prefab.WarnIfLess) { continue; }
+                
+                    int count = Item.ItemList.Count(i => i.HasTag(prefab.Identifier));
+                    if (count < prefab.RecommendedAmount)
+                    {
+                        missingContainerTags.Add(prefab);
+                    }
+                }
+
+                if (missingContainerTags.Any())
+                {
+                    StringBuilder sb = new();
+                    int count = 0;
+                    foreach (var tag in missingContainerTags)
+                    {
+                        sb.AppendLine($"- {tag.Name}");
+                        count++;
+                        if (missingContainerTags.Count > count && count >= 3)
+                        {
+                            var moreIndicator = TextManager.GetWithVariable(
+                                "upgradeuitooltip.moreindicator",
+                                "[amount]",
+                                (missingContainerTags.Count - count).ToString()).Value;
+                            sb.AppendLine(moreIndicator);
+                            break;
+                        }
+                    }
+
+                    errorMsgs.Add(TextManager.GetWithVariable(
+                        "ContainerTagUI.CountWarning",
+                        "[tags]",
+                        sb.ToString()).Value);
+                    warnings.Add(SubEditorScreen.WarningType.NotEnoughContainers);
+                }
+            }
+            
             if (Info.Type == SubmarineType.Player)
             {
                 foreach (Item item in Item.ItemList)
@@ -514,7 +565,40 @@ namespace Barotrauma
                         break;
                     }
                 }
+                foreach (Item item in Item.ItemList)
+                {
+                    if (item.GetComponent<OxygenGenerator>() is not OxygenGenerator oxygenGenerator) { continue; }
 
+                    Dictionary<Hull, float> hullOxygenFlow = new Dictionary<Hull, float>();
+
+                    foreach (var linkedTo in item.linkedTo)
+                    {
+                        if (linkedTo is not Item linkedItem || linkedItem.GetComponent<Vent>() is not Vent vent) { continue; }
+                        if (vent.Item.CurrentHull == null)
+                        {
+                            vent.Item.FindHull();
+                            if (vent.Item.CurrentHull == null) { continue; }
+                        }                        
+                        float oxygenFlow = oxygenGenerator.GetVentOxygenFlow(vent);
+                        if (!hullOxygenFlow.ContainsKey(vent.Item.CurrentHull))
+                        {
+                            hullOxygenFlow[vent.Item.CurrentHull] = oxygenFlow;
+                        }
+                        else
+                        {
+                            hullOxygenFlow[vent.Item.CurrentHull] += oxygenFlow;
+                        }                        
+                    }
+                    foreach ((Hull hull, float oxygenFlow) in hullOxygenFlow)
+                    {
+                        if (oxygenFlow < Hull.OxygenConsumptionSpeed)
+                        {
+                            errorMsgs.Add(TextManager.GetWithVariable("LowOxygenOutputWarning", "[roomname]",
+                                hull.DisplayName).Value);
+                            warnings.Add(SubEditorScreen.WarningType.LowOxygenOutputWarning);
+                        }
+                    }
+                }
                 if (!WayPoint.WayPointList.Any(wp => wp.ShouldBeSaved && wp.SpawnType == SpawnType.Human))
                 {
                     if (!IsWarningSuppressed(SubEditorScreen.WarningType.NoHumanSpawnpoints))
@@ -547,6 +631,15 @@ namespace Barotrauma
                         warnings.Add(SubEditorScreen.WarningType.NoHiddenContainers);
                     }
                 }
+                if (Info.Dimensions.X * Physics.DisplayToRealWorldRatio > 80 ||
+                    Info.Dimensions.Y * Physics.DisplayToRealWorldRatio > 32)
+                {
+                    if (!IsWarningSuppressed(SubEditorScreen.WarningType.TooLargeForEndGame))
+                    {
+                        errorMsgs.Add(TextManager.Get("TooLargeForEndGameWarning").Value);
+                        warnings.Add(SubEditorScreen.WarningType.TooLargeForEndGame);
+                    }
+                }
             }
             else if (Info.Type == SubmarineType.OutpostModule)
             {
@@ -565,6 +658,7 @@ namespace Barotrauma
                             errorMsgs.Add(TextManager.GetWithVariables("InsufficientFreeConnectionsWarning",
                                 ("[doorcount]", doorLinks.ToString()),
                                 ("[freeconnectioncount]", (item.Connections[i].MaxWires - wireCount).ToString())).Value);
+                            warnings.Add(SubEditorScreen.WarningType.InsufficientFreeConnectionsWarning);
                             break;
                         }
                     }
@@ -629,9 +723,16 @@ namespace Barotrauma
 
             if (errorMsgs.Any())
             {
-                GUIMessageBox msgBox = new GUIMessageBox(TextManager.Get("Warning"), string.Join("\n\n", errorMsgs), new Vector2(0.25f, 0.0f), new Point(400, 200));
+                GUIMessageBox msgBox = new GUIMessageBox(TextManager.Get("Warning"), string.Empty, new Vector2(0.25f, 0.0f), minSize: new Point(GUI.IntScale(650), GUI.IntScale(650)));
                 if (warnings.Any())
                 {
+                    var textListBox = new GUIListBox(new RectTransform(new Vector2(1.0f, 0.75f), msgBox.Content.RectTransform));
+                    var text = new GUITextBlock(new RectTransform(new Vector2(1.0f, 0.0f), textListBox.Content.RectTransform), string.Join("\n\n", errorMsgs), wrap: true)
+                    {
+                        CanBeFocused = false
+                    };
+                    text.RectTransform.MinSize = new Point(0, (int)text.TextSize.Y);
+
                     Point size = msgBox.RectTransform.NonScaledSize;
                     GUITickBox suppress = new GUITickBox(new RectTransform(new Vector2(1f, 0.33f), msgBox.Content.RectTransform), TextManager.Get("editor.suppresswarnings"));
                     msgBox.RectTransform.NonScaledSize = new Point(size.X, size.Y + suppress.RectTransform.NonScaledSize.Y);
@@ -645,7 +746,6 @@ namespace Barotrauma
                                 SubEditorScreen.SuppressedWarnings.Add(warning);
                             }
                         }
-
                         return true;
                     };
                 }
@@ -713,18 +813,12 @@ namespace Barotrauma
             return GameMain.LightManager.Lights.Count(l => l.CastShadows && !l.IsBackground) - disabledItemLightCount;
         }
 
-        public static Vector2 MouseToWorldGrid(Camera cam, Submarine sub, bool round = false)
+        public static Vector2 MouseToWorldGrid(Camera cam, Submarine sub, Vector2? mousePos = null, bool round = false)
         {
-            Vector2 position = PlayerInput.MousePosition;
+            Vector2 position = mousePos ?? PlayerInput.MousePosition;
             position = cam.ScreenToWorld(position);
 
-            Vector2 worldGridPos = VectorToWorldGrid(position, round);
-
-            if (sub != null)
-            {
-                worldGridPos.X += sub.Position.X % GridSize.X;
-                worldGridPos.Y += sub.Position.Y % GridSize.Y;
-            }
+            Vector2 worldGridPos = VectorToWorldGrid(position, sub, round);
 
             return worldGridPos;
         }
@@ -745,10 +839,12 @@ namespace Barotrauma
                 subBody.PositionBuffer.Insert(index, posInfo);
             }
         }
-        
+
         public void ClientEventRead(IReadMessage msg, float sendingTime)
         {
-            throw new Exception($"Error while reading a network event for the submarine \"{Info.Name} ({ID})\". Submarines are not even supposed to receive events!");
+            Identifier layerIdentifier = msg.ReadIdentifier();
+            bool enabled = msg.ReadBoolean();
+            SetLayerEnabled(layerIdentifier, enabled);
         }
     }
 }

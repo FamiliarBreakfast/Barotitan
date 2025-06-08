@@ -1,4 +1,6 @@
-﻿using System.Collections.Generic;
+﻿#nullable enable
+
+using System.Collections.Generic;
 using System;
 using System.Linq;
 using System.Collections.Immutable;
@@ -10,7 +12,7 @@ namespace Barotrauma.Extensions
         /// <summary>
         /// Randomizes the collection (using OrderBy) and returns it.
         /// </summary>
-        public static T[] Randomize<T>(this IList<T> source, Rand.RandSync randSync = Rand.RandSync.Unsynced)
+        public static T[] Randomize<T>(this IList<T> source, Rand.RandSync randSync)
         {
             return source.OrderBy(i => Rand.Value(randSync)).ToArray();
         }
@@ -18,7 +20,7 @@ namespace Barotrauma.Extensions
         /// <summary>
         /// Randomizes the list in place without creating a new collection, using a Fisher-Yates-based algorithm.
         /// </summary>
-        public static void Shuffle<T>(this IList<T> list, Rand.RandSync randSync = Rand.RandSync.Unsynced)
+        public static void Shuffle<T>(this IList<T> list, Rand.RandSync randSync)
             => list.Shuffle(Rand.GetRNG(randSync));
 
         public static void Shuffle<T>(this IList<T> list, Random rng)
@@ -34,7 +36,7 @@ namespace Barotrauma.Extensions
             }
         }
 
-        public static T GetRandom<T>(this IReadOnlyList<T> source, Func<T, bool> predicate, Rand.RandSync randSync)
+        public static T? GetRandom<T>(this IReadOnlyList<T> source, Func<T, bool> predicate, Rand.RandSync randSync)
         {
             if (predicate == null) { return GetRandom(source, randSync); }
             return source.Where(predicate).ToArray().GetRandom(randSync);
@@ -49,13 +51,13 @@ namespace Barotrauma.Extensions
         /// <param name="randSync">Which RNG to use</param>
         /// <returns>A random item from the list. Return value should match between clients and
         /// the server, if applicable.</returns>
-        public static T GetRandom<T>(this IReadOnlyList<T> source, Rand.RandSync randSync)
+        public static T? GetRandom<T>(this IReadOnlyList<T> source, Rand.RandSync randSync)
         {
             int count = source.Count;
             return count == 0 ? default : source[Rand.Range(0, count, randSync)];
         }
 
-        public static T GetRandom<T>(this IReadOnlyList<T> source, Random random)
+        public static T? GetRandom<T>(this IReadOnlyList<T> source, Random random)
         {
             int count = source.Count;
             return count == 0 ? default : source[random.Next(0, count)];
@@ -64,13 +66,13 @@ namespace Barotrauma.Extensions
         // The reason these "GetRandomUnsynced" methods exist is because
         // they can be used on all enumerables; GetRandom can only be used
         // on lists as they can be sorted to guarantee a certain order.
-        public static T GetRandomUnsynced<T>(this IEnumerable<T> source, Func<T, bool> predicate)
+        public static T? GetRandomUnsynced<T>(this IEnumerable<T> source, Func<T, bool> predicate)
         {
             if (predicate == null) { return GetRandomUnsynced(source); }
             return source.Where(predicate).GetRandomUnsynced();
         }
 
-        public static T GetRandomUnsynced<T>(this IEnumerable<T> source)
+        public static T? GetRandomUnsynced<T>(this IEnumerable<T> source)
         {
             if (source is IReadOnlyList<T> list)
             {
@@ -83,19 +85,19 @@ namespace Barotrauma.Extensions
             }
         }
 
-        public static T GetRandom<T>(this IEnumerable<T> source, Random rand)
+        public static T? GetRandom<T>(this IEnumerable<T> source, Random rand)
             where T : PrefabWithUintIdentifier
         {
             return source.OrderBy(p => p.UintIdentifier).ToArray().GetRandom(rand);
         }
 
-        public static T GetRandom<T>(this IEnumerable<T> source, Rand.RandSync randSync)
+        public static T? GetRandom<T>(this IEnumerable<T> source, Rand.RandSync randSync)
             where T : PrefabWithUintIdentifier
         {
             return source.OrderBy(p => p.UintIdentifier).ToArray().GetRandom(randSync);
         }
 
-        public static T GetRandom<T>(this IEnumerable<T> source, Func<T, bool> predicate, Rand.RandSync randSync)
+        public static T? GetRandom<T>(this IEnumerable<T> source, Func<T, bool> predicate, Rand.RandSync randSync)
             where T : PrefabWithUintIdentifier
         {
             return source.Where(predicate).OrderBy(p => p.UintIdentifier).ToArray().GetRandom(randSync);
@@ -140,7 +142,7 @@ namespace Barotrauma.Extensions
         /// <summary>
         /// Shorthand for !source.Any(predicate) -> i.e. not any.
         /// </summary>
-        public static bool None<T>(this IEnumerable<T> source, Func<T, bool> predicate = null)
+        public static bool None<T>(this IEnumerable<T> source, Func<T, bool>? predicate = null)
         {
             if (predicate == null)
             {
@@ -152,7 +154,7 @@ namespace Barotrauma.Extensions
             }
         }
 
-        public static bool Multiple<T>(this IEnumerable<T> source, Func<T, bool> predicate = null)
+        public static bool Multiple<T>(this IEnumerable<T> source, Func<T, bool>? predicate = null)
         {
             if (predicate == null)
             {
@@ -167,6 +169,17 @@ namespace Barotrauma.Extensions
         public static IEnumerable<T> ToEnumerable<T>(this T item)
         {
             yield return item;
+        }
+
+        public static IEnumerable<T> NotNull<T>(this IEnumerable<T?> enumerable) where T : class
+        {
+            foreach (var item in enumerable)
+            {
+                if (item != null)
+                {
+                    yield return item;
+                }
+            }
         }
 
         // source: https://stackoverflow.com/questions/19237868/get-all-children-to-one-list-recursive-c-sharp
@@ -185,26 +198,6 @@ namespace Barotrauma.Extensions
             if (value != null) { source.Add(value); }
         }
 
-        public static ImmutableDictionary<TKey, TValue> ToImmutableDictionary<TKey, TValue>(this IEnumerable<(TKey, TValue)> enumerable)
-        {
-            return enumerable.ToDictionary().ToImmutableDictionary();
-        }
-        
-        public static Dictionary<TKey, TValue> ToDictionary<TKey, TValue>(this IEnumerable<(TKey, TValue)> enumerable)
-        {
-            var dictionary = new Dictionary<TKey, TValue>();
-            foreach (var (k,v) in enumerable)
-            {
-                dictionary.Add(k, v);
-            }
-            return dictionary;
-        }
-
-        public static Dictionary<TKey, TValue> ToMutable<TKey, TValue>(this ImmutableDictionary<TKey, TValue> immutableDictionary)
-        {
-            if (immutableDictionary == null) { return null; }
-            return new Dictionary<TKey, TValue>(immutableDictionary);
-        }
 
         public static NetCollection<T> ToNetCollection<T>(this IEnumerable<T> enumerable) => new NetCollection<T>(enumerable.ToImmutableArray());
 
@@ -236,82 +229,5 @@ namespace Barotrauma.Extensions
         
         public static IReadOnlyList<T> ListConcat<T>(this IEnumerable<T> self, IEnumerable<T> other)
             => new ListConcat<T>(self, other);
-
-        /// <summary>
-        /// Returns the maximum element in a given enumerable, or null if there
-        /// aren't any elements in the input.
-        /// </summary>
-        /// <param name="enumerable">Input collection</param>
-        /// <returns>Maximum element or null</returns>
-        public static T? MaxOrNull<T>(this IEnumerable<T> enumerable) where T : struct, IComparable<T>
-        {
-            T? retVal = null;
-            foreach (T v in enumerable)
-            {
-                if (!retVal.HasValue || v.CompareTo(retVal.Value) > 0) { retVal = v; }
-            }
-            return retVal;
-        }
-
-        public static TOut? MaxOrNull<TIn, TOut>(this IEnumerable<TIn> enumerable, Func<TIn, TOut> conversion)
-            where TOut : struct, IComparable<TOut>
-            => enumerable.Select(conversion).MaxOrNull();
-
-        public static int FindIndex<T>(this IReadOnlyList<T> list, Predicate<T> predicate)
-        {
-            for (int i=0; i<list.Count; i++)
-            {
-                if (predicate(list[i])) { return i; }
-            }
-            return -1;
-        }
-
-        /// <summary>
-        /// Same as FirstOrDefault but will always return null instead of default(T) when no element is found
-        /// </summary>
-        public static T? FirstOrNull<T>(this IEnumerable<T> source, Func<T, bool> predicate) where T : struct
-        {
-            if (source.FirstOrDefault(predicate) is var first && !first.Equals(default(T)))
-            {
-                return first;
-            }
-
-            return null;
-        }
-
-        public static T? FirstOrNull<T>(this IEnumerable<T> source) where T : struct
-        {
-            if (source.FirstOrDefault() is var first && !first.Equals(default(T)))
-            {
-                return first;
-            }
-
-            return null;
-        }
-
-        public static IEnumerable<T> NotNull<T>(this IEnumerable<T?> source) where T : struct
-            => source
-                .Where(nullable => nullable.HasValue)
-                .Select(nullable => nullable.Value);
-
-        public static IEnumerable<T> NotNone<T>(this IEnumerable<Option<T>> source)
-        {
-            foreach (var o in source)
-            {
-                if (o.TryUnwrap(out var v)) { yield return v; }
-            }
-        }
-
-        public static IEnumerable<TSuccess> Successes<TSuccess, TFailure>(
-            this IEnumerable<Result<TSuccess, TFailure>> source)
-            => source
-                .OfType<Success<TSuccess, TFailure>>()
-                .Select(s => s.Value);
-        
-        public static IEnumerable<TFailure> Failures<TSuccess, TFailure>(
-            this IEnumerable<Result<TSuccess, TFailure>> source)
-            => source
-                .OfType<Failure<TSuccess, TFailure>>()
-                .Select(f => f.Error);
     }
 }

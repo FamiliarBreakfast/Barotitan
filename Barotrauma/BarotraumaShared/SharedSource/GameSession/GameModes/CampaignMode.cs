@@ -18,6 +18,7 @@ namespace Barotrauma
             string FilePath,
             Option<SerializableDateTime> SaveTime,
             string SubmarineName,
+            RespawnMode RespawnMode,
             ImmutableArray<string> EnabledContentPackageNames) : INetSerializableStruct;
 
         public const int MaxMoney = int.MaxValue / 2; //about 1 billion
@@ -32,6 +33,20 @@ namespace Barotrauma
         public int TotalPassedLevels;
 
         public enum InteractionType { None, Talk, Examine, Map, Crew, Store, Upgrade, PurchaseSub, MedicalClinic, Cargo }
+
+        /// <summary>
+        /// Should the interaction be disabled if the character's faction is hostile towards the players?
+        /// </summary>
+        public static bool HostileFactionDisablesInteraction(InteractionType interactionType)
+        {
+            return 
+                interactionType != InteractionType.None && 
+                //allow interacting with stores, otherwise you could get softlocked
+                //(no way to get enough resources from a hostile outpost to make it to the next one?)
+                interactionType != InteractionType.Store &&
+                //examining is triggered by events, and there may be events that are intended to allow interaction with a hostile NPC.
+                interactionType != InteractionType.Examine;
+        }
 
         public static bool BlocksInteraction(InteractionType interactionType)
         {
@@ -103,6 +118,9 @@ namespace Barotrauma
             get { return map; }
         }
 
+        /// <summary>
+        /// Which missions have been selected for the current round?
+        /// </summary>
         public override IEnumerable<Mission> Missions
         {
             get
@@ -112,10 +130,13 @@ namespace Barotrauma
                 {
                     if (Map.CurrentLocation != null)
                     {
+                        var currentLevelData = Level.Loaded?.LevelData ?? GameMain.GameSession?.LevelData;
                         foreach (Mission mission in map.CurrentLocation.SelectedMissions)
                         {
-                            if (mission.Locations[0] == mission.Locations[1] ||
-                                mission.Locations.Contains(Map.SelectedLocation))
+                            if (//mission takes place in current location
+                                mission.Locations[0] == mission.Locations[1] ||
+                                //mission takes place between two locations, and we're in the level between those locations
+                                mission.Locations.Contains(Map.SelectedLocation) && currentLevelData is { Type: LevelData.LevelType.LocationConnection })
                             {
                                 yield return mission;
                             }
@@ -147,6 +168,8 @@ namespace Barotrauma
 
         public bool DivingSuitWarningShown;
 
+        public bool ItemsRelocatedToMainSub;
+
         private static bool AnyOneAllowedToManageCampaign(ClientPermissions permissions)
         {
             if (GameMain.NetworkMember == null) { return true; }
@@ -154,10 +177,28 @@ namespace Barotrauma
 
             if (GameMain.NetworkMember.GameStarted)
             {
-                //allow managing if no-one with permissions is alive and in-game
-                return GameMain.NetworkMember.ConnectedClients.None(c =>
-                    c.InGame && c.Character is { IsIncapacitated: false, IsDead: false } &&
-                    (IsOwner(c) || c.HasPermission(permissions)));
+                bool someOneHasPermissions = GameMain.NetworkMember.ConnectedClients.Any(c => IsOwner(c) || c.HasPermission(permissions));
+                if (someOneHasPermissions)
+                {
+                    if (GameMain.GameSession != null && GameMain.GameSession.RoundDuration < 60.0f)
+                    {
+                        //round has been going on for less than a minute, don't allow anyone to manage just yet,
+                        //the people with permissions might still be loading or doing something in the lobby
+                        return false;
+                    }
+                    else
+                    {
+                        //allow managing if the round has been going on for a while, and no-one with permissions is alive and in-game
+                        return GameMain.NetworkMember.ConnectedClients.None(c =>
+                            c.InGame && c.Character is { IsIncapacitated: false, IsDead: false } &&
+                            (IsOwner(c) || c.HasPermission(permissions)));
+                    }
+                }
+                else
+                {
+                    //no-one in the server with permissions, allow anyone to manage
+                    return true;
+                }
             }
             else
             {
@@ -168,6 +209,7 @@ namespace Barotrauma
         protected CampaignMode(GameModePreset preset, CampaignSettings settings)
             : base(preset)
         {
+            Settings = settings;
             Bank = new Wallet(Option<Character>.None())
             {
                 Balance = settings.InitialMoney
@@ -209,7 +251,7 @@ namespace Barotrauma
 
         public virtual bool TryPurchase(Client client, int price)
         {
-            return GetWallet(client).TryDeduct(price);
+            return price == 0 || GetWallet(client).TryDeduct(price);
         }
 
         public virtual int GetBalance(Client client = null)
@@ -244,8 +286,21 @@ namespace Barotrauma
                 sub != leavingSub &&
                 !leavingSub.DockedTo.Contains(sub) &&
                 sub.Info.Type == SubmarineType.Player && sub.TeamID == CharacterTeamType.Team1 && // pirate subs are currently tagged as player subs as well
-                sub != GameMain.NetworkMember?.RespawnManager?.RespawnShuttle &&
+                !sub.IsRespawnShuttle &&
                 (sub.AtEndExit != leavingSub.AtEndExit || sub.AtStartExit != leavingSub.AtStartExit));
+        }
+
+        public SubmarineInfo GetPredefinedStartOutpost()
+        {
+            if (Map?.CurrentLocation?.Type?.GetForcedOutpostGenerationParams() is OutpostGenerationParams parameters && 
+                !parameters.OutpostFilePath.IsNullOrEmpty())
+            {
+                return new SubmarineInfo(parameters.OutpostFilePath.Value)
+                {
+                    OutpostGenerationParams = parameters
+                };
+            }
+            return null;
         }
 
         public override void Start()
@@ -345,6 +400,10 @@ namespace Barotrauma
         /// </summary>
         public event Action BeforeLevelLoading;
 
+        /// <summary>
+        /// Triggers when saving and quitting mid-round (as in, not just transferring to a new level). Automatically cleared after triggering -> no need to unregister
+        /// </summary>
+        public event Action OnSaveAndQuit;
 
         public override void AddExtraMissions(LevelData levelData)
         {
@@ -382,22 +441,28 @@ namespace Barotrauma
                         currentLocation.DeselectMission(mission);
                     }
                 }
-                if (levelData.HasBeaconStation && !levelData.IsBeaconActive)
+                if (levelData.HasBeaconStation && !levelData.IsBeaconActive && Missions.None(m => m.Prefab.Type == Tags.MissionTypeBeacon))
                 {
-                    var beaconMissionPrefabs = MissionPrefab.Prefabs.Where(m => m.Tags.Contains("beaconnoreward")).OrderBy(m => m.UintIdentifier);
+                    var beaconMissionPrefabs = MissionPrefab.Prefabs.Where(m => m.IsSideObjective && m.Type == Tags.MissionTypeBeacon);
                     if (beaconMissionPrefabs.Any())
                     {
-                        Random rand = new MTRandom(ToolBox.StringToInt(levelData.Seed));
-                        var beaconMissionPrefab = ToolBox.SelectWeightedRandom(beaconMissionPrefabs, p => (float)p.Commonness, rand);
-                        if (!Missions.Any(m => m.Prefab.Type == beaconMissionPrefab.Type))
+                        var filteredMissions = beaconMissionPrefabs.Where(m => levelData.Difficulty >= m.MinLevelDifficulty && levelData.Difficulty <= m.MaxLevelDifficulty);
+                        if (filteredMissions.None())
                         {
-                            extraMissions.Add(beaconMissionPrefab.Instantiate(Map.SelectedConnection.Locations, Submarine.MainSub));
+                            DebugConsole.AddWarning($"No suitable beacon mission found matching the level difficulty {levelData.Difficulty}. Ignoring the restriction.");
                         }
+                        else
+                        {
+                            beaconMissionPrefabs = filteredMissions;
+                        }
+                        Random rand = new MTRandom(ToolBox.StringToInt(levelData.Seed));
+                        var beaconMissionPrefab = ToolBox.SelectWeightedRandom(beaconMissionPrefabs, p => p.Commonness, rand);
+                        extraMissions.Add(beaconMissionPrefab.Instantiate(Map.SelectedConnection.Locations, Submarine.MainSub));
                     }
                 }
                 if (levelData.HasHuntingGrounds)
                 {
-                    var huntingGroundsMissionPrefabs = MissionPrefab.Prefabs.Where(m => m.Tags.Contains("huntinggrounds")).OrderBy(m => m.UintIdentifier);
+                    var huntingGroundsMissionPrefabs = MissionPrefab.Prefabs.Where(m => m.IsSideObjective && m.Tags.Contains("huntinggrounds")).OrderBy(m => m.UintIdentifier);
                     if (!huntingGroundsMissionPrefabs.Any())
                     {
                         DebugConsole.AddWarning("Could not find a hunting grounds mission for the level. No mission with the tag \"huntinggrounds\" found.");
@@ -464,8 +529,8 @@ namespace Barotrauma
                             var missionPrefabs = MissionPrefab.Prefabs.Where(m => m.Tags.Any(t => t == automaticMission.MissionTag)).OrderBy(m => m.UintIdentifier);
                             if (missionPrefabs.Any())
                             {
-                                var missionPrefab = ToolBox.SelectWeightedRandom(missionPrefabs, p => (float)p.Commonness, rand);     
-                                if (missionPrefab.Type == MissionType.Pirate && Missions.Any(m => m.Prefab.Type == MissionType.Pirate))
+                                var missionPrefab = ToolBox.SelectWeightedRandom(missionPrefabs, p => p.Commonness, rand);
+                                if (missionPrefab.Type == Tags.MissionTypePirate && Missions.Any(m => m.Prefab.Type == Tags.MissionTypePirate))
                                 {
                                     continue;                                    
                                 }
@@ -507,8 +572,8 @@ namespace Barotrauma
                     if (endLevelMissionPrefabs.Any())
                     {
                         Random rand = new MTRandom(ToolBox.StringToInt(levelData.Seed));
-                        var endLevelMissionPrefab = ToolBox.SelectWeightedRandom(endLevelMissionPrefabs, p => (float)p.Commonness, rand);
-                        if (!Missions.Any(m => m.Prefab.Type == endLevelMissionPrefab.Type))
+                        var endLevelMissionPrefab = ToolBox.SelectWeightedRandom(endLevelMissionPrefabs, p => p.Commonness, rand);
+                        if (Missions.All(m => m.Prefab.Type != endLevelMissionPrefab.Type))
                         {
                             if (levelData.Type == LevelData.LevelType.LocationConnection)
                             {
@@ -551,9 +616,9 @@ namespace Barotrauma
 
             if (availableTransition == TransitionType.None)
             {
-                DebugConsole.ThrowError("Failed to load a new campaign level. No available level transitions " +
-                    "(current location: " + (map.CurrentLocation?.Name ?? "null") + ", " +
-                    "selected location: " + (map.SelectedLocation?.Name ?? "null") + ", " +
+                DebugConsole.ThrowErrorLocalized("Failed to load a new campaign level. No available level transitions " +
+                    "(current location: " + (map.CurrentLocation?.DisplayName ?? "null") + ", " +
+                    "selected location: " + (map.SelectedLocation?.DisplayName ?? "null") + ", " +
                     "leaving sub: " + (leavingSub?.Info?.Name ?? "null") + ", " +
                     "at start: " + (leavingSub?.AtStartExit.ToString() ?? "null") + ", " +
                     "at end: " + (leavingSub?.AtEndExit.ToString() ?? "null") + ")\n" +
@@ -562,10 +627,10 @@ namespace Barotrauma
             }
             if (nextLevel == null)
             {
-                DebugConsole.ThrowError("Failed to load a new campaign level. No available level transitions " +
+                DebugConsole.ThrowErrorLocalized("Failed to load a new campaign level. No available level transitions " +
                     "(transition type: " + availableTransition + ", " +
-                    "current location: " + (map.CurrentLocation?.Name ?? "null") + ", " +
-                    "selected location: " + (map.SelectedLocation?.Name ?? "null") + ", " +
+                    "current location: " + (map.CurrentLocation?.DisplayName ?? "null") + ", " +
+                    "selected location: " + (map.SelectedLocation?.DisplayName ?? "null") + ", " +
                     "leaving sub: " + (leavingSub?.Info?.Name ?? "null") + ", " +
                     "at start: " + (leavingSub?.AtStartExit.ToString() ?? "null") + ", " +
                     "at end: " + (leavingSub?.AtEndExit.ToString() ?? "null") + ")\n" +
@@ -576,8 +641,8 @@ namespace Barotrauma
             ShowCampaignUI = ForceMapUI = false;
 #endif
             DebugConsole.NewMessage("Transitioning to " + (nextLevel?.Seed ?? "null") +
-                " (current location: " + (map.CurrentLocation?.Name ?? "null") + ", " +
-                "selected location: " + (map.SelectedLocation?.Name ?? "null") + ", " +
+                " (current location: " + (map.CurrentLocation?.DisplayName ?? "null") + ", " +
+                "selected location: " + (map.SelectedLocation?.DisplayName ?? "null") + ", " +
                 "leaving sub: " + (leavingSub?.Info?.Name ?? "null") + ", " +
                 "at start: " + (leavingSub?.AtStartExit.ToString() ?? "null") + ", " +
                 "at end: " + (leavingSub?.AtEndExit.ToString() ?? "null") + ", " +
@@ -744,7 +809,7 @@ namespace Barotrauma
                     {
                         foreach (var dockedSub in Level.Loaded.StartOutpost.DockedTo)
                         {
-                            if (dockedSub == GameMain.NetworkMember?.RespawnManager?.RespawnShuttle || dockedSub.TeamID != submarineTeam) { continue; }
+                            if (dockedSub.IsRespawnShuttle || dockedSub.TeamID != submarineTeam) { continue; }
                             return dockedSub.DockedTo.Contains(Submarine.MainSub) ? Submarine.MainSub : dockedSub;
                         }
                     }
@@ -784,7 +849,7 @@ namespace Barotrauma
                     {
                         foreach (var dockedSub in Level.Loaded.EndOutpost.DockedTo)
                         {
-                            if (dockedSub == GameMain.NetworkMember?.RespawnManager?.RespawnShuttle || dockedSub.TeamID != submarineTeam) { continue; }
+                            if (dockedSub.IsRespawnShuttle || dockedSub.TeamID != submarineTeam) { continue; }
                             return dockedSub.DockedTo.Contains(Submarine.MainSub) ? Submarine.MainSub : dockedSub;
                         }
                     }
@@ -862,7 +927,17 @@ namespace Barotrauma
                 }
             }
 
-            foreach (CharacterInfo ci in CrewManager.CharacterInfos.ToList())
+            //remove ID cards left in duffel bags
+            foreach (var item in Item.ItemList.ToList())
+            {
+                if (item.HasTag(Tags.IdCardTag) &&
+                    (item.Container?.HasTag(Tags.DespawnContainer) ?? false))
+                {
+                    item.Remove();
+                }
+            }
+
+            foreach (CharacterInfo ci in CrewManager.GetCharacterInfos().ToList())
             {
                 if (ci.CauseOfDeath != null)
                 {
@@ -893,6 +968,22 @@ namespace Barotrauma
                     reactor.AutoTemp = true;
                 }
             }
+        }
+
+        /// <summary>
+        /// Handles updating store stock, registering event history and relocating items (i.e. things that need to be done when saving and quitting mid-round)
+        /// </summary>
+        public void HandleSaveAndQuit()
+        {
+            OnSaveAndQuit?.Invoke();
+            OnSaveAndQuit = null;
+            if (Level.IsLoadedFriendlyOutpost)
+            {
+                UpdateStoreStock();
+            }
+
+            GameMain.GameSession.EndMissions();
+            GameMain.GameSession.EventManager?.StoreEventDataAtRoundEnd(registerFinishedOnly: true);
         }
 
         /// <summary>
@@ -963,7 +1054,7 @@ namespace Barotrauma
                 Preset?.Identifier.Value ?? "none");
             string eventId = "FinishCampaign:";
             GameAnalyticsManager.AddDesignEvent(eventId + "Submarine:" + (Submarine.MainSub?.Info?.Name ?? "none"));
-            GameAnalyticsManager.AddDesignEvent(eventId + "CrewSize:" + (CrewManager?.CharacterInfos?.Count() ?? 0));
+            GameAnalyticsManager.AddDesignEvent(eventId + "CrewSize:" + (CrewManager?.GetCharacterInfos()?.Count() ?? 0));
             GameAnalyticsManager.AddDesignEvent(eventId + "Money", Bank.Balance);
             GameAnalyticsManager.AddDesignEvent(eventId + "Playtime", TotalPlayTime);
             GameAnalyticsManager.AddDesignEvent(eventId + "PassedLevels", TotalPassedLevels);
@@ -1008,7 +1099,7 @@ namespace Barotrauma
             return ToolBox.SelectWeightedRandom(factionsList, weights, random);
         }
 
-        public bool TryHireCharacter(Location location, CharacterInfo characterInfo, Client client = null)
+        public bool TryHireCharacter(Location location, CharacterInfo characterInfo, bool takeMoney = true, Client client = null, bool buyingNewCharacter = false)
         {
             if (characterInfo == null) { return false; }
             if (characterInfo.MinReputationToHire.factionId != Identifier.Empty)
@@ -1018,19 +1109,43 @@ namespace Barotrauma
                     return false;
                 }
             }
-            if (!TryPurchase(client, characterInfo.Salary)) { return false; }
+            int price = buyingNewCharacter ? NewCharacterCost(characterInfo) : HireManager.GetSalaryFor(characterInfo);
+            if (takeMoney && !TryPurchase(client, price)) { return false; }
+
             characterInfo.IsNewHire = true;
             characterInfo.Title = null;
             location.RemoveHireableCharacter(characterInfo);
-            CrewManager.AddCharacterInfo(characterInfo);
+
+            if (GameMain.GameSession?.Campaign is MultiPlayerCampaign)
+            {
+#if SERVER
+                CrewManager.ToggleReserveBenchStatus(characterInfo, client, pendingHire: true, confirmPendingHire: true, sendUpdate: false);
+#endif
+            }
+            else
+            {
+                CrewManager.AddCharacterInfo(characterInfo);
+            }
+
             GameAnalyticsManager.AddMoneySpentEvent(characterInfo.Salary, GameAnalyticsManager.MoneySink.Crew, characterInfo.Job?.Prefab.Identifier.Value ?? "unknown");
             return true;
+        }
+        
+        public int NewCharacterCost(CharacterInfo characterInfo)
+        {
+            float characterCostPercentage = GameMain.NetworkMember?.ServerSettings.ReplaceCostPercentage ?? 100f;
+            return (int)MathF.Round(HireManager.GetSalaryFor(characterInfo) * (characterCostPercentage/100f));
+        }
+        
+        public bool CanAffordNewCharacter(CharacterInfo characterInfo)
+        {
+            return CanAfford(NewCharacterCost(characterInfo));
         }
 
         private void NPCInteract(Character npc, Character interactor)
         {
             if (!npc.AllowCustomInteract) { return; }
-            GameAnalyticsManager.AddDesignEvent("CampaignInteraction:" + Preset.Identifier + ":" + npc.CampaignInteractionType);
+            if (npc.AIController is HumanAIController humanAi && !humanAi.AllowCampaignInteraction()) { return; }
             NPCInteractProjSpecific(npc, interactor);
             string coroutineName = "DoCharacterWait." + (npc?.ID ?? Entity.NullEntityID);
             if (!CoroutineManager.IsCoroutineRunning(coroutineName))
@@ -1226,7 +1341,7 @@ namespace Barotrauma
             return Faction.GetPlayerAffiliationStatus(faction);
         }
 
-        public abstract void Save(XElement element);
+        public abstract void Save(XElement element, bool isSavingOnLoading);
 
         protected void LoadStats(XElement element)
         {
@@ -1247,7 +1362,7 @@ namespace Barotrauma
         {
             DebugConsole.NewMessage("********* CAMPAIGN STATUS *********", Color.White);
             DebugConsole.NewMessage("   Money: " + Bank.Balance, Color.White);
-            DebugConsole.NewMessage("   Current location: " + map.CurrentLocation.Name, Color.White);
+            DebugConsole.NewMessage("   Current location: " + map.CurrentLocation.DisplayName, Color.White);
 
             DebugConsole.NewMessage("   Available destinations: ", Color.White);
             for (int i = 0; i < map.CurrentLocation.Connections.Count; i++)
@@ -1255,11 +1370,11 @@ namespace Barotrauma
                 Location destination = map.CurrentLocation.Connections[i].OtherLocation(map.CurrentLocation);
                 if (destination == map.SelectedLocation)
                 {
-                    DebugConsole.NewMessage("     " + i + ". " + destination.Name + " [SELECTED]", Color.White);
+                    DebugConsole.NewMessage("     " + i + ". " + destination.DisplayName + " [SELECTED]", Color.White);
                 }
                 else
                 {
-                    DebugConsole.NewMessage("     " + i + ". " + destination.Name, Color.White);
+                    DebugConsole.NewMessage("     " + i + ". " + destination.DisplayName, Color.White);
                 }
             }
 
@@ -1291,7 +1406,7 @@ namespace Barotrauma
             {
                 if (NumberOfMissionsAtLocation(location) > Settings.TotalMaxMissionCount)
                 {
-                    DebugConsole.AddWarning($"Client {sender.Name} had too many missions selected for location {location.Name}! Count was {NumberOfMissionsAtLocation(location)}. Deselecting extra missions.");
+                    DebugConsole.AddWarning($"Client {sender.Name} had too many missions selected for location {location.DisplayName}! Count was {NumberOfMissionsAtLocation(location)}. Deselecting extra missions.");
                     foreach (Mission mission in currentLocation.SelectedMissions.Where(m => m.Locations[1] == location).Skip(Settings.TotalMaxMissionCount).ToList())
                     {
                         currentLocation.DeselectMission(mission);
@@ -1344,19 +1459,19 @@ namespace Barotrauma
             var itemsToTransfer = new List<(Item item, Item container)>();
             if (PendingSubmarineSwitch != null)
             {
-                var connectedSubs = currentSub.GetConnectedSubs().Where(s => s.Info.Type == SubmarineType.Player);
+                var connectedSubs = currentSub.GetConnectedSubs().Where(s => s.Info.Type == SubmarineType.Player).ToHashSet();
                 // Remove items from the old sub
                 foreach (Item item in Item.ItemList)
                 {
                     if (item.Removed) { continue; }
                     if (item.NonInteractable || item.NonPlayerTeamInteractable) { continue; }
-                    if (item.HiddenInGame) { continue; }
+                    if (item.IsHidden) { continue; }
                     if (!connectedSubs.Contains(item.Submarine)) { continue; }
                     if (item.Prefab.DontTransferBetweenSubs) { continue; }
                     if (AnyParentInventoryDisableTransfer(item)) { continue; }
                     var rootOwner = item.GetRootInventoryOwner();
                     if (rootOwner is Character) { continue; }
-                    if (rootOwner is Item ownerItem && (ownerItem.NonInteractable || item.NonPlayerTeamInteractable || ownerItem.HiddenInGame)) { continue; }
+                    if (rootOwner is Item ownerItem && (ownerItem.NonInteractable || item.NonPlayerTeamInteractable || ownerItem.IsHidden)) { continue; }
                     if (item.GetComponent<Door>() != null) { continue; }
                     if (item.Components.None(c => c is Pickable)) { continue; }
                     if (item.Components.Any(c => c is Pickable p && p.IsAttached)) { continue; }
@@ -1405,8 +1520,8 @@ namespace Barotrauma
                     return;
                 }
                 // First move the cargo containers, so that we can reuse them
-                var cargoContainers = itemsToTransfer.Where(it => it.item.HasTag(Tags.Crate));
-                foreach (var (item, oldContainer) in cargoContainers)
+                var cargoContainers = itemsToTransfer.Where(it => it.item.HasTag(Tags.Crate)).ToHashSet();
+                foreach (var (item, _) in cargoContainers)
                 {
                     Vector2 simPos = ConvertUnits.ToSimUnits(CargoManager.GetCargoPos(spawnHull, item.Prefab));
                     item.SetTransform(simPos, 0.0f, findNewHull: false, setPrevTransform: false);
@@ -1414,7 +1529,6 @@ namespace Barotrauma
                     item.Submarine = spawnHull.Submarine;
                 }
                 // Then move the other items
-                var cargoRooms = CargoManager.FindCargoRooms(newSub);
                 List<ItemContainer> availableContainers = CargoManager.FindReusableCargoContainers(connectedSubs).ToList();
                 foreach (var (item, oldContainer) in itemsToTransfer)
                 {
@@ -1444,7 +1558,7 @@ namespace Barotrauma
                             newContainerName = cargoContainer.Item.Prefab.Identifier.ToString();
                         }
                     }
-                    string msg = "Item transfer log error.";
+                    string msg;
                     if (oldContainer != null)
                     {
                         if (newContainer == null && oldContainer == item.Container)
@@ -1466,6 +1580,27 @@ namespace Barotrauma
                     DebugConsole.Log(msg);
 #endif
                 }
+
+                foreach (var (item, _) in itemsToTransfer)
+                {
+                    // This ensures that the new submarine takes ownership of
+                    // the items contained within the items that are being transferred directly,
+                    // i.e. circuit box components and wires
+                    PropagateSubmarineProperty(item);
+                }
+
+                static void PropagateSubmarineProperty(Item item)
+                {
+                    foreach (var ownedContainer in item.GetComponents<ItemContainer>())
+                    {
+                        foreach (var containedItem in ownedContainer.Inventory.AllItems)
+                        {
+                            containedItem.Submarine = item.Submarine;
+                            PropagateSubmarineProperty(containedItem);
+                        }
+                    }
+                }
+
                 newSub.Info.NoItems = false;
                 // Serialize the new sub
                 PendingSubmarineSwitch = new SubmarineInfo(newSub);

@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
+using Microsoft.Xna.Framework.Input;
 using PlayerBalanceElement = Barotrauma.CampaignUI.PlayerBalanceElement;
 
 namespace Barotrauma
@@ -39,6 +40,8 @@ namespace Barotrauma
         private readonly Dictionary<StoreTab, SortingMethod> tabSortingMethods = new Dictionary<StoreTab, SortingMethod>();
         private readonly List<PurchasedItem> itemsToSell = new List<PurchasedItem>();
         private readonly List<PurchasedItem> itemsToSellFromSub = new List<PurchasedItem>();
+
+        private GUIMessageBox deliveryPrompt;
 
         private StoreTab activeTab = StoreTab.Buy;
         private MapEntityCategory? selectedItemCategory;
@@ -341,9 +344,9 @@ namespace Barotrauma
             };
 
             var panelMaxWidth = (int)(GUI.xScale * (GUI.HorizontalAspectRatio < 1.4f ? 650 : 560));
-            var storeContent = new GUILayoutGroup(new RectTransform(new Vector2(0.45f, 1.0f), campaignUI.GetTabContainer(CampaignMode.InteractionType.Store).RectTransform)
+            var storeContent = new GUILayoutGroup(new RectTransform(new Vector2(0.45f, 1.0f), campaignUI.GetTabContainer(CampaignMode.InteractionType.Store).RectTransform, Anchor.BottomLeft)
                 {
-                    MaxSize = new Point(panelMaxWidth, campaignUI.GetTabContainer(CampaignMode.InteractionType.Store).Rect.Height)
+                    MaxSize = new Point(panelMaxWidth, campaignUI.GetTabContainer(CampaignMode.InteractionType.Store).Rect.Height - HUDLayoutSettings.ButtonAreaTop.Bottom)
                 })
             {
                 Stretch = true,
@@ -583,9 +586,9 @@ namespace Barotrauma
 
             // Shopping Crate ------------------------------------------------------------------------------------------------------------------------------------------
 
-            var shoppingCrateContent = new GUILayoutGroup(new RectTransform(new Vector2(0.45f, 1.0f), campaignUI.GetTabContainer(CampaignMode.InteractionType.Store).RectTransform, anchor: Anchor.TopRight)
+            var shoppingCrateContent = new GUILayoutGroup(new RectTransform(new Vector2(0.45f, 1.0f), campaignUI.GetTabContainer(CampaignMode.InteractionType.Store).RectTransform, anchor: Anchor.BottomRight)
                 {
-                    MaxSize = new Point(panelMaxWidth, campaignUI.GetTabContainer(CampaignMode.InteractionType.Store).Rect.Height)
+                    MaxSize = new Point(panelMaxWidth, campaignUI.GetTabContainer(CampaignMode.InteractionType.Store).Rect.Height - HUDLayoutSettings.ButtonAreaTop.Bottom)
                 })
             {
                 Stretch = true,
@@ -922,15 +925,12 @@ namespace Barotrauma
             {
                 if (itemPrefab.CanBeBoughtFrom(ActiveStore, out PriceInfo priceInfo) && itemPrefab.CanCharacterBuy())
                 {
-
                     bool isDailySpecial = ActiveStore.DailySpecials.Contains(itemPrefab);
                     var itemFrame = isDailySpecial ?
                         storeDailySpecialsGroup.FindChild(c => c.UserData is PurchasedItem pi && pi.ItemPrefab == itemPrefab) :
                         storeBuyList.Content.FindChild(c => c.UserData is PurchasedItem pi && pi.ItemPrefab == itemPrefab);
-                    if (CargoManager.GetPurchasedItem(ActiveStore, itemPrefab) is { } purchasedItem)
-                    {
-                        quantity = Math.Max(quantity - purchasedItem.Quantity, 0);
-                    }
+
+                    quantity = Math.Max(quantity - CargoManager.GetPurchasedItemCount(ActiveStore, itemPrefab), 0);                    
                     if (CargoManager.GetBuyCrateItem(ActiveStore, itemPrefab) is { } buyCrateItem)
                     {
                         quantity = Math.Max(quantity - buyCrateItem.Quantity, 0);
@@ -1245,9 +1245,9 @@ namespace Barotrauma
             int totalPrice = 0;
             if (ActiveStore != null)
             {
-                foreach (PurchasedItem item in items)
+                foreach (PurchasedItem item in items.ToList())
                 {
-                    if (!(item.ItemPrefab.GetPriceInfo(ActiveStore) is { } priceInfo)) { continue; }
+                    if (item.ItemPrefab.GetPriceInfo(ActiveStore) is not { } priceInfo) { continue; }
                     GUINumberInput numInput = null;
                     if (!(listBox.Content.FindChild(c => c.UserData is PurchasedItem pi && pi.ItemPrefab.Identifier == item.ItemPrefab.Identifier) is { } itemFrame))
                     {
@@ -1563,7 +1563,7 @@ namespace Barotrauma
             bool locationHasDealOnItem = isSellingRelatedList ?
                 ActiveStore.RequestedGoods.Contains(pi.ItemPrefab) : ActiveStore.DailySpecials.Contains(pi.ItemPrefab);
             GUITextBlock nameBlock = new GUITextBlock(new RectTransform(new Vector2(1.0f, 0.4f), nameAndQuantityGroup.RectTransform),
-                pi.ItemPrefab.Name, font: GUIStyle.SubHeadingFont, textAlignment: Alignment.BottomLeft)
+                RichString.Rich(pi.ItemPrefab.Name), font: GUIStyle.SubHeadingFont, textAlignment: Alignment.BottomLeft)
             {
                 CanBeFocused = false,
                 Shadow = locationHasDealOnItem,
@@ -1574,15 +1574,24 @@ namespace Barotrauma
             if (locationHasDealOnItem)
             {
                 var relativeWidth = (0.9f * nameAndQuantityFrame.Rect.Height) / nameAndQuantityFrame.Rect.Width;
+                Vector2 dealIconSize = new Vector2(relativeWidth, 0.9f) * 0.5f;
                 var dealIcon = new GUIImage(
-                    new RectTransform(new Vector2(relativeWidth, 0.9f), nameAndQuantityFrame.RectTransform, anchor: Anchor.CenterLeft)
+                    new RectTransform(dealIconSize, nameAndQuantityFrame.RectTransform, anchor: Anchor.CenterRight)
                     {
                         AbsoluteOffset = new Point((int)nameBlock.Padding.X, 0)
                     },
                     "StoreDealIcon", scaleToFit: true)
                 {
-                    CanBeFocused = false
+                    CanBeFocused = false,
+                    UserData = "StoreDealIcon"
                 };
+                var dealIconColor = dealIcon.Color;
+                if (forceDisable)
+                {
+                    dealIconColor.A = 0;
+                }
+
+                dealIcon.Color = dealIconColor;
                 dealIcon.SetAsFirstChild();
             }
             bool isParentOnLeftSideOfInterface = parentComponent == storeBuyList || parentComponent == storeDailySpecialsGroup ||
@@ -1714,7 +1723,7 @@ namespace Barotrauma
             mainGroup.Recalculate();
             mainGroup.RectTransform.RecalculateChildren(true, true);
             amountInput?.LayoutGroup.Recalculate();
-            nameBlock.Text = ToolBox.LimitString(nameBlock.Text, nameBlock.Font, nameBlock.Rect.Width);
+            nameBlock.Text = ToolBox.LimitString(nameBlock.Text.SanitizedString, nameBlock.Font, nameBlock.Rect.Width);
             mainGroup.RectTransform.Children.ForEach(c => c.IsFixedSize = true);
 
             return frame;
@@ -1734,6 +1743,9 @@ namespace Barotrauma
                     if (!subItem.Components.All(c => c is not Holdable h || !h.Attachable || !h.Attached)) { continue; }
                     if (!subItem.Components.All(c => c is not Wire w || w.Connections.All(c => c == null))) { continue; }
                     if (!ItemAndAllContainersInteractable(subItem)) { continue; }
+                    //don't list items in a character inventory (the ones in a crew member's inventory are counted below)
+                    var rootInventoryOwner = subItem.GetRootInventoryOwner();
+                    if (rootInventoryOwner is Character) { continue; }
                     AddOwnedItem(subItem);
                 }
             }
@@ -1749,7 +1761,7 @@ namespace Barotrauma
             }
 
             // Add items already purchased
-            CargoManager?.GetPurchasedItems(ActiveStore).ForEach(pi => AddNonEmptyOwnedItems(pi));
+            CargoManager?.GetPurchasedItems(ActiveStore).Where(pi => !pi.DeliverImmediately).ForEach(pi => AddNonEmptyOwnedItems(pi));
 
             ownedItemsUpdateTimer = 0.0f;
 
@@ -1793,6 +1805,9 @@ namespace Barotrauma
 
         private void SetItemFrameStatus(GUIComponent itemFrame, bool enabled)
         {
+            float full = 1f;
+            float dim = 0.7f;
+            float alpha = (enabled ? full : dim);
             if (itemFrame?.UserData is not PurchasedItem pi) { return; }
             bool refreshFrameStatus = !pi.IsStoreComponentEnabled.HasValue || pi.IsStoreComponentEnabled.Value != enabled;
             if (!refreshFrameStatus) { return; }
@@ -1800,14 +1815,14 @@ namespace Barotrauma
             {
                 if (pi.ItemPrefab?.InventoryIcon != null)
                 {
-                    icon.Color = pi.ItemPrefab.InventoryIconColor * (enabled ? 1.0f : 0.5f);
+                    icon.Color = pi.ItemPrefab.InventoryIconColor * alpha;
                 }
                 else if (pi.ItemPrefab?.Sprite != null)
                 {
-                    icon.Color = pi.ItemPrefab.SpriteColor * (enabled ? 1.0f : 0.5f);
+                    icon.Color = pi.ItemPrefab.SpriteColor * alpha;
                 }
             };
-            var color = Color.White * (enabled ? 1.0f : 0.5f);
+            var color = Color.White * alpha;
             if (itemFrame.FindChild("name", recursive: true) is GUITextBlock name)
             {
                 name.TextColor = color;
@@ -1833,7 +1848,7 @@ namespace Barotrauma
             }
             if (itemFrame.FindChild("price", recursive: true) is GUITextBlock priceBlock)
             {
-                priceBlock.TextColor = isDiscounted ? storeSpecialColor * (enabled ? 1.0f : 0.5f) : color;
+                priceBlock.TextColor = isDiscounted ? storeSpecialColor * alpha : color;
             }
             if (itemFrame.FindChild("addbutton", recursive: true) is GUIButton addButton)
             {
@@ -1842,6 +1857,10 @@ namespace Barotrauma
             else if (itemFrame.FindChild("removebutton", recursive: true) is GUIButton removeButton)
             {
                 removeButton.Enabled = enabled;
+            }
+            if (itemFrame.FindChild("StoreDealIcon", recursive: true) is GUIImage dealIcon)
+            {
+                dealIcon.Color = dealIcon.Color * alpha;
             }
             pi.IsStoreComponentEnabled = enabled;
             itemFrame.UserData = pi;
@@ -1959,14 +1978,13 @@ namespace Barotrauma
             }
             catch (NotImplementedException e)
             {
-                DebugConsole.LogError($"Error getting item availability: Uknown store tab type. {e.StackTrace.CleanupStackTrace()}");
+                DebugConsole.LogError($"Error getting item availability: Unknown store tab type. {e.StackTrace.CleanupStackTrace()}");
             }
             if (list != null && list.Find(i => i.ItemPrefab == itemPrefab) is PurchasedItem item)
             {
                 if (mode == StoreTab.Buy)
                 {
-                    var purchasedItem = CargoManager.GetPurchasedItem(ActiveStore, item.ItemPrefab);
-                    if (purchasedItem != null) { return Math.Max(item.Quantity - purchasedItem.Quantity, 0); }
+                    return Math.Max(item.Quantity - CargoManager.GetPurchasedItemCount(ActiveStore, item.ItemPrefab), 0);                     
                 }
                 return item.Quantity;
             }
@@ -2093,14 +2111,55 @@ namespace Barotrauma
             }
             itemsToRemove.ForEach(i => itemsToPurchase.Remove(i));
             if (itemsToPurchase.None() || Balance < totalPrice) { return false; }
-            CargoManager.PurchaseItems(ActiveStore.Identifier, itemsToPurchase, true);
-            GameMain.Client?.SendCampaignState();
-            var dialog = new GUIMessageBox(
-                TextManager.Get("newsupplies"),
-                TextManager.GetWithVariable("suppliespurchasedmessage", "[location]", campaignUI?.Campaign?.Map?.CurrentLocation?.Name),
-                new LocalizedString[] { TextManager.Get("Ok") });
-            dialog.Buttons[0].OnClicked += dialog.Close;
+
+            if (CampaignMode.AllowImmediateItemDelivery())
+            {
+                deliveryPrompt = new GUIMessageBox(
+                    TextManager.Get("newsupplies"),
+                    TextManager.Get("suppliespurchased.deliverymethod"),
+                    new LocalizedString[] 
+                    { 
+                        TextManager.Get("suppliespurchased.deliverymethod.deliverimmediately"), 
+                        TextManager.Get("suppliespurchased.deliverymethod.delivertosub")
+                    });
+                deliveryPrompt.Buttons[0].OnClicked = (btn, userdata) =>
+                {
+                    ConfirmPurchase(deliverImmediately: true);
+                    deliveryPrompt?.Close();
+                    return true;
+                };
+                deliveryPrompt.Buttons[1].OnClicked = (btn, userdata) =>
+                {
+                    ConfirmPurchase(deliverImmediately: false);
+                    deliveryPrompt?.Close();
+                    return true;
+                };
+            }
+            else
+            {
+                ConfirmPurchase(deliverImmediately: false);
+            }
+
+            void ConfirmPurchase(bool deliverImmediately)
+            {
+                itemsToPurchase.ForEach(it => it.DeliverImmediately = deliverImmediately);
+                CargoManager.PurchaseItems(ActiveStore.Identifier, itemsToPurchase, removeFromCrate: true);
+                GameMain.Client?.SendCampaignState();
+                if (!deliverImmediately)
+                {
+                    var dialog = new GUIMessageBox(
+                        TextManager.Get("newsupplies"),
+                        TextManager.GetWithVariable("suppliespurchasedmessage", "[location]", campaignUI?.Campaign?.Map?.CurrentLocation?.DisplayName));
+                    dialog.Buttons[0].OnClicked += dialog.Close;
+                }
+            }
             return false;
+        }
+
+        public void OnDeselected()
+        {
+            deliveryPrompt?.Close();
+            deliveryPrompt = null;
         }
 
         private bool SellItems()
@@ -2118,7 +2177,7 @@ namespace Barotrauma
             }
             catch (NotImplementedException e)
             {
-                DebugConsole.LogError($"Error confirming the store transaction: Uknown store tab type. {e.StackTrace.CleanupStackTrace()}");
+                DebugConsole.LogError($"Error confirming the store transaction: Unknown store tab type. {e.StackTrace.CleanupStackTrace()}");
                 return false;
             }
             var itemsToRemove = new List<PurchasedItem>();
@@ -2228,6 +2287,15 @@ namespace Barotrauma
         public void Update(float deltaTime)
         {
             updateStopwatch.Restart();
+
+            if (GameMain.DevMode)
+            {
+                if (PlayerInput.KeyDown(Keys.D0))
+                {
+                    CreateUI();
+                    needsRefresh = true;
+                }
+            }
 
             if (GameMain.GraphicsWidth != resolutionWhenCreated.X || GameMain.GraphicsHeight != resolutionWhenCreated.Y)
             {

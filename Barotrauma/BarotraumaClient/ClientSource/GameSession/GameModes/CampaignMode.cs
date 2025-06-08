@@ -3,16 +3,19 @@ using Barotrauma.Networking;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using System;
-using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace Barotrauma
 {
-    abstract partial class CampaignMode : GameMode
+    internal abstract partial class CampaignMode : GameMode
     {
-        protected bool crewDead;
+        public bool CrewDead
+        {
+            get; 
+            protected set;
+        }
 
         protected Color overlayColor;
         protected Sprite overlaySprite;
@@ -72,6 +75,9 @@ namespace Barotrauma
                         case InteractionType.MedicalClinic:
                             CampaignUI.MedicalClinic?.OnDeselected();
                             break;
+                        case InteractionType.Store:
+                            CampaignUI.Store?.OnDeselected();
+                            break;
                     }
                 }
 
@@ -121,6 +127,16 @@ namespace Barotrauma
         {
             return AllowedToManageCampaign(ClientPermissions.ManageMoney);
         }
+
+        public static bool AllowImmediateItemDelivery()
+        {
+            if (GameMain.Client == null) { return true; }
+            return 
+                GameMain.Client.ServerSettings.AllowImmediateItemDelivery ||
+                GameMain.Client.HasPermission(ClientPermissions.ManageCampaign) ||
+                GameMain.Client.IsServerOwner;
+        }
+
         protected GUIButton CreateEndRoundButton()
         {
             int buttonWidth = (int)(450 * GUI.xScale * (GUI.IsUltrawide ? 3.0f : 1.0f));
@@ -182,12 +198,12 @@ namespace Barotrauma
                     if (Level.Loaded.EndOutpost == null || !Level.Loaded.EndOutpost.DockedTo.Contains(leavingSub))
                     {
                         string textTag = availableTransition == TransitionType.ProgressToNextLocation ? "EnterLocation" : "EnterEmptyLocation";
-                        buttonText = TextManager.GetWithVariable(textTag, "[locationname]", Level.Loaded.EndLocation?.Name ?? "[ERROR]");
+                        buttonText = TextManager.GetWithVariable(textTag, "[locationname]", Level.Loaded.EndLocation?.DisplayName ?? "[ERROR]");
                         allowEndingRound = !ForceMapUI && !ShowCampaignUI;
                     }
                     break;
                 case TransitionType.LeaveLocation:
-                    buttonText = TextManager.GetWithVariable("LeaveLocation", "[locationname]", Level.Loaded.StartLocation?.Name ?? "[ERROR]");
+                    buttonText = TextManager.GetWithVariable("LeaveLocation", "[locationname]", Level.Loaded.StartLocation?.DisplayName ?? "[ERROR]");
                     allowEndingRound = !ForceMapUI && !ShowCampaignUI;
                     break;
                 case TransitionType.ReturnToPreviousLocation:
@@ -195,7 +211,7 @@ namespace Barotrauma
                     if (Level.Loaded.StartOutpost == null || !Level.Loaded.StartOutpost.DockedTo.Contains(leavingSub))
                     {
                         string textTag = availableTransition == TransitionType.ReturnToPreviousLocation ? "EnterLocation" : "EnterEmptyLocation";
-                        buttonText = TextManager.GetWithVariable(textTag, "[locationname]", Level.Loaded.StartLocation?.Name ?? "[ERROR]");
+                        buttonText = TextManager.GetWithVariable(textTag, "[locationname]", Level.Loaded.StartLocation?.DisplayName ?? "[ERROR]");
                         allowEndingRound = !ForceMapUI && !ShowCampaignUI;
                     }
                     break;
@@ -211,7 +227,7 @@ namespace Barotrauma
                             endRoundButton.Color = GUIStyle.Red * 0.7f;
                             endRoundButton.HoverColor = GUIStyle.Red;
                         }
-                        buttonText = TextManager.GetWithVariable("LeaveLocation", "[locationname]", Level.Loaded.StartLocation?.Name ?? "[ERROR]");
+                        buttonText = TextManager.GetWithVariable("LeaveLocation", "[locationname]", Level.Loaded.StartLocation?.DisplayName ?? "[ERROR]");
                         allowEndingRound = !ForceMapUI && !ShowCampaignUI;
                     }
                     else
@@ -238,7 +254,7 @@ namespace Barotrauma
                     buttonText = TextManager.Get("map"); 
                 }
                 else if (prevCampaignUIAutoOpenType != availableTransition && 
-                        (availableTransition == TransitionType.ProgressToNextEmptyLocation || availableTransition == TransitionType.ReturnToPreviousEmptyLocation))
+                        availableTransition == TransitionType.ProgressToNextEmptyLocation)
                 {
                     HintManager.OnAvailableTransition(availableTransition);
                     //opening the campaign map pauses the game and prevents HintManager from running -> update it manually to get the hint to show up immediately
@@ -328,18 +344,6 @@ namespace Barotrauma
             }
         }
 
-        protected SubmarineInfo GetPredefinedStartOutpost()
-        {
-            if (Map?.CurrentLocation?.Type?.GetForcedOutpostGenerationParams() is OutpostGenerationParams parameters && !parameters.OutpostFilePath.IsNullOrEmpty())
-            {
-                return new SubmarineInfo(parameters.OutpostFilePath.Value)
-                {
-                    OutpostGenerationParams = parameters
-                };
-            }
-            return null;
-        }
-
         partial void NPCInteractProjSpecific(Character npc, Character interactor)
         {
             if (npc == null || interactor == null) { return; }
@@ -354,7 +358,7 @@ namespace Barotrauma
                     UpgradeManager.CreateUpgradeErrorMessage(TextManager.Get("Dialog.CantUpgrade").Value, IsSinglePlayer, npc);
                     return;
                 case InteractionType.Crew when GameMain.NetworkMember != null:
-                    CampaignUI.CrewManagement.SendCrewState(false);
+                    CampaignUI.HRManagerUI.SendCrewState(false);
                     goto default;
                 case InteractionType.MedicalClinic:
                     CampaignUI.MedicalClinic.RequestLatestPending();
@@ -362,7 +366,7 @@ namespace Barotrauma
                 default:
                     ShowCampaignUI = true;
                     CampaignUI.SelectTab(npc.CampaignInteractionType, npc);
-                    CampaignUI.UpgradeStore?.RequestRefresh();
+                    CampaignUI.UpgradeStore?.RequestRefresh(refreshUpgrades: true);
                     break;
             }
 
@@ -391,13 +395,15 @@ namespace Barotrauma
 
         protected void TryEndRoundWithFuelCheck(Action onConfirm, Action onReturnToMapScreen)
         {
+            if (Submarine.MainSub == null) { return; }
+
             Submarine.MainSub.CheckFuel();
             bool lowFuel = Submarine.MainSub.Info.LowFuel;
             if (PendingSubmarineSwitch != null)
             {
                 lowFuel = TransferItemsOnSubSwitch ? (lowFuel && PendingSubmarineSwitch.LowFuel) : PendingSubmarineSwitch.LowFuel;
             }
-            if (Level.IsLoadedFriendlyOutpost && lowFuel && CargoManager.PurchasedItems.None(i => i.Value.Any(pi => pi.ItemPrefab.Tags.Contains("reactorfuel"))))
+            if (Level.IsLoadedFriendlyOutpost && lowFuel && CargoManager.PurchasedItems.None(i => i.Value.Any(pi => pi.ItemPrefab.Tags.Contains(Tags.ReactorFuel))))
             {
                 var extraConfirmationBox =
                     new GUIMessageBox(TextManager.Get("lowfuelheader"),

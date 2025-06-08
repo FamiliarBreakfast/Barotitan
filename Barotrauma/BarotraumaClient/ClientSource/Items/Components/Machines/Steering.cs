@@ -57,24 +57,42 @@ namespace Barotrauma.Items.Components
         private GUIMessageBox enterOutpostPrompt, exitOutpostPrompt;
 
         private bool levelStartSelected;
+        [Serialize(defaultValue: false, isSaveable: IsPropertySaveable.Yes, AlwaysUseInstanceValues = true)]
         public bool LevelStartSelected
         {
-            get { return levelStartTickBox.Selected; }
-            set { levelStartTickBox.Selected = value; }
+            get 
+            { 
+                return levelStartTickBox?.Selected ?? levelStartSelected; 
+            }
+            set
+            {
+                TrySetTickBoxSelected(levelStartTickBox, ref levelStartSelected, value);
+            }
         }
 
         private bool levelEndSelected;
+        [Serialize(defaultValue: false, isSaveable: IsPropertySaveable.Yes, AlwaysUseInstanceValues = true)]
         public bool LevelEndSelected
         {
-            get { return levelEndTickBox.Selected; }
-            set { levelEndTickBox.Selected = value; }
+            get { return levelEndTickBox?.Selected ?? levelEndSelected; }
+            set
+            {
+                TrySetTickBoxSelected(levelEndTickBox, ref levelEndSelected, value);
+            }
         }
 
         private bool maintainPos;
+        [Serialize(defaultValue: false, isSaveable: IsPropertySaveable.Yes, AlwaysUseInstanceValues = true)]
         public bool MaintainPos
         {
-            get { return maintainPosTickBox.Selected; }
-            set { maintainPosTickBox.Selected = value; }
+            get 
+            { 
+                return maintainPosTickBox?.Selected ?? maintainPos; 
+            }
+            set
+            {
+                TrySetTickBoxSelected(maintainPosTickBox, ref maintainPos, value);
+            }
         }
 
         private float steerRadius;
@@ -216,7 +234,7 @@ namespace Barotrauma.Items.Components
                 }
             };
             levelStartTickBox = new GUITickBox(new RectTransform(new Vector2(1, 0.333f), paddedAutoPilotControls.RectTransform, Anchor.Center),
-                GameMain.GameSession?.StartLocation == null ? "" : ToolBox.LimitString(GameMain.GameSession.StartLocation.Name, GUIStyle.SmallFont, textLimit),
+                GameMain.GameSession?.StartLocation == null ? "" : ToolBox.LimitString(GameMain.GameSession.StartLocation.DisplayName, GUIStyle.SmallFont, textLimit),
                 font: GUIStyle.SmallFont, style: "GUIRadioButton")
             {
                 Enabled = autoPilot,
@@ -243,7 +261,7 @@ namespace Barotrauma.Items.Components
             };
 
             levelEndTickBox = new GUITickBox(new RectTransform(new Vector2(1, 0.333f), paddedAutoPilotControls.RectTransform, Anchor.BottomCenter),
-                (GameMain.GameSession?.EndLocation == null || Level.IsLoadedOutpost) ? "" : ToolBox.LimitString(GameMain.GameSession.EndLocation.Name, GUIStyle.SmallFont, textLimit),
+                (GameMain.GameSession?.EndLocation == null || Level.IsLoadedOutpost) ? "" : ToolBox.LimitString(GameMain.GameSession.EndLocation.DisplayName, GUIStyle.SmallFont, textLimit),
                 font: GUIStyle.SmallFont, style: "GUIRadioButton")
             {
                 Enabled = autoPilot,
@@ -316,28 +334,28 @@ namespace Barotrauma.Items.Components
                 {
                     case 0:
                         leftText = TextManager.Get("DescentVelocity");
-                        centerText = $"({TextManager.Get("KilometersPerHour")})";
+                        centerText = TextManager.Get("KilometersPerHour");
                         rightTextGetter = () =>
                         {
                             Vector2 vel = controlledSub == null ? Vector2.Zero : controlledSub.Velocity;
                             var realWorldVel = ConvertUnits.ToDisplayUnits(vel.Y * Physics.DisplayToRealWorldRatio) * 3.6f;
-                            return ((int)(-realWorldVel)).ToString();
+                            return (-realWorldVel).ToString("0.0");
                         };
                         break;
                     case 1:
                         leftText = TextManager.Get("Velocity");
-                        centerText = $"({TextManager.Get("KilometersPerHour")})";
+                        centerText = TextManager.Get("KilometersPerHour");
                         rightTextGetter = () =>
                         {
                             Vector2 vel = controlledSub == null ? Vector2.Zero : controlledSub.Velocity;
                             var realWorldVel = ConvertUnits.ToDisplayUnits(vel.X * Physics.DisplayToRealWorldRatio) * 3.6f;
                             if (controlledSub != null && controlledSub.FlippedX) { realWorldVel *= -1; }
-                            return ((int)realWorldVel).ToString();
+                            return realWorldVel.ToString("0.0");
                         };
                         break;
                     case 2:
                         leftText = TextManager.Get("Depth");
-                        centerText = $"({TextManager.Get("Meter")})";
+                        centerText = TextManager.Get("Meter");
                         rightTextGetter = () =>
                         {
                             if (Level.Loaded is { IsEndBiome: true })
@@ -389,7 +407,7 @@ namespace Barotrauma.Items.Components
                             if (!ObjectiveManager.AllActiveObjectivesCompleted())
                             {
                                 exitOutpostPrompt = new GUIMessageBox("",
-                                    TextManager.GetWithVariable("CampaignExitTutorialOutpostPrompt", "[locationname]", campaign.Map.CurrentLocation.Name),
+                                    TextManager.GetWithVariable("CampaignExitTutorialOutpostPrompt", "[locationname]", campaign.Map.CurrentLocation.DisplayName),
                                     new LocalizedString[] { TextManager.Get("yes"), TextManager.Get("no") });
                                 exitOutpostPrompt.Buttons[0].OnClicked += (_, _) =>
                                 {
@@ -509,9 +527,9 @@ namespace Barotrauma.Items.Components
             noPowerTip = TextManager.Get("SteeringNoPowerTip");
             autoPilotMaintainPosTip = TextManager.Get("SteeringAutoPilotMaintainPosTip");
             autoPilotLevelStartTip = TextManager.GetWithVariable("SteeringAutoPilotLocationTip", "[locationname]",
-                GameMain.GameSession?.StartLocation == null ? "Start" : GameMain.GameSession.StartLocation.Name);
+                GameMain.GameSession?.StartLocation == null ? "Start" : GameMain.GameSession.StartLocation.DisplayName);
             autoPilotLevelEndTip = TextManager.GetWithVariable("SteeringAutoPilotLocationTip", "[locationname]",
-                GameMain.GameSession?.EndLocation == null ? "End" : GameMain.GameSession.EndLocation.Name);
+                GameMain.GameSession?.EndLocation == null ? "End" : GameMain.GameSession.EndLocation.DisplayName);
         }
 
         protected override void OnResolutionChanged()
@@ -554,7 +572,7 @@ namespace Barotrauma.Items.Components
             int x = rect.X;
             int y = rect.Y;
 
-            if (Voltage < MinVoltage) { return; }
+            if (!HasPower) { return; }
 
             Rectangle velRect = new Rectangle(x + 20, y + 20, width - 40, height - 40);
             Vector2 steeringOrigin = steerArea.Rect.Center.ToVector2();
@@ -589,7 +607,8 @@ namespace Barotrauma.Items.Components
                 Sonar sonar = item.GetComponent<Sonar>();
                 if (sonar != null && controlledSub != null)
                 {
-                    Vector2 displayPosToMaintain = ((posToMaintain.Value - controlledSub.WorldPosition)) / sonar.Range * sonar.DisplayRadius * sonar.Zoom;
+                    Vector2 displayPosToMaintain = ((posToMaintain.Value - controlledSub.WorldPosition)) * sonar.DisplayScale;
+
                     displayPosToMaintain.Y = -displayPosToMaintain.Y;
                     displayPosToMaintain = displayPosToMaintain.ClampLength(velRect.Width / 2);
                     displayPosToMaintain = steerArea.Rect.Center.ToVector2() + displayPosToMaintain;
@@ -670,14 +689,14 @@ namespace Barotrauma.Items.Components
                 pos2.Y = -pos2.Y;
                 pos2 += center;
 
-                GUI.DrawLine(spriteBatch, 
-                    pos1, 
+                GUI.DrawLine(spriteBatch,
+                    pos1,
                     pos2,
                     GUIStyle.Red * 0.6f, width: 3);
 
                 if (obstacle.Intersection.HasValue)
                 {
-                    Vector2 intersectionPos = (obstacle.Intersection.Value - transducerCenter) *displayScale;
+                    Vector2 intersectionPos = (obstacle.Intersection.Value - transducerCenter) * displayScale;
                     intersectionPos.Y = -intersectionPos.Y;
                     intersectionPos += center;
                     GUI.DrawRectangle(spriteBatch, intersectionPos - Vector2.One * 2, Vector2.One * 4, GUIStyle.Red);
@@ -758,7 +777,7 @@ namespace Barotrauma.Items.Components
                 dockingButton.Text = dockText;
             }
 
-            if (Voltage < MinVoltage)
+            if (!HasPower)
             {
                 tipContainer.Visible = true;
                 tipContainer.Text = noPowerTip;
@@ -788,9 +807,9 @@ namespace Barotrauma.Items.Components
             }
 
             pressureWarningText.Visible = item.Submarine != null && Timing.TotalTime % 1.0f < 0.8f;
-            float depthEffectThreshold = 500.0f;
             if (Level.Loaded != null && pressureWarningText.Visible && 
-                item.Submarine.RealWorldDepth > Level.Loaded.RealWorldCrushDepth - depthEffectThreshold && item.Submarine.RealWorldDepth > item.Submarine.RealWorldCrushDepth - depthEffectThreshold)
+                item.Submarine.RealWorldDepth > Level.Loaded.RealWorldCrushDepth - PressureWarningThreshold && 
+                item.Submarine.RealWorldDepth > item.Submarine.RealWorldCrushDepth - PressureWarningThreshold)
             {
                 pressureWarningText.Visible = true;
                 pressureWarningText.Text =
@@ -828,7 +847,7 @@ namespace Barotrauma.Items.Components
             }
             if (!AutoPilot && Character.DisableControls && GUI.KeyboardDispatcher.Subscriber == null)
             {
-                steeringAdjustSpeed = character == null ? DefaultSteeringAdjustSpeed : MathHelper.Lerp(0.2f, 1.0f, character.GetSkillLevel("helm") / 100.0f);
+                steeringAdjustSpeed = character == null ? DefaultSteeringAdjustSpeed : MathHelper.Lerp(0.2f, 1.0f, character.GetSkillLevel(Tags.HelmSkill) / 100.0f);
                 Vector2 input = Vector2.Zero;
                 if (PlayerInput.KeyDown(InputType.Left)) { input -= Vector2.UnitX; }
                 if (PlayerInput.KeyDown(InputType.Right)) { input += Vector2.UnitX; }
@@ -908,7 +927,7 @@ namespace Barotrauma.Items.Components
                     if (targetPort.Docked || targetPort.Item.Submarine == null) { continue; }
                     if (targetPort.Item.Submarine == controlledSub || targetPort.IsHorizontal != sourcePort.IsHorizontal) { continue; }
                     if (targetPort.Item.Submarine.DockedTo?.Contains(sourcePort.Item.Submarine) ?? false) { continue; }
-                    if (Level.Loaded != null && targetPort.Item.Submarine.WorldPosition.Y > Level.Loaded.Size.Y) { continue; }
+                    if (targetPort.Item.Submarine.IsAboveLevel) { continue; }
                     if (sourceDir == targetPort.GetDir()) { continue; }
 
                     float dist = Vector2.DistanceSquared(sourcePort.Item.WorldPosition, targetPort.Item.WorldPosition);
@@ -920,6 +939,21 @@ namespace Barotrauma.Items.Components
                         DockingTarget = targetPort;
                     }
                 }
+            }
+        }
+
+        /// <summary>
+        /// Sets the value of the specified tickbox, or if it hasn't been instantiated (yet?), just the value of the backing field.
+        /// </summary>
+        private void TrySetTickBoxSelected(GUITickBox tickBox, ref bool backingValue, bool newValue)
+        {
+            if (tickBox == null)
+            {
+                backingValue = newValue;
+            }
+            else
+            {
+                tickBox.Selected = newValue;
             }
         }
 

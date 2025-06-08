@@ -39,8 +39,9 @@ namespace Barotrauma
 
         public CampaignMode Campaign { get; }
 
-        public CrewManagement CrewManagement { get; set; }
-        private Store Store { get; set; }
+        public HRManagerUI HRManagerUI { get; set; }
+
+        public Store Store { get; private set; }
 
         public UpgradeStore UpgradeStore { get; set; }
 
@@ -101,7 +102,7 @@ namespace Barotrauma
 
             var crewTab = new GUIFrame(new RectTransform(Vector2.One, container.RectTransform), color: Color.Black * 0.9f);
             tabs[(int)CampaignMode.InteractionType.Crew] = crewTab;
-            CrewManagement = new CrewManagement(this, crewTab);
+            HRManagerUI = new HRManagerUI(this, crewTab);
 
             // store tab -------------------------------------------------------------------------
             
@@ -203,7 +204,7 @@ namespace Barotrauma
                     submarineSelection?.Update();
                     break;
                 case CampaignMode.InteractionType.Crew:
-                    CrewManagement?.Update();
+                    HRManagerUI?.Update();
                     break;
                 case CampaignMode.InteractionType.Store:
                     Store?.Update(deltaTime);
@@ -254,11 +255,11 @@ namespace Barotrauma
                 RelativeSpacing = 0.02f,
             };
 
-            new GUITextBlock(new RectTransform(new Vector2(1.0f, 0.0f), content.RectTransform), location.Name, font: GUIStyle.LargeFont)
+            new GUITextBlock(new RectTransform(new Vector2(1.0f, 0.0f), content.RectTransform), location.DisplayName, font: GUIStyle.LargeFont)
             {
                 AutoScaleHorizontal = true
             };
-            new GUITextBlock(new RectTransform(new Vector2(1.0f, 0.0f), content.RectTransform), location.Type.Name, font: GUIStyle.SubHeadingFont);
+            new GUITextBlock(new RectTransform(new Vector2(1.0f, 0.0f), content.RectTransform), location.GetLocationTypeToDisplay().Name, font: GUIStyle.SubHeadingFont);
 
             Sprite portrait = location.Type.GetPortrait(location.PortraitId);
             portrait.EnsureLazyLoaded();
@@ -442,20 +443,22 @@ namespace Barotrauma
                         GUILayoutGroup difficultyIndicatorGroup = null;
                         if (mission.Difficulty.HasValue)
                         {
-                            difficultyIndicatorGroup = new GUILayoutGroup(new RectTransform(Vector2.One * 0.9f, missionName.RectTransform, anchor: Anchor.CenterRight, scaleBasis: ScaleBasis.Smallest) { AbsoluteOffset = new Point((int)missionName.Padding.Z, 0) },
+                            difficultyIndicatorGroup = new GUILayoutGroup(new RectTransform(new Vector2(0.5f, 0.9f), missionName.RectTransform, anchor: Anchor.CenterRight) { AbsoluteOffset = new Point((int)missionName.Padding.Z, 0) },
                                 isHorizontal: true, childAnchor: Anchor.CenterRight)
                             {
                                 AbsoluteSpacing = 1,
-                                UserData = "difficulty"
+                                UserData = "difficulty",
                             };
+                            difficultyIndicatorGroup.SetAsFirstChild();
                             var difficultyColor = mission.GetDifficultyColor();
                             for (int i = 0; i < mission.Difficulty; i++)
                             {
-                                new GUIImage(new RectTransform(Vector2.One, difficultyIndicatorGroup.RectTransform, scaleBasis: ScaleBasis.Smallest) { IsFixedSize = true }, "DifficultyIndicator", scaleToFit: true)
+                                new GUIImage(new RectTransform(Vector2.One * 0.9f, difficultyIndicatorGroup.RectTransform, scaleBasis: ScaleBasis.Smallest) { IsFixedSize = true }, "DifficultyIndicator", scaleToFit: true)
                                 {
                                     Color = difficultyColor,
                                     SelectedColor = difficultyColor,
-                                    HoverColor = difficultyColor
+                                    HoverColor = difficultyColor,
+                                    ToolTip = mission.GetDifficultyToolTipText()
                                 };
                             }
                         }
@@ -597,10 +600,11 @@ namespace Barotrauma
                     Store.SelectStore(npc);
                     break;
                 case CampaignMode.InteractionType.Crew:
-                    CrewManagement.UpdateCrew();
+                    HRManagerUI.UpdateCrew();
+                    HRManagerUI.UpdateHireables();
                     break;
                 case CampaignMode.InteractionType.PurchaseSub:
-                    if (submarineSelection == null) submarineSelection = new SubmarineSelection(false, () => Campaign.ShowCampaignUI = false, tabs[(int)CampaignMode.InteractionType.PurchaseSub].RectTransform);
+                    submarineSelection ??= new SubmarineSelection(false, () => Campaign.ShowCampaignUI = false, tabs[(int)CampaignMode.InteractionType.PurchaseSub].RectTransform);
                     submarineSelection.RefreshSubmarineDisplay(true, setTransferOptionToTrue: true);
                     break;
                 case CampaignMode.InteractionType.Map:

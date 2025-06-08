@@ -15,16 +15,33 @@ namespace Barotrauma
 
     partial class CharacterInventory : Inventory
     {
+        /// <summary>
+        /// How much access other characters have to the inventory?
+        /// <see cref="Restricted"/> = Only accessible when character is knocked down or handcuffed.
+        /// <see cref="Limited"/> = Can also access inventories of bots on the same team and friendly pets.
+        /// <see cref="Allowed"/> = Can also access other players in the same team (used for drag and drop give).
+        /// </summary>
+        public enum AccessLevel
+        {
+            Restricted,
+            Limited,
+            Allowed
+        }
+        
         private readonly Character character;
 
+        /// <summary>
+        /// Slot type for each inventory slot. Vanilla package has one type for each slot,
+        /// although it is technically possible to have multiple types for a single slot.
+        /// </summary>
         public InvSlotType[] SlotTypes
         {
             get;
             private set;
         }
-
-
-        public static readonly List<InvSlotType> AnySlot = new List<InvSlotType>() { InvSlotType.Any };
+        
+        public static readonly List<InvSlotType> AnySlot = new List<InvSlotType> { InvSlotType.Any };
+        public static readonly List<InvSlotType> BagSlot = new List<InvSlotType> { InvSlotType.Bag };
 
         public static bool IsHandSlotType(InvSlotType s) => s.HasFlag(InvSlotType.LeftHand) || s.HasFlag(InvSlotType.RightHand);
 
@@ -48,13 +65,13 @@ namespace Barotrauma
             private set;
         }
 
-        private static string[] ParseSlotTypes(XElement element)
+        private static string[] ParseSlotTypes(ContentXElement element)
         {
             string slotString = element.GetAttributeString("slots", null);
             return slotString == null ? Array.Empty<string>() : slotString.Split(',');
         }
 
-        public CharacterInventory(XElement element, Character character, bool spawnInitialItems)
+        public CharacterInventory(ContentXElement element, Character character, bool spawnInitialItems)
             : base(character, ParseSlotTypes(element).Length)
         {
             this.character = character;
@@ -73,7 +90,8 @@ namespace Barotrauma
                 slotTypeNames[i] = slotTypeNames[i].Trim();
                 if (!Enum.TryParse(slotTypeNames[i], out parsedSlotType))
                 {
-                    DebugConsole.ThrowError("Error in the inventory config of \"" + character.SpeciesName + "\" - " + slotTypeNames[i] + " is not a valid inventory slot type.");
+                    DebugConsole.ThrowError("Error in the inventory config of \"" + character.SpeciesName + "\" - " + slotTypeNames[i] + " is not a valid inventory slot type.", 
+                        contentPackage: element.ContentPackage);
                 }
                 SlotTypes[i] = parsedSlotType;
                 switch (SlotTypes[i])
@@ -99,7 +117,8 @@ namespace Barotrauma
                 DebugConsole.ThrowError(
                     $"Character \"{character.SpeciesName}\" is configured to spawn with so many items it will have less than 2 free inventory slots. " +
                     "This can cause issues with talents that spawn extra loot in monsters' inventories."
-                    + " Consider increasing the inventory size.");
+                    + " Consider increasing the inventory size.",
+                    contentPackage: element.ContentPackage);
             }
 #endif
 
@@ -115,7 +134,8 @@ namespace Barotrauma
                 string itemIdentifier = subElement.GetAttributeString("identifier", "");
                 if (!ItemPrefab.Prefabs.TryGet(itemIdentifier, out var itemPrefab))
                 {
-                    DebugConsole.ThrowError("Error in character inventory \"" + character.SpeciesName + "\" - item \"" + itemIdentifier + "\" not found.");
+                    DebugConsole.ThrowError("Error in character inventory \"" + character.SpeciesName + "\" - item \"" + itemIdentifier + "\" not found.",
+                        contentPackage: element.ContentPackage);
                     continue;
                 }
 
@@ -131,7 +151,7 @@ namespace Barotrauma
                         if (item != null && item.ParentInventory != this)
                         {
                             string errorMsg = $"Failed to spawn the initial item \"{item.Prefab.Identifier}\" in the inventory of \"{character.SpeciesName}\".";
-                            DebugConsole.ThrowError(errorMsg);
+                            DebugConsole.ThrowError(errorMsg, contentPackage: element.ContentPackage);
                             GameAnalyticsManager.AddErrorEventOnce("CharacterInventory:FailedToSpawnInitialItem", GameAnalyticsManager.ErrorSeverity.Error, errorMsg);
                         }
                         else if (!character.Enabled)
@@ -147,6 +167,19 @@ namespace Barotrauma
         }
 
         partial void InitProjSpecific(XElement element);
+
+        public Item FindEquippedItemByTag(Identifier tag)
+        {
+            if (tag.IsEmpty) { return null; }
+            for (int i = 0; i < slots.Length; i++)
+            {
+                if (SlotTypes[i] == InvSlotType.Any) { continue; }
+
+                var item = slots[i].FirstOrDefault();
+                if (item != null && item.HasTag(tag)) { return item; }
+            }
+            return null;
+        }
 
         public int FindLimbSlot(InvSlotType limbSlot)
         {
@@ -328,31 +361,40 @@ namespace Barotrauma
             }
 
             if (item.GetComponent<Pickable>() == null || item.AllowedSlots.None()) { return false; }
-
-            bool inSuitableSlot = false;
-            bool inWrongSlot = false;
+            
             int currentSlot = -1;
-            for (int i = 0; i < capacity; i++)
+            bool inWrongSlot = false;
+            bool inSuitableSlot = false;
+
+            // verify item's current placement
+            for (int slotIndex = 0; slotIndex < capacity; slotIndex++)
             {
-                if (slots[i].Contains(item))
+                if (!slots[slotIndex].Contains(item)) { continue; }
+                
+                // item is at least in this slot, can be in many
+                currentSlot = slotIndex;
+                
+                var firstMatchingSlotType = allowedSlots.FirstOrDefault(slot => slot.HasFlag(SlotTypes[slotIndex]));
+                
+                if (firstMatchingSlotType == default) // if (firstMatchingSlotType == InvSlotType.None)
                 {
-                    currentSlot = i;
-                    if (allowedSlots.Any(a => a.HasFlag(SlotTypes[i])))
+                    inWrongSlot = true;
+                    break;
+                }
+                
+                inSuitableSlot = true;
+                
+                // can have more than one flag, such as InvSlotType.InnerClothes | InvSlotType.OuterClothes
+                var individualFlags = EnumExtensions.GetIndividualFlags(firstMatchingSlotType);
+                
+                // if item is not in ALL required slot types
+                foreach (var flag in individualFlags)
+                {
+                    if (flag == InvSlotType.None) { continue; }
+                    if (!IsInLimbSlot(item, flag))
                     {
-                        if ((SlotTypes[i] == InvSlotType.RightHand || SlotTypes[i] == InvSlotType.LeftHand) && !allowedSlots.Contains(SlotTypes[i]))
-                        {
-                            //allowed slot = InvSlotType.RightHand | InvSlotType.LeftHand
-                            // -> make sure the item is in both hand slots
-                            inSuitableSlot = IsInLimbSlot(item, InvSlotType.RightHand) && IsInLimbSlot(item, InvSlotType.LeftHand);
-                        }
-                        else
-                        {
-                            inSuitableSlot = true;
-                        }
-                    }
-                    else if (!allowedSlots.Any(a => a.HasFlag(SlotTypes[i])))
-                    {
-                        inWrongSlot = true;
+                        inSuitableSlot = false;
+                        break;
                     }
                 }
             }
@@ -419,6 +461,8 @@ namespace Barotrauma
 
             return placedInSlot > -1;
         }
+        
+
 
         public bool IsAnySlotAvailable(Item item) => GetFreeAnySlot(item, inWrongSlot: false) > -1;
 
@@ -530,6 +574,7 @@ namespace Barotrauma
             {
                 item.AssignCampaignInteractionType(CampaignMode.InteractionType.None);
             }
+            item.Equipper = user;            
         }
 
         protected override void CreateNetworkEvent(Range slotRange)

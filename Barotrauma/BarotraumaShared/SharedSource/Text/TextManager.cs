@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 using Barotrauma.IO;
 using Barotrauma.Extensions;
@@ -23,7 +23,7 @@ namespace Barotrauma
         public static bool DebugDraw;
 
         public readonly static LanguageIdentifier DefaultLanguage = "English".ToLanguageIdentifier();
-        public readonly static ConcurrentDictionary<LanguageIdentifier, ImmutableHashSet<TextPack>> TextPacks = new ConcurrentDictionary<LanguageIdentifier, ImmutableHashSet<TextPack>>();
+        public readonly static ConcurrentDictionary<LanguageIdentifier, ImmutableList<TextPack>> TextPacks = new ConcurrentDictionary<LanguageIdentifier, ImmutableList<TextPack>>();
         public static IEnumerable<LanguageIdentifier> AvailableLanguages => TextPacks.Keys;
 
         private readonly static Dictionary<Identifier, WeakReference<TagLString>> cachedStrings =
@@ -32,6 +32,8 @@ namespace Barotrauma
             ImmutableHashSet<Identifier>.Empty;
 
         public static int LanguageVersion { get; private set; } = 0;
+
+        private readonly static object mutex = new object();
 
         private static ImmutableArray<Range<int>> UnicodeToIntRanges(params UnicodeRange[] ranges)
             => ranges
@@ -60,7 +62,9 @@ namespace Barotrauma
             = new[]
             {
                 (SpeciallyHandledCharCategory.CJK, UnicodeToIntRanges(
+                    UnicodeRanges.HalfwidthandFullwidthForms,
                     UnicodeRanges.HangulJamo,
+                    UnicodeRanges.HangulCompatibilityJamo,
                     UnicodeRanges.CjkRadicalsSupplement,
                     UnicodeRanges.CjkSymbolsandPunctuation,
                     UnicodeRanges.EnclosedCjkLettersandMonths,
@@ -85,12 +89,36 @@ namespace Barotrauma
                 ))
             }.ToImmutableDictionary();
 
+        private readonly struct CachedCategory
+        {
+            public readonly SpeciallyHandledCharCategory Category;
+            public readonly double LastAccessed;
+
+            public CachedCategory(SpeciallyHandledCharCategory category)
+            {
+                Category = category;
+                LastAccessed = Timing.TotalTime;
+            }
+        }
+
+        const int SpeciallyHandledCategoriesCacheSize = 5000;
+        private static readonly Dictionary<string, CachedCategory> SpeciallyHandledCategoriesCache = new Dictionary<string, CachedCategory>();
+
         public static SpeciallyHandledCharCategory GetSpeciallyHandledCategories(LocalizedString text)
             => GetSpeciallyHandledCategories(text.Value);
-
+                
         public static SpeciallyHandledCharCategory GetSpeciallyHandledCategories(string text)
         {
             if (string.IsNullOrEmpty(text)) { return SpeciallyHandledCharCategory.None; }
+
+            lock (mutex)
+            {
+                if (SpeciallyHandledCategoriesCache.TryGetValue(text, out var cachedCategory))
+                {
+                    SpeciallyHandledCategoriesCache[text] = new CachedCategory(cachedCategory.Category);
+                    return cachedCategory.Category;
+                }
+            }
 
             var retVal = SpeciallyHandledCharCategory.None;
             for (int i = 0; i < text.Length; i++)
@@ -99,7 +127,7 @@ namespace Barotrauma
 
                 foreach (var category in SpeciallyHandledCharCategories)
                 {
-                    if (retVal.HasFlag(category)) { continue; }
+                    if (retVal.AlreadyHasCategoryFlag(category)) { continue; }
                     
                     for (int j = 0; j < SpeciallyHandledCharacterRanges[category].Length; j++)
                     {
@@ -124,17 +152,47 @@ namespace Barotrauma
                     // Input contains characters from all
                     // specially handled categories, there's
                     // no need to inspect the string further
-                    return SpeciallyHandledCharCategory.All;
+                    break;
                 }
             }
+
+            lock (mutex)
+            {
+                SpeciallyHandledCategoriesCache[text] = new CachedCategory(retVal);
+                TrimSpeciallyHandledCategoriesCache();
+            }
+
             return retVal;
+        }
+
+        private static void TrimSpeciallyHandledCategoriesCache()
+        {
+            if (SpeciallyHandledCategoriesCache.Count > SpeciallyHandledCategoriesCacheSize)
+            {
+                //drop half of the cache, starting from the strings that haven't been used in the longest time
+
+                //this is relatively expensive (instantiates a big new list),
+                //but the cache should get cleared so infrequently (when 5000 unique texts have been visible, which may not even happen in normal gameplay)
+                //it should not have much effect in practice
+                foreach (var cachedVal in SpeciallyHandledCategoriesCache.OrderBy(static c => c.Value.LastAccessed).Take(SpeciallyHandledCategoriesCacheSize / 2).ToList())
+                {
+                    SpeciallyHandledCategoriesCache.Remove(cachedVal.Key);
+                }
+            }
         }
 
         public static bool IsCJK(LocalizedString text)
             => IsCJK(text.Value);
 
         public static bool IsCJK(string text)
-            => GetSpeciallyHandledCategories(text).HasFlag(SpeciallyHandledCharCategory.CJK);
+            => GetSpeciallyHandledCategories(text).AlreadyHasCategoryFlag(SpeciallyHandledCharCategory.CJK);
+        
+        // This is a local optimized version of HasFlag/HasAnyFlag, which makes sense here because the loop using this is big enough
+        // to have made 8GB worth of memory allocations with HasFlag and still several dozen MB with the generic HasAnyFlag. 
+        private static bool AlreadyHasCategoryFlag(this SpeciallyHandledCharCategory existingFlags, SpeciallyHandledCharCategory categoryFlag)
+        {
+            return (existingFlags & categoryFlag) != 0;
+        }
         
         /// <summary>
         /// Check if the currently selected language is available, and switch to English if not
@@ -160,22 +218,56 @@ namespace Barotrauma
             return TextPacks[GameSettings.CurrentConfig.Language].Any(p => p.Texts.ContainsKey(tag));
         }
 
+        public static bool ContainsTag(Identifier tag, LanguageIdentifier language)
+        {
+            return TextPacks[language].Any(p => p.Texts.ContainsKey(tag));
+        }
         public static IEnumerable<string> GetAll(string tag)
             => GetAll(tag.ToIdentifier());
 
         public static IEnumerable<string> GetAll(Identifier tag)
         {
-            return TextPacks[GameSettings.CurrentConfig.Language]
+            var allTexts = TextPacks[GameSettings.CurrentConfig.Language]
                 .SelectMany(p => p.Texts.TryGetValue(tag, out var value)
-                    ? (IEnumerable<string>)value
-                    : Array.Empty<string>());
+                    ? (IEnumerable<TextPack.Text>)value
+                    : Array.Empty<TextPack.Text>()).ToList();
+
+            var firstOverride = allTexts.FirstOrDefault(t => t.IsOverride);
+            if (firstOverride != default)
+            {
+                return allTexts.Where(t => t.IsOverride && t.TextPack == firstOverride.TextPack).Select(t => t.String);
+            }
+            else
+            {
+                return allTexts.Select(t => t.String);
+            }
         }
-        
+
         public static IEnumerable<KeyValuePair<Identifier, string>> GetAllTagTextPairs()
         {
-            return TextPacks[GameSettings.CurrentConfig.Language]
-                .SelectMany(p => p.Texts)
-                .SelectMany(kvp => kvp.Value.Select(v => new KeyValuePair<Identifier, string>(kvp.Key, v)));
+            var allTexts = TextPacks[GameSettings.CurrentConfig.Language]
+                .SelectMany(p => p.Texts);
+
+            foreach (var textList in allTexts)
+            {
+                var firstOverride = textList.Value.FirstOrDefault(t => t.IsOverride);
+                if (firstOverride != default)
+                {
+                    //if there's any overrides for this tag, only return the overrides
+                    foreach (var text in textList.Value)
+                    {
+                        if (!text.IsOverride) { continue; }
+                        yield return new KeyValuePair<Identifier, string>(textList.Key, text.String);
+                    }
+                }
+                else
+                {
+                    foreach (var text in textList.Value)
+                    {
+                        yield return new KeyValuePair<Identifier, string>(textList.Key, text.String);
+                    }
+                }
+            }
         }
 
         public static IEnumerable<string> GetTextFiles()
@@ -214,12 +306,20 @@ namespace Barotrauma
 
         public static LocalizedString Get(params Identifier[] tags)
         {
+            if (tags.Length == 1)
+            {
+                return Get(tags[0]);
+            }
+            return new TagLString(tags);
+        }
+
+        public static LocalizedString Get(Identifier tag)
+        {
             TagLString? str = null;
             lock (cachedStrings)
             {
-                if (tags.Length == 1 && !nonCacheableTags.Contains(tags[0]))
+                if (!nonCacheableTags.Contains(tag))
                 {
-                    var tag = tags[0];
                     if (cachedStrings.TryGetValue(tag, out var strRef))
                     {
                         if (!strRef.TryGetTarget(out str))
@@ -246,15 +346,18 @@ namespace Barotrauma
                         }
                         else
                         {
-                            str = new TagLString(tags);
+                            str = new TagLString(tag);
                             cachedStrings.Add(tag, new WeakReference<TagLString>(str));
                         }
                     }
                 }
             }
-            return str ?? new TagLString(tags);
+            return str ?? new TagLString(tag);
         }
-        
+
+        public static LocalizedString Get(string tag)            
+            => Get(tag.ToIdentifier());
+
         public static LocalizedString Get(params string[] tags)
             => Get(tags.ToIdentifiers());
 

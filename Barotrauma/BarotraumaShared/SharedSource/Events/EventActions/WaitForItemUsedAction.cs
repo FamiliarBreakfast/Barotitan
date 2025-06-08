@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 using Barotrauma.Extensions;
 using Barotrauma.Items.Components;
@@ -7,33 +7,46 @@ using System.Linq;
 
 namespace Barotrauma
 {
+    /// <summary>
+    /// Waits for some item(s) to be used before continuing the execution of the event.
+    /// </summary>
     class WaitForItemUsedAction : EventAction
     {
-        [Serialize("", IsPropertySaveable.Yes)]
+        /// <summary>
+        /// Counter used to ensure we have a unique identifier to use for the ItemComponent.OnUsed event
+        /// </summary>
+        private static int IdCounter;
+
+        [Serialize("", IsPropertySaveable.Yes, description: "Tag of the item that must be used. Note that the item needs to have been tagged by the event - this does not refer to the tags that can be set per-item in the sub editor.")]
         public Identifier ItemTag { get; set; }
 
-        [Serialize("", IsPropertySaveable.Yes)]
+        [Serialize("", IsPropertySaveable.Yes, description: "Tag of the character that must use the item. If there's multiple matching characters, it's enough if any of them use the item. If empty, it doesn't matter who uses the item.")]
         public Identifier UserTag { get; set; }
 
-        [Serialize("", IsPropertySaveable.Yes)]
+        [Serialize("", IsPropertySaveable.Yes, description: "Name of the ItemComponent that the character must use. If empty, the character attempts to use all of them.")]
         public Identifier TargetItemComponent { get; set; }
 
-        [Serialize("", IsPropertySaveable.Yes, description: "Tag to apply to the target item when it's used.")]
+        [Serialize("", IsPropertySaveable.Yes, description: "Optional tag to apply to the target item when it's used.")]
         public Identifier ApplyTagToItem { get; set; }
 
-        [Serialize("", IsPropertySaveable.Yes, description: "Tag to apply to the user when the target item is used.")]
+        [Serialize("", IsPropertySaveable.Yes, description: "Optional tag to apply to the user when the target item is used.")]
         public Identifier ApplyTagToUser{ get; set; }
 
-        [Serialize("", IsPropertySaveable.Yes, description: "Tag to apply to the hull the target item is inside when the item is used.")]
+        [Serialize("", IsPropertySaveable.Yes, description: "Optional tag to apply to the hull the target item is inside when the item is used.")]
         public Identifier ApplyTagToHull { get; set; }
 
-        [Serialize("", IsPropertySaveable.Yes, description: "Tag to apply to the hull the target item is inside, and all the hulls it's linked to, when the item is used.")]
+        [Serialize("", IsPropertySaveable.Yes, description: "Optional tag to apply to the hull the target item is inside, and all the hulls it's linked to, when the item is used.")]
         public Identifier ApplyTagToLinkedHulls { get; set; }
+
+        [Serialize(1, IsPropertySaveable.Yes, description: "How many times does the item need to be used. Defaults to 1.")]
+        public int RequiredUseCount { get; set; }
 
         private bool isFinished;
 
         private readonly HashSet<Entity> targets = new HashSet<Entity>();
         private readonly HashSet<ItemComponent> targetComponents = new HashSet<ItemComponent>();
+
+        private int useCount = 0;
 
         private Identifier onUseEventIdentifier;
         private Identifier OnUseEventIdentifier
@@ -42,7 +55,8 @@ namespace Barotrauma
             {
                 if (onUseEventIdentifier.IsEmpty)
                 {
-                    onUseEventIdentifier = (ParentEvent.Prefab.Identifier + ParentEvent.Actions.IndexOf(this).ToString()).ToIdentifier();
+                    onUseEventIdentifier = (ParentEvent.Prefab.Identifier + ParentEvent.Actions.IndexOf(this).ToString() + IdCounter).ToIdentifier();
+                    IdCounter++;
                 }
                 return onUseEventIdentifier;
             }
@@ -58,6 +72,14 @@ namespace Barotrauma
 
         private void OnItemUsed(Item item, Character user)
         {
+            if (!UserTag.IsEmpty)
+            {
+                if (!ParentEvent.GetTargets(UserTag).Contains(user)) { return; }
+            }
+
+            useCount++;
+            if (useCount < RequiredUseCount) { return; }
+
             if (!ApplyTagToItem.IsEmpty)
             {
                 ParentEvent.AddTarget(ApplyTagToItem, item);
@@ -66,22 +88,7 @@ namespace Barotrauma
             {
                 ParentEvent.AddTarget(ApplyTagToUser, user);
             }
-            if (item.CurrentHull != null)
-            {
-                if (!ApplyTagToHull.IsEmpty)
-                {
-                    ParentEvent.AddTarget(ApplyTagToHull, item.CurrentHull);
-                }
-                if (!ApplyTagToLinkedHulls.IsEmpty)
-                {
-                    ParentEvent.AddTarget(ApplyTagToLinkedHulls, item.CurrentHull);
-                    foreach (var linkedHull in item.CurrentHull.GetLinkedEntities<Hull>())
-                    {
-                        ParentEvent.AddTarget(ApplyTagToLinkedHulls, linkedHull);
-                    }                   
-                }
-            }
-
+            ApplyTagsToHulls(item, ApplyTagToHull, ApplyTagToLinkedHulls);
             DeregisterTargets();
             isFinished = true;
         }
@@ -142,6 +149,7 @@ namespace Barotrauma
         public override void Reset()
         {
             isFinished = false;
+            useCount = 0;
             DeregisterTargets();
         }
 

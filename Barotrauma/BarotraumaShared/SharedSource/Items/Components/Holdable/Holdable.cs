@@ -1,10 +1,12 @@
-﻿using Barotrauma.Networking;
+﻿using Barotrauma.Abilities;
+using Barotrauma.Networking;
 using FarseerPhysics;
 using FarseerPhysics.Dynamics;
 using FarseerPhysics.Dynamics.Contacts;
 using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Xml.Linq;
 
@@ -12,13 +14,15 @@ namespace Barotrauma.Items.Components
 {
     partial class Holdable : Pickable, IServerSerializable, IClientSerializable
     {
-        private readonly struct EventData : IEventData
+        private readonly struct AttachEventData : IEventData
         {
             public readonly Vector2 AttachPos;
-            
-            public EventData(Vector2 attachPos)
+            public readonly Character Attacher;
+
+            public AttachEventData(Vector2 attachPos, Character attacher)
             {
                 AttachPos = attachPos;
+                Attacher = attacher;
             }
         }
 
@@ -32,11 +36,6 @@ namespace Barotrauma.Items.Components
         private LocalizedString prevMsg;
         private Dictionary<RelatedItem.RelationType, List<RelatedItem>> prevRequiredItems;
 
-        //the distance from the holding characters elbow to center of the physics body of the item
-        protected Vector2 holdPos;
-
-        protected Vector2 aimPos;
-
         private float swingState;
 
         private Character prevEquipper;
@@ -46,6 +45,9 @@ namespace Barotrauma.Items.Components
         private bool attachable, attached, attachedByDefault;
         private Voronoi2.VoronoiCell attachTargetCell;
         private PhysicsBody body;
+
+        public readonly ImmutableDictionary<StatTypes, float> HoldableStatValues;
+
         public PhysicsBody Pusher
         {
             get;
@@ -131,6 +133,9 @@ namespace Barotrauma.Items.Components
             get { return ConvertUnits.ToDisplayUnits(holdPos); }
             set { holdPos = ConvertUnits.ToSimUnits(value); }
         }
+        //the distance from the holding characters elbow to center of the physics body of the item
+        protected Vector2 holdPos;
+        
 
         [Serialize("0.0,0.0", IsPropertySaveable.No, description: "The position the character holds the item at when aiming (in pixels, as an offset from the character's shoulder)."+
             " Works similarly as HoldPos, except that the position is rotated according to the direction the player is aiming at. For example, a value of 10,-100 would make the character hold the item 100 pixels below the shoulder and 10 pixels forwards when aiming directly to the right.")]
@@ -139,6 +144,7 @@ namespace Barotrauma.Items.Components
             get { return ConvertUnits.ToDisplayUnits(aimPos); }
             set { aimPos = ConvertUnits.ToSimUnits(value); }
         }
+        protected Vector2 aimPos;
 
         protected float holdAngle;
 #if DEBUG
@@ -221,6 +227,51 @@ namespace Barotrauma.Items.Components
             set;
         }
 
+        [Editable, Serialize("", IsPropertySaveable.Yes, translationTextTag: "ItemMsg", description: "A text displayed next to the item when it's been dropped on the floor (not attached to a wall).")]
+        public string MsgWhenDropped
+        {
+            get;
+            set;
+        }
+
+        /// <summary>
+        /// For setting the handle positions using status effects
+        /// </summary>
+        public Vector2 Handle1
+        {
+            get { return ConvertUnits.ToDisplayUnits(handlePos[0]); }
+            set 
+            { 
+                handlePos[0] = ConvertUnits.ToSimUnits(value); 
+                if (item.FlippedX)
+                {
+                    handlePos[0].X = -handlePos[0].X;
+                }
+                if (!secondHandlePosDefined)
+                {
+                    Handle2 = value;
+                }
+            }
+        }
+
+        /// <summary>
+        /// For setting the handle positions using status effects
+        /// </summary>
+        public Vector2 Handle2
+        {
+            get { return ConvertUnits.ToDisplayUnits(handlePos[1]); }
+            set 
+            { 
+                handlePos[1] = ConvertUnits.ToSimUnits(value);
+                if (item.FlippedX)
+                {
+                    handlePos[1].X = -handlePos[1].X;
+                }
+            }
+        }
+
+        private bool secondHandlePosDefined;
+
         public Holdable(Item item, ContentXElement element)
             : base(item, element)
         {
@@ -250,20 +301,25 @@ namespace Barotrauma.Items.Components
             {
                 int index = i - 1;
                 string attributeName = "handle" + i;
-                var attribute = element.GetAttribute(attributeName);
                 // If no value is defind for handle2, use the value of handle1.
-                var value = attribute != null ? ConvertUnits.ToSimUnits(XMLExtensions.ParseVector2(attribute.Value)) : previousValue;
+                Vector2 value = previousValue;
+                var attribute = element.GetAttribute(attributeName);
+                if (attribute != null)
+                {
+                    secondHandlePosDefined = i > 1;
+                    value = ConvertUnits.ToSimUnits(XMLExtensions.ParseVector2(attribute.Value));
+                }
                 handlePos[index] = value;
                 previousValue = value;
             }
 
             canBePicked = true;
+            prevRequiredItems = new Dictionary<RelatedItem.RelationType, List<RelatedItem>>(RequiredItems);
             
             if (attachable)
             {
                 prevMsg = DisplayMsg;
                 prevPickKey = PickKey;
-                prevRequiredItems = new Dictionary<RelatedItem.RelationType, List<RelatedItem>>(requiredItems);
                                 
                 if (item.Submarine != null)
                 {
@@ -288,6 +344,22 @@ namespace Barotrauma.Items.Components
                 }
             }
             characterUsable = element.GetAttributeBool("characterusable", true);
+
+            Dictionary<StatTypes, float> statValues = new Dictionary<StatTypes, float>();
+            foreach (var subElement in element.GetChildElements("statvalue"))
+            {
+                StatTypes statType = CharacterAbilityGroup.ParseStatType(subElement.GetAttributeString("stattype", ""), Name);
+                float statValue = subElement.GetAttributeFloat("value", 0f);
+                if (statValues.ContainsKey(statType))
+                {
+                    statValues[statType] += statValue;
+                }
+                else
+                {
+                    statValues.TryAdd(statType, statValue);
+                }                
+            }
+            HoldableStatValues = statValues.ToImmutableDictionary();
         }
 
         private bool OnPusherCollision(Fixture sender, Fixture other, Contact contact)
@@ -305,9 +377,9 @@ namespace Barotrauma.Items.Components
         }
 
         private bool loadedFromInstance;
-        public override void Load(ContentXElement componentElement, bool usePrefabValues, IdRemap idRemap)
+        public override void Load(ContentXElement componentElement, bool usePrefabValues, IdRemap idRemap, bool isItemSwap)
         {
-            base.Load(componentElement, usePrefabValues, idRemap);
+            base.Load(componentElement, usePrefabValues, idRemap, isItemSwap);
 
             loadedFromInstance = true;
 
@@ -320,7 +392,7 @@ namespace Barotrauma.Items.Components
             if (attachable)
             {
                 prevMsg = DisplayMsg;
-                prevRequiredItems = new Dictionary<RelatedItem.RelationType, List<RelatedItem>>(requiredItems);
+                prevRequiredItems = new Dictionary<RelatedItem.RelationType, List<RelatedItem>>(RequiredItems);
             }
         }
 
@@ -649,7 +721,7 @@ namespace Barotrauma.Items.Components
 
             DisplayMsg = prevMsg;
             PickKey = prevPickKey;
-            requiredItems = new Dictionary<RelatedItem.RelationType, List<RelatedItem>>(prevRequiredItems);
+            RequiredItems = new Dictionary<RelatedItem.RelationType, List<RelatedItem>>(prevRequiredItems);
 
             Attached = true;
 #if CLIENT
@@ -667,8 +739,20 @@ namespace Barotrauma.Items.Components
             item.DrawDepthOffset = 0.0f;
 #endif
             //make the item pickable with the default pick key and with no specific tools/items when it's deattached
-            requiredItems.Clear();
-            DisplayMsg = "";
+            RequiredItems.Clear();
+            if (MsgWhenDropped.IsNullOrEmpty())
+            {
+                DisplayMsg = "";
+            }
+            else
+            {
+                DisplayMsg = TextManager.Get(MsgWhenDropped);
+                DisplayMsg =
+                    DisplayMsg.Loaded ?
+                    TextManager.ParseInputTypes(DisplayMsg) :
+                    MsgWhenDropped;
+            }
+
             PickKey = InputType.Select;
 #if CLIENT
             item.DrawDepthOffset = SpriteDepthWhenDropped - item.SpriteDepth;
@@ -735,21 +819,14 @@ namespace Barotrauma.Items.Components
 
                 if (GameMain.NetworkMember != null)
                 {
-                    if (character != Character.Controlled)
-                    {
-                        return false;
-                    }
-                    else if (GameMain.NetworkMember.IsServer)
-                    {
-                        return false;
-                    }
-                    else
-                    {
 #if CLIENT
+                    if (character == Character.Controlled)
+                    {
                         Vector2 attachPos = ConvertUnits.ToSimUnits(GetAttachPosition(character));
-                        item.CreateClientEvent(this, new EventData(attachPos));
-#endif
+                        item.CreateClientEvent(this, new AttachEventData(attachPos, character));
                     }
+#endif
+                    //don't attach at this point in MP: instead rely on the network events created above
                     return false;
                 }
                 else
@@ -804,9 +881,13 @@ namespace Barotrauma.Items.Components
 
             if (user.Submarine != null)
             {
+                //we must add some "padding" to the raycast to ensure it reaches all the way to a wall
+                //otherwise the cursor might be outside a wall, but the grid cell it's in might be partially inside
+                Vector2 padding =  Submarine.GridSize * new Vector2(Math.Sign(mouseDiff.X), Math.Sign(mouseDiff.Y));
+
                 if (Submarine.PickBody(
                     ConvertUnits.ToSimUnits(user.Position), 
-                    ConvertUnits.ToSimUnits(user.Position + mouseDiff), collisionCategory: Physics.CollisionWall) != null)
+                    ConvertUnits.ToSimUnits(user.Position + mouseDiff + padding), collisionCategory: Physics.CollisionWall) != null)
                 {
                     attachPos = userPos + mouseDiff * Submarine.LastPickedFraction + offset;
 
@@ -916,15 +997,25 @@ namespace Barotrauma.Items.Components
                 bool aim = picker.IsKeyDown(InputType.Aim) && aimPos != Vector2.Zero && picker.CanAim && !UsageDisabledByRangedWeapon(picker);
                 if (aim)
                 {
-                    picker.AnimController.HoldItem(deltaTime, item, scaledHandlePos, holdPos + swingPos, aimPos + swingPos, aim, holdAngle, aimAngle);
+                    if (picker.AnimController.IsHoldingToRope && GetRope() is { Snapped: false } rope)
+                    {
+                        Vector2 targetPos = Submarine.GetRelativeSimPosition(picker, rope.Item);
+                        picker.AnimController.HoldItem(deltaTime, item, scaledHandlePos, itemPos: aimPos, aim: true, holdAngle, aimAngle, targetPos: targetPos);
+                    }
+                    else
+                    {
+                        picker.AnimController.HoldItem(deltaTime, item, scaledHandlePos, itemPos: aimPos + swingPos, aim: true, holdAngle, aimAngle);   
+                    }
                 }
                 else
                 {
-                    picker.AnimController.HoldItem(deltaTime, item, scaledHandlePos, holdPos + swingPos, aimPos + swingPos, aim, holdAngle);
-                    var rope = GetRope();
-                    if (rope != null && rope.SnapWhenNotAimed && rope.Item.ParentInventory == null)
+                    picker.AnimController.HoldItem(deltaTime, item, scaledHandlePos, itemPos: holdPos + swingPos, aim: false, holdAngle);
+                    if (GetRope() is { SnapWhenNotAimed: true } rope)
                     {
-                        rope.Snap();
+                        if (rope.Item.ParentInventory == null)
+                        {
+                            rope.Snap();   
+                        }
                     }
                 }
             }
@@ -1054,15 +1145,15 @@ namespace Barotrauma.Items.Components
             }
 
             var tempMsg = DisplayMsg;
-            var tempRequiredItems = requiredItems;
+            var tempRequiredItems = RequiredItems;
 
             DisplayMsg = prevMsg;
-            requiredItems = prevRequiredItems;
+            RequiredItems = prevRequiredItems;
             
             XElement saveElement = base.Save(parentElement);
 
             DisplayMsg = tempMsg;
-            requiredItems = tempRequiredItems;
+            RequiredItems = tempRequiredItems;
 
             return saveElement;
         }       

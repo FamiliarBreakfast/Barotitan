@@ -66,7 +66,11 @@ namespace Barotrauma.Items.Components
             new GUITextBlock(new RectTransform(new Vector2(1.0f, 0.3f), sliderArea.RectTransform, Anchor.TopCenter), "", textColor: GUIStyle.TextColorNormal, font: GUIStyle.SubHeadingFont, textAlignment: Alignment.Center)
             {
                 AutoScaleHorizontal = true,
-                TextGetter = () => { return TextManager.AddPunctuation(':', powerLabel, (int)(targetForce) + " %"); }
+                TextGetter = () => 
+                { 
+                    return TextManager.AddPunctuation(':', powerLabel, 
+                        TextManager.GetWithVariable("percentageformat", "[value]", ((int)MathF.Round(targetForce)).ToString())); 
+                }
             };
             forceSlider = new GUIScrollBar(new RectTransform(new Vector2(0.95f, 0.45f), sliderArea.RectTransform, Anchor.Center), barSize: 0.1f, style: "DeviceSlider")
             {
@@ -130,11 +134,11 @@ namespace Barotrauma.Items.Components
             spriteIndex += (force / 100.0f) * AnimSpeed * deltaTime;
             if (spriteIndex < 0)
             {
-                spriteIndex = propellerSprite.FrameCount;
+                spriteIndex = propellerSprite.FrameCount - Math.Abs(spriteIndex) % propellerSprite.FrameCount;
             }
-            if (spriteIndex >= propellerSprite.FrameCount)
+            else
             {
-                spriteIndex = 0.0f;
+                spriteIndex = spriteIndex % propellerSprite.FrameCount;
             }
         }
 

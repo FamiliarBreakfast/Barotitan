@@ -1,6 +1,7 @@
 ﻿using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Xml.Linq;
 using System.Linq;
 using Barotrauma.IO;
@@ -13,15 +14,31 @@ using Barotrauma.SpriteDeformations;
 
 namespace Barotrauma
 {
+    public enum CanEnterSubmarine
+    {
+        /// <summary>
+        /// No part of the ragdoll can go inside a submarine
+        /// </summary>
+        False,
+        /// <summary>
+        /// Can fully enter a submarine. Make sure to only allow this on small/medium sized creatures that can reasonably fit inside rooms.
+        /// </summary>
+        True,
+        /// <summary>
+        /// The ragdoll's limbs can enter the sub, but the collider can't. 
+        /// Can be used to e.g. allow the monster's head to poke into the sub to bite characters, even if the whole monster can't fit in the sub.
+        /// </summary>
+        Partial
+    }
+
     class HumanRagdollParams : RagdollParams
     {
-        public static HumanRagdollParams GetRagdollParams(Identifier speciesName, string fileName = null) => GetRagdollParams<HumanRagdollParams>(speciesName, fileName);
-        public static HumanRagdollParams GetDefaultRagdollParams(Identifier speciesName) => GetDefaultRagdollParams<HumanRagdollParams>(speciesName);
+        public static HumanRagdollParams GetDefaultRagdollParams(Character character) => GetDefaultRagdollParams<HumanRagdollParams>(character);
     }
 
     class FishRagdollParams : RagdollParams
     {
-        public static FishRagdollParams GetDefaultRagdollParams(Identifier speciesName) => GetDefaultRagdollParams<FishRagdollParams>(speciesName);
+        public static FishRagdollParams GetDefaultRagdollParams(Character character) => GetDefaultRagdollParams<FishRagdollParams>(character);
     }
 
     class RagdollParams : EditableParams, IMemorizable<RagdollParams>
@@ -37,8 +54,11 @@ namespace Barotrauma
         
         [Serialize("1.0,1.0,1.0,1.0", IsPropertySaveable.Yes), Editable()]
         public Color Color { get; set; }
-        
-        [Serialize(0.0f, IsPropertySaveable.Yes, description: "The orientation of the sprites as drawn on the sprite sheet. Can be overridden by setting a value for Limb's 'Sprite Orientation'."), Editable(-360, 360)]
+
+        [Serialize(0.0f, IsPropertySaveable.Yes, description: "General orientation of the sprites as drawn on the spritesheet. " +
+                                                              "Defines the \"forward direction\" of the sprites. Should be configured as the direction pointing outwards from the main limb. " +
+                                                              "Incorrectly defined orientations may lead to limbs being rotated incorrectly when e.g. when the character aims or flips to face a different direction. " +
+                                                              "Can be overridden per sprite by setting a value for Limb's 'Sprite Orientation'."), Editable(-360, 360)]
         public float SpritesheetOrientation { get; set; }
 
         public bool IsSpritesheetOrientationHorizontal
@@ -53,15 +73,34 @@ namespace Barotrauma
 
         private float limbScale;
         [Serialize(1.0f, IsPropertySaveable.Yes), Editable(MIN_SCALE, MAX_SCALE, DecimalCount = 3)]
-        public float LimbScale { get { return limbScale; } set { limbScale = MathHelper.Clamp(value, MIN_SCALE, MAX_SCALE); } }
+        public float LimbScale
+        {
+            get { return limbScale; }
+            set { limbScale = MathHelper.Clamp(value, MIN_SCALE, MAX_SCALE); }
+        }
 
         private float jointScale;
         [Serialize(1.0f, IsPropertySaveable.Yes), Editable(MIN_SCALE, MAX_SCALE, DecimalCount = 3)]
-        public float JointScale { get { return jointScale; } set { jointScale = MathHelper.Clamp(value, MIN_SCALE, MAX_SCALE); } }
+        public float JointScale 
+        {
+            get { return jointScale; } 
+            set { jointScale = MathHelper.Clamp(value, MIN_SCALE, MAX_SCALE); }
+        }
 
-        // Don't show in the editor, because shouldn't be edited in runtime.  Requires that the limb scale and the collider sizes are adjusted. TODO: automatize?
+        /// <summary>
+        /// Can be used for scaling the textures without having to readjust the entire ragdoll.
+        /// Note that we'll still have to readjust the source rects and the colliders sizes, unless we also adjust <see cref="SourceRectScale"/>.
+        /// E.g. for upscaling the textures 2x, set <see cref="TextureScale"/> to 0.5 and  <see cref="SourceRectScale"/> to 2.
+        /// </summary>
         [Serialize(1f, IsPropertySaveable.No)]
         public float TextureScale { get; set; }
+        
+        /// <summary>
+        /// Multiplies both the position and the size of the source rects.
+        /// Used for scaling the textures when we cannot/don't want to touch the source rect definitions (e.g. on variants).
+        /// </summary>
+        [Serialize(1f, IsPropertySaveable.No)]
+        public float SourceRectScale { get; set; }
 
         [Serialize(45f, IsPropertySaveable.Yes, description: "How high from the ground the main collider levitates when the character is standing? Doesn't affect swimming."), Editable(0f, 1000f)]
         public float ColliderHeightFromFloor { get; set; }
@@ -69,12 +108,12 @@ namespace Barotrauma
         [Serialize(50f, IsPropertySaveable.Yes, description: "How much impact is required before the character takes impact damage?"), Editable(MinValueFloat = 0, MaxValueFloat = 1000)]
         public float ImpactTolerance { get; set; }
 
-        [Serialize(true, IsPropertySaveable.Yes, description: "Can the creature enter submarine. Creatures that cannot enter submarines, always collide with it, even when there is a gap."), Editable()]
-        public bool CanEnterSubmarine { get; set; }
+        [Serialize(CanEnterSubmarine.True, IsPropertySaveable.Yes, description: "Can the creature enter submarine. Creatures that cannot enter submarines, always collide with it, even when there is a gap."), Editable()]
+        public CanEnterSubmarine CanEnterSubmarine { get; set; }
 
         [Serialize(true, IsPropertySaveable.Yes), Editable]
         public bool CanWalk { get; set; }
-
+        
         [Serialize(true, IsPropertySaveable.Yes, description: "Can the character be dragged around by other creatures?"), Editable()]
         public bool Draggable { get; set; }
 
@@ -86,7 +125,7 @@ namespace Barotrauma
         /// key2: File path
         /// value: Ragdoll parameters
         /// </summary>
-        private readonly static Dictionary<Identifier, Dictionary<string, RagdollParams>> allRagdolls = new Dictionary<Identifier, Dictionary<string, RagdollParams>>();
+        private static readonly Dictionary<Identifier, Dictionary<string, RagdollParams>> allRagdolls = new Dictionary<Identifier, Dictionary<string, RagdollParams>>();
 
         public List<ColliderParams> Colliders { get; private set; } = new List<ColliderParams>();
         public List<LimbParams> Limbs { get; private set; } = new List<LimbParams>();
@@ -98,15 +137,14 @@ namespace Barotrauma
                 .Concat(Joints);
 
         public static string GetDefaultFileName(Identifier speciesName) => $"{speciesName.Value.CapitaliseFirstInvariant()}DefaultRagdoll";
-        public static string GetDefaultFile(Identifier speciesName, ContentPackage contentPackage = null)
-            => IO.Path.Combine(GetFolder(speciesName, contentPackage), $"{GetDefaultFileName(speciesName)}.xml");
-
-        public static string GetFolder(Identifier speciesName, ContentPackage contentPackage = null)
+        public static string GetDefaultFile(Identifier speciesName) => IO.Path.Combine(GetFolder(speciesName), $"{GetDefaultFileName(speciesName)}.xml");
+        
+        public static string GetFolder(Identifier speciesName)
         {
-            CharacterPrefab prefab = CharacterPrefab.Find(p => p.Identifier == speciesName && (contentPackage == null || p.ContentFile.ContentPackage == contentPackage));
+            CharacterPrefab prefab = CharacterPrefab.FindBySpeciesName(speciesName);
             if (prefab?.ConfigElement == null)
             {
-                DebugConsole.ThrowError($"Failed to find config file for '{speciesName}' (content package {contentPackage?.Name ?? "null"})");
+                DebugConsole.ThrowError($"Failed to find config file for '{speciesName}'");
                 return string.Empty;
             }
             return GetFolder(prefab.ConfigElement, prefab.ContentFile.Path.Value);
@@ -114,98 +152,173 @@ namespace Barotrauma
 
         private static string GetFolder(ContentXElement root, string filePath)
         {
-            var folder = root?.GetChildElement("ragdolls")?.GetAttributeContentPath("folder")?.Value;
+            Debug.Assert(filePath != null);
+            Debug.Assert(root != null);
+            string folder = (root.GetChildElement("ragdolls") ?? root.GetChildElement("ragdoll"))?.GetAttributeContentPath("folder")?.Value;
             if (folder.IsNullOrEmpty() || folder.Equals("default", StringComparison.OrdinalIgnoreCase))
             {
                 folder = IO.Path.Combine(IO.Path.GetDirectoryName(filePath), "Ragdolls") + IO.Path.DirectorySeparatorChar;
             }
             return folder.CleanUpPathCrossPlatform(correctFilenameCase: true);
         }
-
-        public static T GetDefaultRagdollParams<T>(Identifier speciesName) where T : RagdollParams, new() => GetRagdollParams<T>(speciesName);
-
-        /// <summary>
-        /// If the file name is left null, default file is selected. If fails, will select the default file.  Note: Use the filename without the extensions, don't use the full path!
-        /// If a custom folder is used, it's defined in the character info file.
-        /// </summary>
-        public static T GetRagdollParams<T>(Identifier speciesName, string fileName = null) where T : RagdollParams, new()
+        
+        public static T GetDefaultRagdollParams<T>(Character character) where T : RagdollParams, new() => GetDefaultRagdollParams<T>(character.SpeciesName, character.Params, character.Prefab.ContentPackage);
+        
+        public static T GetDefaultRagdollParams<T>(Identifier speciesName, CharacterParams characterParams, ContentPackage contentPackage) where T : RagdollParams, new()
         {
-            if (speciesName.IsEmpty)
+            XElement mainElement = characterParams.VariantFile?.Root ?? characterParams.MainElement;
+            return GetDefaultRagdollParams<T>(speciesName, mainElement, contentPackage);
+        }
+        
+        public static T GetDefaultRagdollParams<T>(Identifier speciesName, XElement characterRootElement, ContentPackage contentPackage) where T : RagdollParams, new()
+        {
+            Debug.Assert(contentPackage != null);
+            if (characterRootElement.IsOverride())
             {
-                throw new Exception($"Species name null or empty!");
+                characterRootElement = characterRootElement.FirstElement();
             }
+            Identifier ragdollSpecies = speciesName;
+            Identifier variantOf = characterRootElement.VariantOf();
+            if (characterRootElement != null && (characterRootElement.GetChildElement("ragdolls") ?? characterRootElement.GetChildElement("ragdoll")) is XElement ragdollElement)
+            {
+                if ((ragdollElement.GetAttributeContentPath("path", contentPackage) ?? ragdollElement.GetAttributeContentPath("file", contentPackage)) is ContentPath path)
+                {
+                    return GetRagdollParams<T>(speciesName, ragdollSpecies, file: path, contentPackage);
+                }
+                else if (!variantOf.IsEmpty)
+                {
+                    string folder = ragdollElement.GetAttributeContentPath("folder", contentPackage)?.Value;
+                    if (folder.IsNullOrEmpty() || folder.Equals("default", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Folder attribute not defined or set to default -> use the ragdoll defined in the base definition file.
+                        if (CharacterPrefab.FindBySpeciesName(variantOf) is CharacterPrefab prefab)
+                        {
+                            ragdollSpecies = prefab.GetBaseCharacterSpeciesName(variantOf);
+                        }
+                    }
+                }
+            }
+            else if (!variantOf.IsEmpty && CharacterPrefab.FindBySpeciesName(variantOf) is CharacterPrefab parentPrefab)
+            {
+                //get the params from the parent prefab if this one doesn't re-define them
+                return GetDefaultRagdollParams<T>(variantOf, parentPrefab.ConfigElement, parentPrefab.ContentPackage);
+            }
+            // Using a null file definition means we use the default animations found in the Ragdolls folder.
+            return GetRagdollParams<T>(speciesName, ragdollSpecies, file: null, contentPackage);
+        }
+        
+        public static T GetRagdollParams<T>(Identifier speciesName, Identifier ragdollSpecies, Either<string, ContentPath> file, ContentPackage contentPackage) where T : RagdollParams, new()
+        {
+            Debug.Assert(!speciesName.IsEmpty);
+            Debug.Assert(!ragdollSpecies.IsEmpty);
+            ContentPath contentPath = null;
+            string fileName = null;
+            if (file != null)
+            {
+                if (!file.TryGet(out fileName))
+                {
+                    file.TryGet(out contentPath);
+                }
+                Debug.Assert(!fileName.IsNullOrWhiteSpace() || !contentPath.IsNullOrWhiteSpace());
+            }
+            Debug.Assert(contentPackage != null);
             if (!allRagdolls.TryGetValue(speciesName, out Dictionary<string, RagdollParams> ragdolls))
             {
                 ragdolls = new Dictionary<string, RagdollParams>();
                 allRagdolls.Add(speciesName, ragdolls);
             }
-            if (!string.IsNullOrEmpty(fileName) && ragdolls.TryGetValue(fileName, out RagdollParams ragdoll))
+            string key = fileName ?? contentPath?.Value ?? GetDefaultFileName(ragdollSpecies);
+            if (ragdolls.TryGetValue(key, out RagdollParams ragdoll))
             {
+                // Already cached.
                 return (T)ragdoll;
             }
-            string selectedFile = null;
-            Identifier ragdollSpecies = speciesName;
-            if (CharacterPrefab.Prefabs.TryGet(speciesName, out var prefab))
+            if (!contentPath.IsNullOrEmpty())
             {
-                if (!prefab.VariantOf.IsEmpty)
+                // Load the ragdoll from path.
+                T ragdollInstance = new T();
+                if (ragdollInstance.Load(contentPath, ragdollSpecies))
                 {
-                    ragdollSpecies = prefab.VariantOf;
+                    ragdolls.TryAdd(contentPath.Value, ragdollInstance);
+                    return ragdollInstance;
                 }
-                string error = null;
-                string folder = GetFolder(ragdollSpecies);
-                if (!Directory.Exists(folder))
+                else
                 {
-                    error = $"[RagdollParams] Invalid directory: {folder}. Using the default ragdoll.";
+                    DebugConsole.ThrowError($"[RagdollParams] Failed to load a ragdoll {ragdollInstance} from {contentPath.Value} for the character {speciesName}. Using the default ragdoll.", contentPackage: contentPackage);
+                }
+            }
+            // Seek the default ragdoll from the character's ragdoll folder.
+            string selectedFile;
+            string folder = GetFolder(ragdollSpecies);
+            if (Directory.Exists(folder))
+            {
+                var files = Directory.GetFiles(folder).OrderBy(f => f, StringComparer.OrdinalIgnoreCase);
+                if (files.None())
+                {
+                    DebugConsole.ThrowError($"[RagdollParams] Could not find any ragdoll files from the folder: {folder}. Using the default ragdoll.", contentPackage: contentPackage);
                     selectedFile = GetDefaultFile(ragdollSpecies);
                 }
                 else
                 {
-                    string[] files = Directory.GetFiles(folder);
-                    if (files.None())
+                    if (string.IsNullOrEmpty(fileName))
                     {
-                        error = $"[RagdollParams] Could not find any ragdoll files from the folder: {folder}. Using the default ragdoll.";
-                        selectedFile = GetDefaultFile(ragdollSpecies);
-                    }
-                    else if (string.IsNullOrEmpty(fileName))
-                    {
-                        // Files found, but none specified
-                        selectedFile = GetDefaultFile(ragdollSpecies);
+                        // Files found, but none specified -> Get a matching ragdoll from the specified folder.
+                        // First try to find a file that matches the default file name. If that fails, just take any file.
+                        string defaultFileName = GetDefaultFileName(ragdollSpecies);
+                        selectedFile = files.FirstOrDefault(f => f.Contains(defaultFileName, StringComparison.OrdinalIgnoreCase)) ?? files.First();
                     }
                     else
                     {
                         selectedFile = files.FirstOrDefault(f => IO.Path.GetFileNameWithoutExtension(f).Equals(fileName, StringComparison.OrdinalIgnoreCase));
                         if (selectedFile == null)
                         {
-                            error = $"[RagdollParams] Could not find a ragdoll file that matches the name {fileName}. Using the default ragdoll.";
+                            DebugConsole.ThrowError($"[RagdollParams] Could not find a ragdoll file that matches the name {fileName}. Using the default ragdoll.", contentPackage: contentPackage);
                             selectedFile = GetDefaultFile(ragdollSpecies);
                         }
-                    }
+                    }   
                 }
-                if (error != null)
-                {
-                    DebugConsole.ThrowError(error);
-                }
-            }
-            if (selectedFile == null)
-            {
-                throw new Exception("[RagdollParams] Selected file null!");
-            }
-            DebugConsole.Log($"[RagdollParams] Loading ragdoll from {selectedFile}.");
-            var characterPrefab = CharacterPrefab.Prefabs[speciesName];
-            T r = new T();
-            if (r.Load(ContentPath.FromRaw(characterPrefab.ContentPackage, selectedFile), ragdollSpecies))
-            {
-                if (!ragdolls.ContainsKey(r.Name))
-                {
-                    ragdolls.Add(r.Name, r);
-                }
-                return r;
             }
             else
             {
-                // Failing to create a ragdoll causes so many issues that cannot be handled. Dummy ragdoll just seems to make things harded to debug. It's better to fail early.
-                throw new Exception($"[RagdollParams] Failed to load ragdoll {r.Name} from {selectedFile} for the character {speciesName}.");
+                DebugConsole.ThrowError($"[RagdollParams] Invalid directory: {folder}. Using the default ragdoll.", contentPackage: contentPackage);
+                selectedFile = GetDefaultFile(ragdollSpecies);
             }
+            
+            Debug.Assert(selectedFile != null);
+            DebugConsole.Log($"[RagdollParams] Loading the ragdoll from {selectedFile}.");
+            T r = new T();
+            if (r.Load(ContentPath.FromRaw(contentPackage, selectedFile), speciesName))
+            {
+                ragdolls.TryAdd(key, r);
+            }
+            else
+            {
+                string error = $"[RagdollParams] Failed to load ragdoll {r.Name} from {selectedFile} for the character {speciesName}.";
+                if (contentPackage == GameMain.VanillaContent)
+                {
+                    // Check if the base character content package is vanilla too.
+                    CharacterPrefab characterPrefab = CharacterPrefab.FindBySpeciesName(speciesName);
+                    if (characterPrefab?.ParentPrefab == null || characterPrefab.ParentPrefab.ContentPackage == GameMain.VanillaContent)
+                    {
+                        // If the error is in the vanilla content, it's just better to crash early.
+                        // If dodging with the solution below fails, we'll also get here.
+                        throw new Exception(error);
+                    }
+                }
+                // Try to dodge crashing on modded content.
+                DebugConsole.ThrowError(error, contentPackage: contentPackage);
+                if (typeof(T) == typeof(HumanRagdollParams))
+                {
+                    Identifier fallbackSpecies = CharacterPrefab.HumanSpeciesName;
+                    r = GetRagdollParams<T>(fallbackSpecies, fallbackSpecies, file: ContentPath.FromRaw(contentPackage, "Content/Characters/Human/Ragdolls/HumanDefaultRagdoll.xml"), contentPackage: GameMain.VanillaContent);
+                }
+                else
+                {
+                    Identifier fallbackSpecies = "crawler".ToIdentifier();
+                    r = GetRagdollParams<T>(fallbackSpecies, fallbackSpecies, file: ContentPath.FromRaw(contentPackage, "Content/Characters/Crawler/Ragdolls/CrawlerDefaultRagdoll.xml"), contentPackage: GameMain.VanillaContent);
+                } 
+            }
+            return r;
         }
 
         /// <summary>
@@ -232,9 +345,9 @@ namespace Barotrauma
             instance.IsLoaded = instance.Deserialize(mainElement);
             instance.Save();
             instance.Load(contentPath, speciesName);
-            ragdolls.Add(instance.Name, instance);
+            ragdolls.Add(instance.FileNameWithoutExtension, instance);
             DebugConsole.NewMessage("[RagdollParams] New default ragdoll params successfully created at " + fullPath, Color.NavajoWhite);
-            return instance as T;
+            return instance;
         }
 
         public static void ClearCache() => allRagdolls.Clear();
@@ -248,16 +361,17 @@ namespace Barotrauma
             else
             {
                 // Update the key by removing and re-adding the ragdoll.
+                string fileName = FileNameWithoutExtension;
                 if (allRagdolls.TryGetValue(SpeciesName, out Dictionary<string, RagdollParams> ragdolls))
                 {
-                    ragdolls.Remove(Name);
+                    ragdolls.Remove(fileName);
                 }
                 base.UpdatePath(fullPath);
                 if (ragdolls != null)
                 {
-                    if (!ragdolls.ContainsKey(Name))
+                    if (!ragdolls.ContainsKey(fileName))
                     {
-                        ragdolls.Add(Name, this);
+                        ragdolls.Add(fileName, this);
                     }
                 }
             }
@@ -280,6 +394,7 @@ namespace Barotrauma
         {
             if (Load(file))
             {
+                isVariantScaleApplied = false;
                 SpeciesName = speciesName;
                 CreateColliders();
                 CreateLimbs();
@@ -396,18 +511,33 @@ namespace Barotrauma
         }
 #endif
 
-        private bool variantScaleApplied;
-        public void ApplyVariantScale(XDocument variantFile)
+        private bool isVariantScaleApplied;
+        public void TryApplyVariantScale(XDocument variantFile)
         {
-            if (variantScaleApplied) { return; }
+            if (isVariantScaleApplied) { return; }
             if (variantFile == null) { return; }
-            var scaleMultiplier = variantFile.Root.GetChildElement("ragdoll")?.GetAttributeFloat("scalemultiplier", 1f);
-            if (scaleMultiplier.HasValue)
+            if (variantFile.GetRootExcludingOverride() is XElement root)
             {
-                JointScale *= scaleMultiplier.Value;
-                LimbScale *= scaleMultiplier.Value;
+                if ((root.GetChildElement("ragdoll") ?? root.GetChildElement("ragdolls")) is XElement ragdollElement)
+                {
+                    float scaleMultiplier = ragdollElement.GetAttributeFloat("scalemultiplier", 1f);
+                    JointScale *= scaleMultiplier;
+                    LimbScale *= scaleMultiplier;
+                    float textureScale = ragdollElement.GetAttributeFloat(nameof(TextureScale), 0f);
+                    if (textureScale > 0)
+                    {
+                        // Override, if defined.
+                        TextureScale = textureScale;
+                    }
+                    float sourceRectScale = ragdollElement.GetAttributeFloat(nameof(SourceRectScale), 0f);
+                    if (sourceRectScale > 0)
+                    {
+                        // Override, if defined.
+                        SourceRectScale = sourceRectScale;
+                    }
+                }
             }
-            variantScaleApplied = true;
+            isVariantScaleApplied = true;
         }
 
         #endregion
@@ -444,7 +574,8 @@ namespace Barotrauma
         {
             if (source.MainElement == null)
             {
-                DebugConsole.ThrowError("[RagdollParams] The source XML Element of the given RagdollParams is null!");
+                DebugConsole.ThrowError("[RagdollParams] The source XML Element of the given RagdollParams is null!",
+                    contentPackage: source.MainElement?.ContentPackage);
                 return;
             }
             Deserialize(source.MainElement, alsoChildren: false);
@@ -453,7 +584,8 @@ namespace Barotrauma
             // TODO: cannot currently undo joint/limb deletion.
             if (sourceSubParams.Count != subParams.Count)
             {
-                DebugConsole.ThrowError("[RagdollParams] The count of the sub params differs! Failed to revert to the previous snapshot! Please reset the ragdoll to undo the changes.");
+                DebugConsole.ThrowError("[RagdollParams] The count of the sub params differs! Failed to revert to the previous snapshot! Please reset the ragdoll to undo the changes.",
+                    contentPackage: source.MainElement?.ContentPackage);
                 return;
             }
             for (int i = 0; i < subParams.Count; i++)
@@ -461,7 +593,8 @@ namespace Barotrauma
                 var subSubParams = subParams[i].SubParams;
                 if (subSubParams.Count != sourceSubParams[i].SubParams.Count)
                 {
-                    DebugConsole.ThrowError("[RagdollParams] The count of the sub sub params differs! Failed to revert to the previous snapshot! Please reset the ragdoll to undo the changes.");
+                    DebugConsole.ThrowError("[RagdollParams] The count of the sub sub params differs! Failed to revert to the previous snapshot! Please reset the ragdoll to undo the changes.",
+                        contentPackage: source.MainElement?.ContentPackage);
                     return;
                 }
                 subParams[i].Deserialize(sourceSubParams[i].Element, recursive: false);
@@ -542,7 +675,7 @@ namespace Barotrauma
             [Serialize(0.25f, IsPropertySaveable.Yes), Editable]
             public float Stiffness { get; set; }
 
-            [Serialize(1f, IsPropertySaveable.Yes, description: "CAUTION: Not fully implemented. Only use for limb joints that connect non-animated limbs!"), Editable]
+            [Serialize(1f, IsPropertySaveable.Yes, description: "CAUTION: Not fully implemented. Only use for limb joints that connect non-animated limbs!"), Editable(DecimalCount = 2)]
             public float Scale { get; set; }
 
             [Serialize(false, IsPropertySaveable.No), Editable(ReadOnly = true)]
@@ -593,6 +726,9 @@ namespace Barotrauma
 
             [Serialize(LimbType.None, IsPropertySaveable.Yes, description: "The limb type affects many things, like the animations. Torso or Head are considered as the main limbs. Every character should have at least one Torso or Head."), Editable()]
             public LimbType Type { get; set; }
+            
+            [Serialize(LimbType.None, IsPropertySaveable.Yes, description: "Secondary limb type to be used for generic purposes. Currently only used in climbing animations."), Editable()]
+            public LimbType SecondaryType { get; set; }
 
             /// <summary>
             /// The orientation of the sprite as drawn on the sprite sheet (in radians).
@@ -618,8 +754,11 @@ namespace Barotrauma
 
             [Serialize(false, IsPropertySaveable.Yes, description: "Disable drawing for this limb."), Editable()]
             public bool Hide { get; set; }
-
-            [Serialize(float.NaN, IsPropertySaveable.Yes, description: "The orientation of the sprite as drawn on the sprite sheet. Overrides the value defined in the Ragdoll settings."), Editable(-360, 360, ValueStep = 90, DecimalCount = 0)]
+            
+            [Serialize(float.NaN, IsPropertySaveable.Yes, description: "Orientation of the sprite as drawn on the spritesheet. " +
+                                                                       "Defines the \"forward direction\" of the sprite. Should be configured as the direction pointing outwards from the main limb." +
+                                                                       "Incorrectly defined orientations may lead to limbs being rotated incorrectly when e.g. when the character aims or flips to face a different direction. " +
+                                                                       "Overrides the value of 'Spritesheet Orientation' for this limb."), Editable(-360, 360, ValueStep = 90, DecimalCount = 0)]
             public float SpriteOrientation { get; set; }
 
             [Serialize(LimbType.None, IsPropertySaveable.Yes, description: "If set, the limb sprite will use the same sprite depth as the specified limb. Generally only useful for limbs that get added on the ragdoll on the fly (e.g. extra limbs added via gene splicing).")]
@@ -660,6 +799,12 @@ namespace Barotrauma
 
             [Serialize("0, 0", IsPropertySaveable.Yes, description: "Relative offset for the mouth position (starting from the center). Only applicable for LimbType.Head. Used for eating."), Editable(DecimalCount = 2, MinValueFloat = -10f, MaxValueFloat = 10f)]
             public Vector2 MouthPos { get; set; }
+            
+            [Serialize(50f, IsPropertySaveable.Yes, description: "How much torque is applied on the head while updating the eating animations?"), Editable]
+            public float EatTorque { get; set; }
+            
+            [Serialize(2f, IsPropertySaveable.Yes, description: "How strong a linear impulse is applied on the head while updating the eating animations?"), Editable]
+            public float EatImpulse { get; set; }
 
             [Serialize(0f, IsPropertySaveable.Yes), Editable]
             public float ConstantTorque { get; set; }
@@ -680,8 +825,11 @@ namespace Barotrauma
             [Serialize(10f, IsPropertySaveable.Yes, "How long it takes for the severed limb to fade out"), Editable(MinValueFloat = 0, MaxValueFloat = 100, ValueStep = 1)]
             public float SeveredFadeOutTime { get; set; } = 10.0f;
 
-            [Serialize(false, IsPropertySaveable.Yes, description: "Only applied when the limb is of type Tail. If none of the tails have been defined to use the angle and an angle is defined in the animation parameters, the first tail limb is used."), Editable]
+            [Serialize(false, IsPropertySaveable.Yes, description: "Should the tail angle be applied on this limb? If none of the limbs have been defined to use the angle and an angle is defined in the animation parameters, the first tail limb is used."), Editable]
             public bool ApplyTailAngle { get; set; }
+            
+            [Serialize(false, IsPropertySaveable.Yes, description: "Should this limb be moved like a tail when swimming? Always true for tail limbs. On tails, disable by setting SineFrequencyMultiplier to 0."), Editable]
+            public bool ApplySineMovement { get; set; }
 
             [Serialize(1f, IsPropertySaveable.Yes), Editable(ValueStep = 0.1f, DecimalCount = 2)]
             public float SineFrequencyMultiplier { get; set; }
@@ -738,6 +886,12 @@ namespace Barotrauma
 
             [Serialize(0.05f, IsPropertySaveable.Yes)]
             public float Restitution { get; set; }
+
+            [Serialize(true, IsPropertySaveable.Yes, description: "Can the limb enter submarines? Only valid if the ragdoll's CanEnterSubmarine is set to Partial, otherwise the limb can enter if the ragdoll can."), Editable]
+            public bool CanEnterSubmarine { get; private set; }
+
+            [Serialize(LimbType.None, IsPropertySaveable.Yes, description: "When set to something else than None, this limb will be hidden if the limb of the specified type is hidden."), Editable]
+            public LimbType InheritHiding { get; set; }
 
             public LimbParams(ContentXElement element, RagdollParams ragdoll) : base(element, ragdoll)
             {
@@ -890,14 +1044,14 @@ namespace Barotrauma
 #if CLIENT
             public DecorativeSprite DecorativeSprite { get; private set; }
 
-            public override bool Deserialize(XElement element = null, bool recursive = true)
+            public override bool Deserialize(ContentXElement element = null, bool recursive = true)
             {
                 base.Deserialize(element, recursive);
                 DecorativeSprite.SerializableProperties = SerializableProperty.DeserializeProperties(DecorativeSprite, element ?? Element);
                 return SerializableProperties != null;
             }
 
-            public override bool Serialize(XElement element = null, bool recursive = true)
+            public override bool Serialize(ContentXElement element = null, bool recursive = true)
             {
                 base.Serialize(element, recursive);
                 SerializableProperty.SerializeProperties(DecorativeSprite, element ?? Element);
@@ -985,7 +1139,8 @@ namespace Barotrauma
                             deformation = new PositionalDeformationParams(deformationElement);
                             break;
                         default:
-                            DebugConsole.ThrowError($"SpriteDeformationParams not implemented: '{typeName}'");
+                            DebugConsole.ThrowError($"SpriteDeformationParams not implemented: '{typeName}'", 
+                                contentPackage: element.ContentPackage);
                             break;
                     }
                     if (deformation != null)
@@ -1000,14 +1155,14 @@ namespace Barotrauma
 #if CLIENT
             public Dictionary<SpriteDeformationParams, XElement> Deformations { get; private set; }
 
-            public override bool Deserialize(XElement element = null, bool recursive = true)
+            public override bool Deserialize(ContentXElement element = null, bool recursive = true)
             {
                 base.Deserialize(element, recursive);
                 Deformations.ForEach(d => d.Key.SerializableProperties = SerializableProperty.DeserializeProperties(d.Key, d.Value));
                 return SerializableProperties != null;
             }
 
-            public override bool Serialize(XElement element = null, bool recursive = true)
+            public override bool Serialize(ContentXElement element = null, bool recursive = true)
             {
                 base.Serialize(element, recursive);
                 Deformations.ForEach(d => SerializableProperty.SerializeProperties(d.Key, d.Value));
@@ -1098,14 +1253,14 @@ namespace Barotrauma
             }
 
 #if CLIENT
-            public override bool Deserialize(XElement element = null, bool recursive = true)
+            public override bool Deserialize(ContentXElement element = null, bool recursive = true)
             {
                 base.Deserialize(element, recursive);
                 LightSource.Deserialize(element ?? Element);
                 return SerializableProperties != null;
             }
 
-            public override bool Serialize(XElement element = null, bool recursive = true)
+            public override bool Serialize(ContentXElement element = null, bool recursive = true)
             {
                 base.Serialize(element, recursive);
                 LightSource.Serialize(element ?? Element);
@@ -1130,14 +1285,14 @@ namespace Barotrauma
                 Attack = new Attack(element, ragdoll.SpeciesName.Value);
             }
 
-            public override bool Deserialize(XElement element = null, bool recursive = true)
+            public override bool Deserialize(ContentXElement element = null, bool recursive = true)
             {
                 base.Deserialize(element, recursive);
                 Attack.Deserialize(element ?? Element, parentDebugName: Ragdoll?.SpeciesName.ToString() ?? "null");
                 return SerializableProperties != null;
             }
 
-            public override bool Serialize(XElement element = null, bool recursive = true)
+            public override bool Serialize(ContentXElement element = null, bool recursive = true)
             {
                 base.Serialize(element, recursive);
                 Attack.Serialize(element ?? Element);
@@ -1182,14 +1337,14 @@ namespace Barotrauma
                 DamageModifier = new DamageModifier(element, ragdoll.SpeciesName.Value);
             }
 
-            public override bool Deserialize(XElement element = null, bool recursive = true)
+            public override bool Deserialize(ContentXElement element = null, bool recursive = true)
             {
                 base.Deserialize(element, recursive);
                 DamageModifier.Deserialize(element ?? Element);
                 return SerializableProperties != null;
             }
 
-            public override bool Serialize(XElement element = null, bool recursive = true)
+            public override bool Serialize(ContentXElement element = null, bool recursive = true)
             {
                 base.Serialize(element, recursive);
                 DamageModifier.Serialize(element ?? Element);
@@ -1218,7 +1373,7 @@ namespace Barotrauma
             public virtual string Name { get; set; }
             public Dictionary<Identifier, SerializableProperty> SerializableProperties { get; private set; }
             public ContentXElement Element { get; set; }
-            public XElement OriginalElement { get; protected set; }
+            public ContentXElement OriginalElement { get; protected set; }
             public List<SubParam> SubParams { get; set; } = new List<SubParam>();
             public RagdollParams Ragdoll { get; private set; }
 
@@ -1230,14 +1385,14 @@ namespace Barotrauma
             public SubParam(ContentXElement element, RagdollParams ragdoll)
             {
                 Element = element;
-                OriginalElement = new XElement(element);
+                OriginalElement = new ContentXElement(element.ContentPackage, element);
                 Ragdoll = ragdoll;
                 SerializableProperties = SerializableProperty.DeserializeProperties(this, element);
             }
 
-            public virtual bool Deserialize(XElement element = null, bool recursive = true)
+            public virtual bool Deserialize(ContentXElement element = null, bool recursive = true)
             {
-                element = element ?? Element;
+                element ??= Element;
                 SerializableProperties = SerializableProperty.DeserializeProperties(this, element);
                 if (recursive)
                 {
@@ -1246,9 +1401,9 @@ namespace Barotrauma
                 return SerializableProperties != null;
             }
 
-            public virtual bool Serialize(XElement element = null, bool recursive = true)
+            public virtual bool Serialize(ContentXElement element = null, bool recursive = true)
             {
-                element = element ?? Element;
+                element ??= Element;
                 SerializableProperty.SerializeProperties(this, element, true);
                 if (recursive)
                 {

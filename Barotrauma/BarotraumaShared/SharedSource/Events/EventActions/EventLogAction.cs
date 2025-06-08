@@ -5,15 +5,19 @@ using System.Xml.Linq;
 
 namespace Barotrauma
 {
+
+    /// <summary>
+    /// Adds an entry to the "event log" displayed in the mission tab of the tab menu.
+    /// </summary>
     partial class EventLogAction : EventAction
     {
-        [Serialize("", IsPropertySaveable.Yes)]
+        [Serialize("", IsPropertySaveable.Yes, description: "Identifier of the entry. If there's already an entry with the same id, it gets overwritten.")]
         public Identifier Id { get; set; }
 
-        [Serialize("", IsPropertySaveable.Yes)]
+        [Serialize("", IsPropertySaveable.Yes, description: "Text to add to the event log. Can be the text as-is, or a tag referring to a line in a text file.")]
         public string Text { get; set; }
 
-        [Serialize("", IsPropertySaveable.Yes)]
+        [Serialize("", IsPropertySaveable.Yes, description: "Tag of the character(s) who should see the entry. If empty, the entry is shown to everyone.")]
         public Identifier TargetTag { get; set; }
 
         public bool ShowInServerLog { get; set; }
@@ -24,7 +28,8 @@ namespace Barotrauma
         {
             if (Id == Identifier.Empty)
             {
-                DebugConsole.ThrowError($"Error in event \"{parentEvent.Prefab.Identifier}\". {nameof(EventLogAction)} with no id.");
+                DebugConsole.ThrowError($"Error in event \"{parentEvent.Prefab.Identifier}\". {nameof(EventLogAction)} with no id.",
+                    contentPackage: element.ContentPackage);
             }
             //append the target tag so logs targeted to different players don't interfere with each other even if they use the same Id
             Id = (Id.ToString() + TargetTag).ToIdentifier();
@@ -42,7 +47,8 @@ namespace Barotrauma
             {
                 if (Text.IsNullOrEmpty())
                 {
-                    DebugConsole.ThrowError($"Error in event \"{parentEvent.Prefab.Identifier}\". {nameof(EventLogAction)} with no text set ({element}).");
+                    DebugConsole.ThrowError($"Error in event \"{parentEvent.Prefab.Identifier}\". {nameof(EventLogAction)} with no text set ({element}).",
+                        contentPackage: element.ContentPackage);
                 }
                 else
                 {

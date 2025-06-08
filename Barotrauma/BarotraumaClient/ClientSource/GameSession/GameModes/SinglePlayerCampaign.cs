@@ -1,4 +1,5 @@
-﻿using Microsoft.Xna.Framework;
+﻿using Barotrauma.Extensions;
+using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -175,13 +176,11 @@ namespace Barotrauma
             if (CheatsEnabled)
             {
                 DebugConsole.CheatsEnabled = true;
-#if USE_STEAM
-                if (!SteamAchievementManager.CheatsEnabled)
+                if (!AchievementManager.CheatsEnabled)
                 {
-                    SteamAchievementManager.CheatsEnabled = true;
+                    AchievementManager.CheatsEnabled = true;
                     new GUIMessageBox("Cheats enabled", "Cheat commands have been enabled on the campaign. You will not receive Steam Achievements until you restart the game.");
                 }
-#endif
             }
 
             if (map == null)
@@ -241,11 +240,11 @@ namespace Barotrauma
             if (!savedOnStart)
             {
                 GUI.SetSavingIndicatorState(true);
-                SaveUtil.SaveGame(GameMain.GameSession.SavePath);
+                SaveUtil.SaveGame(GameMain.GameSession.DataPath, isSavingOnLoading: true);
                 savedOnStart = true;
             }
 
-            crewDead = false;
+            CrewDead = false;
             endTimer = 5.0f;
             CrewManager.InitSinglePlayerRound();
             LoadPets();
@@ -375,12 +374,12 @@ namespace Barotrauma
             SoundPlayer.OverrideMusicType = (success ? "endround" : "crewdead").ToIdentifier();
             SoundPlayer.OverrideMusicDuration = 18.0f;
             GUI.SetSavingIndicatorState(success);
-            crewDead = false;
+            CrewDead = false;
 
             if (success)
             {
                 // Event history must be registered before ending the round or it will be cleared
-                GameMain.GameSession.EventManager.RegisterEventHistory();
+                GameMain.GameSession.EventManager.StoreEventDataAtRoundEnd();
             }
             GameMain.GameSession.EndRound("", transitionType);
             var continueButton = GameMain.GameSession.RoundSummary?.ContinueButton;
@@ -449,7 +448,7 @@ namespace Barotrauma
                 if (success)
                 {
                     GameMain.GameSession.SubmarineInfo = new SubmarineInfo(GameMain.GameSession.Submarine);
-                    SaveUtil.SaveGame(GameMain.GameSession.SavePath);
+                    SaveUtil.SaveGame(GameMain.GameSession.DataPath);
                 }
                 else
                 {
@@ -480,7 +479,7 @@ namespace Barotrauma
         protected override void EndCampaignProjSpecific()
         {
             GameMain.GameSession.SubmarineInfo = new SubmarineInfo(GameMain.GameSession.Submarine);
-            SaveUtil.SaveGame(GameMain.GameSession.SavePath);
+            SaveUtil.SaveGame(GameMain.GameSession.DataPath);
             GameMain.CampaignEndScreen.Select();
             GUI.DisableHUD = false;
             GameMain.CampaignEndScreen.OnFinished = () =>
@@ -548,9 +547,12 @@ namespace Barotrauma
                 }
                 else
                 {
-                    //wasn't initially docked (sub doesn't have a docking port?)
-                    // -> choose a destination when the sub is far enough from the start outpost
-                    if (!Submarine.MainSub.AtStartExit && !Level.Loaded.StartOutpost.ExitPoints.Any())
+                    //force the map to open if the sub is somehow not at the start of the outpost level
+                    //UNLESS the level has specific exit points, in that case the sub needs to get to those
+                    if (!Submarine.MainSub.AtStartExit &&
+                        /*there should normally always be a start outpost in outpost levels,
+                         * but that might not always be the case e.g. mods or outdated saves (see #13042)*/
+                        Level.Loaded.StartOutpost is not { ExitPoints.Count: > 0 })
                     {
                         ForceMapUI = true;
                         CampaignUI.SelectTab(InteractionType.Map);
@@ -581,9 +583,12 @@ namespace Barotrauma
                 HintManager.OnAvailableTransition(transitionType);
             }
 
-            if (!crewDead)
+            if (!CrewDead)
             {
-                if (!CrewManager.GetCharacters().Any(c => !c.IsDead)) { crewDead = true; }                
+                if (CrewManager.GetCharacters().None(c => !c.IsDead && !CrewManager.IsFired(c))) 
+                { 
+                    CrewDead = true; 
+                }                
             }
             else
             {
@@ -667,7 +672,7 @@ namespace Barotrauma
             }
         }
 
-        public override void Save(XElement element)
+        public override void Save(XElement element, bool isSavingOnLoading)
         {
             XElement modeElement = new XElement("SinglePlayerCampaign",
                 new XAttribute("purchasedlostshuttles", PurchasedLostShuttles),

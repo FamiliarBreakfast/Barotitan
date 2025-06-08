@@ -1,3 +1,4 @@
+﻿using Barotrauma.Extensions;
 using Barotrauma.Items.Components;
 using Barotrauma.Networking;
 using Barotrauma.Particles;
@@ -8,8 +9,8 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
-using Barotrauma.Extensions;
 
 namespace Barotrauma
 {
@@ -27,7 +28,8 @@ namespace Barotrauma
 
         protected float lastRecvPositionUpdateTime;
 
-        private float hudInfoHeight = 100.0f;
+        private const float DefaultHudInfoHeight = 78.0f;
+        private float hudInfoHeight = DefaultHudInfoHeight;
 
         private List<CharacterSound> sounds;
         
@@ -41,6 +43,8 @@ namespace Barotrauma
             get;
             private set;
         } = true;
+
+        public bool ShowInteractionLabels { get; private set; }
 
         //the Character that the player is currently controlling
         private static Character controlled;
@@ -136,6 +140,7 @@ namespace Barotrauma
             set
             {
                 if (!MathUtils.IsValid(value)) { return; }
+                if (this != Controlled) { return; }
                 if (Screen.Selected?.Cam != null)
                 {
                     Screen.Selected.Cam.Shake = value;
@@ -235,6 +240,49 @@ namespace Barotrauma
             get { return activeObjectiveEntities; }
         }
 
+        private static readonly List<SpeechBubble> speechBubbles = new List<SpeechBubble>();
+
+        private SpeechBubble textlessSpeechBubble;
+
+        sealed class SpeechBubble
+        {
+            public float LifeTime;
+            public Vector2 PrevPosition;
+            public Vector2 Position;
+            public Vector2 DrawPosition;
+            public float MoveUpAmount;
+            public readonly RichString Text;
+            public ImmutableArray<RichTextData>? RichTextData { get; private set; }
+
+            public readonly Character Character;
+            public readonly Submarine Submarine;
+            public readonly Vector2 TextSize;
+
+            public Color Color;
+            public bool Moving;
+
+            public SpeechBubble(Character character, float lifeTime, Color color, string text = "")
+            {
+                var richStr = RichString.Rich(text);
+                Text = ToolBox.WrapText(richStr.SanitizedValue, GUI.IntScale(300), GUIStyle.SmallFont.GetFontForStr(text));
+                TextSize = GUIStyle.SmallFont.MeasureString(Text);
+                RichTextData = richStr.RichTextData;
+
+                Character = character;
+                Position = GetDesiredPosition();
+                Submarine = character.Submarine;
+                LifeTime = lifeTime;
+                Color = color;
+            }
+
+            public Vector2 GetDesiredPosition()
+            {
+                return Character.Position + Vector2.UnitY * 100;
+            }
+        }
+
+        private float pressureEffectTimer;
+
         partial void InitProjSpecific(ContentXElement mainElement)
         {
             soundTimer = Rand.Range(0.0f, Params.SoundInterval);
@@ -269,6 +317,9 @@ namespace Barotrauma
             }
         }
 
+        private readonly List<Item> previousInteractablesInRange = new();
+        private readonly List<Item> interactablesInRange = new();
+        
         private bool wasFiring;
 
         /// <summary>
@@ -283,7 +334,7 @@ namespace Barotrauma
                     if (key == null) { continue; }
                     key.Reset();
                 }
-                if (GUI.InputBlockingMenuOpen)
+                if (GUI.InputBlockingMenuOpen || ConversationAction.IsDialogOpen)
                 {
                     cursorPosition = 
                         Position + PlayerInput.MouseSpeed.ClampLength(10.0f); //apply a little bit of movement to the cursor pos to prevent AFK kicking
@@ -313,6 +364,13 @@ namespace Barotrauma
                     }
                 }
 
+                ShowInteractionLabels = keys[(int)InputType.ShowInteractionLabels].Held;
+
+                if (ShowInteractionLabels)
+                {
+                    focusedItem = InteractionLabelManager.HoveredItem;
+                }
+
                 //if we were firing (= pressing the aim and shoot keys at the same time)
                 //and the fire key is the same as Select or Use, reset the key to prevent accidentally selecting/using items
                 if (wasFiring && !keys[(int)InputType.Shoot].Held)
@@ -333,17 +391,21 @@ namespace Barotrauma
                 {
                     if (!IsProtectedFromPressure && (AnimController.CurrentHull == null || AnimController.CurrentHull.LethalPressure > 0.0f))
                     {
-                        float pressure = AnimController.CurrentHull == null ? 100.0f : AnimController.CurrentHull.LethalPressure;
-                        if (pressure > 0.0f)
+                        //wait until the character has been in pressure for one second so the zoom doesn't
+                        //"flicker" in and out if the pressure fluctuates around the minimum threshold
+                        pressureEffectTimer += deltaTime;
+                        if (pressureEffectTimer > 1.0f)
                         {
-                            //lerp in during the 1st second of the pressure timer so the zoom doesn't
-                            //"flicker" in and out if the pressure fluctuates around the minimum threshold
-                            float timerMultiplier = (PressureTimer / 100.0f);
-                            float zoomInEffectStrength = MathHelper.Clamp(pressure / 100.0f * timerMultiplier, 0.0f, 1.0f);
+                            float pressure = AnimController.CurrentHull == null ? 100.0f : AnimController.CurrentHull.LethalPressure;
+                            float zoomInEffectStrength = MathHelper.Clamp(pressure / 100.0f, 0.0f, 1.0f);
                             cam.Zoom = MathHelper.Lerp(cam.Zoom,
                                 cam.DefaultZoom + (Math.Max(pressure, 10) / 150.0f) * Rand.Range(0.9f, 1.1f),
                                 zoomInEffectStrength);
                         }
+                    }
+                    else
+                    {
+                        pressureEffectTimer = 0.0f;
                     }
 
                     if (IsHumanoid)
@@ -358,6 +420,11 @@ namespace Barotrauma
                 }
 
                 UpdateLocalCursor(cam);
+
+                if (IsKeyHit(InputType.ToggleRun))
+                {
+                    ToggleRun = !ToggleRun;
+                }
 
                 Vector2 mouseSimPos = ConvertUnits.ToSimUnits(cursorPosition);
                 if (GUI.PauseMenuOpen)
@@ -414,7 +481,7 @@ namespace Barotrauma
             if (!GUI.InputBlockingMenuOpen)
             {
                 if (SelectedItem != null &&
-                    (SelectedItem.ActiveHUDs.Any(ic => ic.GuiFrame != null && HUD.CloseHUD(ic.GuiFrame.Rect)) ||
+                    (SelectedItem.ActiveHUDs.Any(ic => ic.GuiFrame != null && ic.CloseByClickingOutsideGUIFrame && HUD.CloseHUD(ic.GuiFrame.Rect)) ||
                     ((ViewTarget as Item)?.Prefab.FocusOnSelected ?? false) && PlayerInput.KeyHit(Microsoft.Xna.Framework.Input.Keys.Escape)))
                 {
                     if (GameMain.Client != null)
@@ -486,7 +553,10 @@ namespace Barotrauma
             {
                 if (attackResult.Damage <= 1.0f) { return; }
             }
-            PlaySound(CharacterSound.SoundType.Damage, maxInterval: 2);
+            if (AIState != AIState.PlayDead)
+            {
+                PlaySound(CharacterSound.SoundType.Damage, maxInterval: 2);
+            }
         }
 
         partial void KillProjSpecific(CauseOfDeathType causeOfDeath, Affliction causeOfDeathAffliction, bool log)
@@ -501,14 +571,17 @@ namespace Barotrauma
 
                 if (GameMain.Client != null) { chatMessage += " " + TextManager.Get("DeathChatNotification"); }
 
-                GameMain.NetworkMember.RespawnManager?.ShowRespawnPromptIfNeeded();
+                RespawnManager.ShowDeathPromptIfNeeded();
 
                 GameMain.NetworkMember.AddChatMessage(chatMessage.Value, ChatMessageType.Dead);
                 GameMain.LightManager.LosEnabled = false;
                 controlled = null;
-                if (!(Screen.Selected?.Cam is null))
+                if (Screen.Selected?.Cam is Camera cam)
                 {
-                    Screen.Selected.Cam.TargetPos = Vector2.Zero;
+                    cam.TargetPos = Vector2.Zero;
+                    //briefly lock moving the camera with arrow keys
+                    //(it's annoying to have the camera fly off when you die while trying to move to safety)
+                    cam.MovementLockTimer = 2.0f;                    
                     Lights.LightManager.ViewTarget = null;
                 }
             }
@@ -521,37 +594,81 @@ namespace Barotrauma
             if (controlled == this)
             {
                 controlled = null;
-                if (!(Screen.Selected?.Cam is null))
+                if (Screen.Selected?.Cam is not null)
                 {
                     Screen.Selected.Cam.TargetPos = Vector2.Zero;
                     Lights.LightManager.ViewTarget = null;
                 }
             }
 
+            sounds.Clear();
+
             if (GameMain.GameSession?.CrewManager != null &&
                 GameMain.GameSession.CrewManager.GetCharacters().Contains(this))
             {
                 GameMain.GameSession.CrewManager.RemoveCharacter(this);
             }
-            
-            if (GameMain.Client?.Character == this) GameMain.Client.Character = null;
 
-            if (Lights.LightManager.ViewTarget == this) Lights.LightManager.ViewTarget = null;
+            if (GameMain.Client?.Character == this) { GameMain.Client.Character = null; }
+
+            if (Lights.LightManager.ViewTarget == this) { Lights.LightManager.ViewTarget = null; }
         }
 
+        private void UpdateInteractablesInRange()
+        {
+            // keep two lists to detect changes to the current state of interactables in range
+            previousInteractablesInRange.Clear();
+            previousInteractablesInRange.AddRange(interactablesInRange);
+
+            interactablesInRange.Clear();
+            
+            //use the list of visible entities if it exists
+            var entityList = Submarine.VisibleEntities ?? Item.ItemList;
+
+            foreach (MapEntity entity in entityList)
+            {
+                if (entity is not Item item) { continue; }
+
+                if (item.body != null && !item.body.Enabled) { continue; }
+
+                if (item.ParentInventory != null) { continue; }
+
+                if (item.Prefab.RequireCampaignInteract &&
+                    item.CampaignInteractionType == CampaignMode.InteractionType.None)
+                {
+                    continue;
+                }
+
+                if (Screen.Selected is SubEditorScreen { WiringMode: true } &&
+                    item.GetComponent<ConnectionPanel>() == null)
+                {
+                    continue;
+                }
+
+                if (CanInteractWith(item))
+                {
+                    interactablesInRange.Add(item);
+                }
+            }
+            
+            if (!interactablesInRange.SequenceEqual(previousInteractablesInRange))
+            {
+                InteractionLabelManager.RefreshInteractablesInRange(interactablesInRange);
+            }
+        }
 
         private readonly List<Item> debugInteractablesInRange = new List<Item>();
         private readonly List<Item> debugInteractablesAtCursor = new List<Item>();
         private readonly List<(Item item, float dist)> debugInteractablesNearCursor = new List<(Item item, float dist)>();
 
         /// <summary>
-        ///   Finds the front (lowest depth) interactable item at a position. "Interactable" in this case means that the character can "reach" the item.
+        /// Finds the front (lowest depth) interactable item at a position. "Interactable" in this case means that the character can "reach" the item.
         /// </summary>
-        /// <param name="character">The Character who is looking for the interactable item, only items that are close enough to this character are returned</param>
-        /// <param name="simPosition">The item at the simPosition, with the lowest depth, is returned</param>
-        /// <param name="allowFindingNearestItem">If this is true and an item cannot be found at simPosition then a nearest item will be returned if possible</param>
-        /// <param name="hull">If a hull is specified, only items within that hull are returned</param>
-        public Item FindItemAtPosition(Vector2 simPosition, float aimAssistModifier = 0.0f, Item[] ignoredItems = null)
+        /// <param name="itemCollection">Item collection to look in</param>
+        /// <param name="simPosition">sim position for distance comparison (such as mouse position)</param>
+        /// <param name="aimAssistModifier">aim assist modifier</param>
+        /// <returns></returns>
+        public Item FindClosestItem(List<Item> itemCollection, Vector2 simPosition, float aimAssistModifier = 0.0f)
         {
             if (Submarine != null)
             {
@@ -570,24 +687,11 @@ namespace Barotrauma
             float aimAssistAmount = SelectedItem == null ? 100.0f * aimAssistModifier : 1.0f;
 
             Vector2 displayPosition = ConvertUnits.ToDisplayUnits(simPosition);
-
-            //use the list of visible entities if it exists
-            var entityList = Submarine.VisibleEntities ?? Item.ItemList;
-
+            
             Item closestItem = null;
             float closestItemDistance = Math.Max(aimAssistAmount, 2.0f);
-            foreach (MapEntity entity in entityList)
+            foreach (var item in itemCollection)
             {
-                if (entity is not Item item)
-                {
-                    continue;
-                }
-                if (item.body != null && !item.body.Enabled) { continue; }
-                if (item.ParentInventory != null) { continue; }
-                if (ignoredItems != null && ignoredItems.Contains(item)) { continue; }
-                if (item.Prefab.RequireCampaignInteract && item.CampaignInteractionType == CampaignMode.InteractionType.None) { continue; }
-                if (Screen.Selected is SubEditorScreen editor && editor.WiringMode && item.GetComponent<ConnectionPanel>() == null) { continue; }
-
                 if (draggingItemToWorld)
                 {
                     if (item.OwnInventory == null || 
@@ -634,7 +738,7 @@ namespace Barotrauma
                         distanceToItem = 2.0f + Vector2.Distance(rectIntersectionPoint, displayPosition);
                     }
                 }
-
+                
                 if (distanceToItem > closestItemDistance) { continue; }
                 if (!CanInteractWith(item)) { continue; }
                 
@@ -651,7 +755,7 @@ namespace Barotrauma
             Character closestCharacter = null;
 
             maxDist = ConvertUnits.ToSimUnits(maxDist);
-            float closestDist = maxDist * maxDist;
+            float closestDist = maxDist;
             foreach (Character c in CharacterList)
             {
                 if (!CanInteractWith(c, checkVisibility: false) || (c.AnimController?.SimplePhysicsEnabled ?? true)) { continue; }
@@ -694,6 +798,12 @@ namespace Barotrauma
             }
             guiMessages.RemoveAll(m => m.Timer >= m.Lifetime);
 
+            if (textlessSpeechBubble != null)
+            {
+                textlessSpeechBubble.LifeTime -= deltaTime;
+                if (textlessSpeechBubble.LifeTime <= 0) { textlessSpeechBubble = null; }
+            }
+
             if (!enabled) { return; }
 
             if (!IsIncapacitated)
@@ -716,9 +826,12 @@ namespace Barotrauma
                                 PlaySound(CharacterSound.SoundType.Idle);
                             }
                             break;
+                        case AIState.PlayDead:
+                        case AIState.Freeze:
+                        case AIState.Hiding:
+                            break;
                         default:
-                            var petBehavior = enemyAI.PetBehavior;
-                            if (petBehavior != null && 
+                            if (enemyAI.PetBehavior is PetBehavior petBehavior && 
                                 (petBehavior.Happiness < petBehavior.UnhappyThreshold || petBehavior.Hunger > petBehavior.HungryThreshold))
                             {
                                 PlaySound(CharacterSound.SoundType.Unhappy);
@@ -850,7 +963,9 @@ namespace Barotrauma
                 Controlled != this &&
                 Submarine != null &&
                 Controlled.Submarine == Submarine &&
-                GameSettings.CurrentConfig.Graphics.LosMode != LosMode.None)
+                GameSettings.CurrentConfig.Graphics.LosMode != LosMode.None &&
+                //less restrictions on name tag visibility in PvP mode (always show them if the character is visible)
+                GameMain.GameSession?.GameMode is not PvPMode)
             {
                 float yPos = Controlled.AnimController.FloorY - 1.5f;
 
@@ -867,25 +982,19 @@ namespace Barotrauma
             Vector2 pos = DrawPosition;
             pos.Y += hudInfoHeight;
 
-            if (CurrentHull != null && DrawPosition.Y > CurrentHull.WorldRect.Y - 130.0f)
+            float paddingBelowCeiling = 30.0f;
+            if (CurrentHull != null && DrawPosition.Y + DefaultHudInfoHeight > CurrentHull.WorldRect.Y - paddingBelowCeiling)
             {
-                float lowerAmount = DrawPosition.Y - (CurrentHull.WorldRect.Y - 130.0f);
-                hudInfoHeight = MathHelper.Lerp(hudInfoHeight, 100.0f - lowerAmount, 0.1f);
+                float lowerAmount = (DrawPosition.Y + DefaultHudInfoHeight) - (CurrentHull.WorldRect.Y - paddingBelowCeiling);
+                hudInfoHeight = MathHelper.Lerp(hudInfoHeight, DefaultHudInfoHeight - lowerAmount, 0.1f);
                 hudInfoHeight = Math.Max(hudInfoHeight, 20.0f);
             }
             else
             {
-                hudInfoHeight = MathHelper.Lerp(hudInfoHeight, 100.0f, 0.1f);
+                hudInfoHeight = MathHelper.Lerp(hudInfoHeight, DefaultHudInfoHeight, 0.1f);
             }
 
             pos.Y = -pos.Y;
-
-            if (speechBubbleTimer > 0.0f)
-            {
-                GUIStyle.SpeechBubbleIcon.Value.Sprite.Draw(spriteBatch, pos - Vector2.UnitY * 5,
-                    speechBubbleColor * Math.Min(speechBubbleTimer, 1.0f), 0.0f,
-                    Math.Min(speechBubbleTimer, 1.0f));
-            }
 
             if (this == controlled)
             {
@@ -911,119 +1020,243 @@ namespace Barotrauma
                             ToolBox.GradientLerp(dist, GUIStyle.Red, GUIStyle.Orange, GUIStyle.Green), width: 2);
                     }
                 }
-                return;
             }
-
-            float hoverRange = 300.0f;
-            float fadeOutRange = 200.0f;
-            float cursorDist = Vector2.Distance(WorldPosition, cam.ScreenToWorld(PlayerInput.MousePosition));
-            float hudInfoAlpha = 
-                CampaignInteractionType == CampaignMode.InteractionType.None ?
-                MathHelper.Clamp(1.0f - (cursorDist - (hoverRange - fadeOutRange)) / fadeOutRange, 0.2f, 1.0f) :
-                1.0f;
-            
-            if (!GUI.DisableCharacterNames && hudInfoVisible &&
-                (controlled == null || this != controlled.FocusedCharacter || IsPet) && cam.Zoom > 0.4f)
+            else
             {
-                if (info != null)
+
+                float hoverRange = 300.0f;
+                float fadeOutRange = 200.0f;
+                float cursorDist = Vector2.Distance(WorldPosition, cam.ScreenToWorld(PlayerInput.MousePosition));
+                float hudInfoAlpha =
+                    CampaignInteractionType == CampaignMode.InteractionType.None ?
+                    MathHelper.Clamp(1.0f - (cursorDist - (hoverRange - fadeOutRange)) / fadeOutRange, 0.2f, 1.0f) :
+                    1.0f;
+                //full name tag visibility in PvP mode to make it easier to tell who's an enemy
+                float nameTextAlpha = GameMain.GameSession?.GameMode is PvPMode ? 1.0f : hudInfoAlpha;
+
+                if (!GUI.DisableCharacterNames && hudInfoVisible &&
+                    (controlled == null || this != controlled.FocusedCharacter || IsPet) && cam.Zoom > 0.4f)
                 {
-                    LocalizedString name = Info.DisplayName;
-                    if (controlled == null && name != Info.Name) 
-                    { 
-                        name += " " + TextManager.Get("Disguised"); 
-                    }
-                    else if (Info.Title != null && TeamID != CharacterTeamType.Team1)
+                    if (info != null)
                     {
-                        name += '\n' + Info.Title;
-                    }
-
-                    Vector2 nameSize = GUIStyle.Font.MeasureString(name);
-                    Vector2 namePos = new Vector2(pos.X, pos.Y - 10.0f - (5.0f / cam.Zoom)) - nameSize * 0.5f / cam.Zoom;
-                    Color nameColor = GetNameColor();
-
-                    Vector2 screenSize = new Vector2(GameMain.GraphicsWidth, GameMain.GraphicsHeight);
-            	    Vector2 viewportSize = new Vector2(cam.WorldView.Width, cam.WorldView.Height);
-                    namePos.X -= cam.WorldView.X; namePos.Y += cam.WorldView.Y;
-            	    namePos *= screenSize / viewportSize;
-            	    namePos.X = (float)Math.Floor(namePos.X); namePos.Y = (float)Math.Floor(namePos.Y);
-            	    namePos *= viewportSize / screenSize;
-            	    namePos.X += cam.WorldView.X; namePos.Y -= cam.WorldView.Y;
-
-                    if (CampaignInteractionType != CampaignMode.InteractionType.None && AllowCustomInteract)
-                    {
-                        var iconStyle = GUIStyle.GetComponentStyle("CampaignInteractionBubble." + CampaignInteractionType);
-                        if (iconStyle != null)
+                        LocalizedString name = Info.DisplayName;
+                        if (controlled == null && name != Info.Name)
                         {
-                            Vector2 headPos = AnimController.GetLimb(LimbType.Head)?.body?.DrawPosition ?? DrawPosition + Vector2.UnitY * 100.0f;
-                            Vector2 iconPos = headPos;
-                            iconPos.Y = -iconPos.Y;
-                            nameColor = iconStyle.Color;
-                            var icon = iconStyle.Sprites[GUIComponent.ComponentState.None].First();
-                            float iconScale = (30.0f / icon.Sprite.size.X / cam.Zoom) * GUI.Scale;
-                            icon.Sprite.Draw(spriteBatch, iconPos + new Vector2(-35.0f, -25.0f), iconStyle.Color * hudInfoAlpha, scale: iconScale);
+                            name += " " + TextManager.Get("Disguised");
+                        }
+                        else if (Info.Title != null && TeamID != CharacterTeamType.Team1)
+                        {
+                            name += '\n' + Info.Title;
+                        }
+
+                        Vector2 nameSize = GUIStyle.Font.MeasureString(name);
+                        Vector2 namePos = new Vector2(pos.X, pos.Y - 5.0f - (5.0f / cam.Zoom)) - nameSize * 0.5f / cam.Zoom;
+                        Color nameColor = GetNameColor();
+
+                        Vector2 screenSize = new Vector2(GameMain.GraphicsWidth, GameMain.GraphicsHeight);
+                        Vector2 viewportSize = new Vector2(cam.WorldView.Width, cam.WorldView.Height);
+                        namePos.X -= cam.WorldView.X; namePos.Y += cam.WorldView.Y;
+                        namePos *= screenSize / viewportSize;
+                        namePos.X = (float)Math.Floor(namePos.X); namePos.Y = (float)Math.Floor(namePos.Y);
+                        namePos *= viewportSize / screenSize;
+                        namePos.X += cam.WorldView.X; namePos.Y -= cam.WorldView.Y;
+
+                        if (CampaignInteractionType != CampaignMode.InteractionType.None && AllowCustomInteract)
+                        {
+                            var iconStyle = GUIStyle.GetComponentStyle("CampaignInteractionBubble." + CampaignInteractionType);
+                            if (iconStyle != null)
+                            {
+                                Vector2 headPos = AnimController.GetLimb(LimbType.Head)?.body?.DrawPosition ?? DrawPosition + Vector2.UnitY * 100.0f;
+                                Vector2 iconPos = headPos;
+                                iconPos.Y = -iconPos.Y;
+                                nameColor = iconStyle.Color;
+                                var icon = iconStyle.Sprites[GUIComponent.ComponentState.None].First();
+                                float iconScale = (30.0f / icon.Sprite.size.X / cam.Zoom) * GUI.Scale;
+                                icon.Sprite.Draw(spriteBatch, iconPos + new Vector2(-35.0f, -25.0f), iconStyle.Color * hudInfoAlpha, scale: iconScale);
+                            }
+                        }
+
+                        GUIStyle.Font.DrawString(spriteBatch, name, namePos + new Vector2(1.0f / cam.Zoom, 1.0f / cam.Zoom), Color.Black, 0.0f, Vector2.Zero, 1.0f / cam.Zoom, SpriteEffects.None, 0.001f);
+                        GUIStyle.Font.DrawString(spriteBatch, name, namePos, nameColor * nameTextAlpha, 0.0f, Vector2.Zero, 1.0f / cam.Zoom, SpriteEffects.None, 0.0f);
+                        if (GameMain.DebugDraw)
+                        {
+                            GUIStyle.Font.DrawString(spriteBatch, ID.ToString(), namePos - new Vector2(0.0f, 20.0f), Color.White);
                         }
                     }
 
-                    GUIStyle.Font.DrawString(spriteBatch, name, namePos + new Vector2(1.0f / cam.Zoom, 1.0f / cam.Zoom), Color.Black, 0.0f, Vector2.Zero, 1.0f / cam.Zoom, SpriteEffects.None, 0.001f);
-                    GUIStyle.Font.DrawString(spriteBatch, name, namePos, nameColor * hudInfoAlpha, 0.0f, Vector2.Zero, 1.0f / cam.Zoom, SpriteEffects.None, 0.0f);
-                    if (GameMain.DebugDraw)
+                    var petBehavior = (AIController as EnemyAIController)?.PetBehavior;
+                    if (petBehavior != null && !IsDead && !IsUnconscious)
                     {
-                        GUIStyle.Font.DrawString(spriteBatch, ID.ToString(), namePos - new Vector2(0.0f, 20.0f), Color.White);
+                        var petStatus = petBehavior.GetCurrentStatusIndicatorType();
+                        if (petStatus != PetBehavior.StatusIndicatorType.None)
+                        {
+                            var iconStyle = GUIStyle.GetComponentStyle("PetIcon." + petStatus);
+                            if (iconStyle != null)
+                            {
+                                Vector2 headPos = AnimController.GetLimb(LimbType.Head)?.body?.DrawPosition ?? DrawPosition + Vector2.UnitY * 100.0f;
+                                Vector2 iconPos = headPos;
+                                iconPos.Y = -iconPos.Y;
+                                var icon = iconStyle.Sprites[GUIComponent.ComponentState.None].First();
+                                float iconScale = 30.0f / icon.Sprite.size.X / cam.Zoom;
+                                icon.Sprite.Draw(spriteBatch, iconPos + new Vector2(-35.0f, -25.0f), iconStyle.Color * hudInfoAlpha, scale: iconScale);
+                            }   
+                        }
                     }
                 }
-                
-                var petBehavior = (AIController as EnemyAIController)?.PetBehavior;
-                if (petBehavior != null && !IsDead && !IsUnconscious)
+
+                if (IsDead) { return; }
+
+                var healthBarMode = GameMain.NetworkMember?.ServerSettings.ShowEnemyHealthBars ?? GameSettings.CurrentConfig.ShowEnemyHealthBars;
+                if (healthBarMode != EnemyHealthBarMode.ShowAll)
                 {
-                    var petStatus = petBehavior.GetCurrentStatusIndicatorType();
-                    var iconStyle = GUIStyle.GetComponentStyle("PetIcon." + petStatus);
-                    if (iconStyle != null)
+                    if (Controlled == null)
                     {
-                        Vector2 headPos = AnimController.GetLimb(LimbType.Head)?.body?.DrawPosition ?? DrawPosition + Vector2.UnitY * 100.0f;
-                        Vector2 iconPos = headPos;
-                        iconPos.Y = -iconPos.Y;
-                        var icon = iconStyle.Sprites[GUIComponent.ComponentState.None].First();
-                        float iconScale = 30.0f / icon.Sprite.size.X / cam.Zoom;
-                        icon.Sprite.Draw(spriteBatch, iconPos + new Vector2(-35.0f, -25.0f), iconStyle.Color * hudInfoAlpha, scale: iconScale);
+                        if (!IsOnPlayerTeam) { return; }
                     }
+                    else
+                    {
+                        if (!HumanAIController.IsFriendly(Controlled, this) ||
+                            (AIController is HumanAIController humanAi && humanAi.ObjectiveManager.CurrentObjective is AIObjectiveCombat combatObjective && HumanAIController.IsFriendly(Controlled, combatObjective.Enemy)))
+                        {
+                            return;
+                        }
+                    }
+                }
+
+                if (Params.ShowHealthBar && CharacterHealth.DisplayedVitality < MaxVitality * 0.98f && hudInfoVisible && AIState != AIState.PlayDead && AIState != AIState.Hiding)
+                {
+                    hudInfoAlpha = Math.Max(hudInfoAlpha, Math.Min(CharacterHealth.DamageOverlayTimer, 1.0f));
+
+                    Vector2 healthBarPos = new Vector2(pos.X - 50, -pos.Y);
+                    GUI.DrawProgressBar(spriteBatch, healthBarPos, new Vector2(100.0f, 15.0f),
+                        CharacterHealth.DisplayedVitality / MaxVitality,
+                        Color.Lerp(GUIStyle.Red, GUIStyle.Green, CharacterHealth.DisplayedVitality / MaxVitality) * 0.8f * hudInfoAlpha,
+                        new Color(0.5f, 0.57f, 0.6f, 1.0f) * hudInfoAlpha);
                 }
             }
 
-            if (IsDead) { return; }
-
-            var healthBarMode = GameMain.NetworkMember?.ServerSettings.ShowEnemyHealthBars ?? GameSettings.CurrentConfig.ShowEnemyHealthBars;
-            if (healthBarMode != EnemyHealthBarMode.ShowAll)
+            if (textlessSpeechBubble != null)
             {
-                if (Controlled == null)
+                Vector2 iconPos = pos - Vector2.UnitY * 5;
+           
+                GUIStyle.SpeechBubbleIcon.Value.Sprite.Draw(spriteBatch, iconPos,
+                    textlessSpeechBubble.Color * Math.Min(textlessSpeechBubble.LifeTime, 1.0f), 0.0f,
+                    Math.Min(textlessSpeechBubble.LifeTime, 1.0f));
+            }
+        }
+
+        public void ShowSpeechBubble(Color color, string text)
+        {
+            if (!GameSettings.CurrentConfig.ChatSpeechBubbles)
+            {
+                ShowTextlessSpeechBubble(1.0f, color);
+                return;
+            }
+            float duration = MathHelper.Lerp(1.0f, 8.0f, Math.Min(text.Length / 100.0f, 1.0f));
+            speechBubbles.Add(new SpeechBubble(this, duration, color, text));
+            textlessSpeechBubble = null;
+        }
+
+        public void ShowTextlessSpeechBubble(float duration, Color color)
+        {
+            if (speechBubbles.Any(sb => sb.Character == this)) { return; }
+            if (textlessSpeechBubble == null)
+            {
+                textlessSpeechBubble = new SpeechBubble(this, duration, color);
+            }
+            else
+            {
+                textlessSpeechBubble.Color = color;
+                textlessSpeechBubble.LifeTime = Math.Max(textlessSpeechBubble.LifeTime, duration);
+            }
+        }
+
+        public static void DrawSpeechBubbles(SpriteBatch spriteBatch, Camera cam)
+        {
+            spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.NonPremultiplied, SamplerState.LinearWrap, DepthStencilState.None, null, null, cam.Transform);
+            foreach (var bubble in speechBubbles)
+            {
+                Vector2 iconPos = Timing.Interpolate(bubble.PrevPosition, bubble.Position);
+                iconPos += Vector2.UnitY * bubble.MoveUpAmount;
+                if (bubble.Submarine != null)
                 {
-                    if (!IsOnPlayerTeam) { return; }
+                    iconPos += bubble.Submarine.DrawPosition;
                 }
-                else
+
+                float alpha = 1.0f;
+                float mouseDist = Vector2.Distance(cam.WorldToScreen(iconPos), PlayerInput.MousePosition);
+                //treat the size of the bubble from corner to corner as the 
+                float textSize = bubble.TextSize.Length();
+                if (mouseDist < textSize)
                 {
-                    if (!HumanAIController.IsFriendly(Controlled, this) || 
-                        (AIController is HumanAIController humanAi && humanAi.ObjectiveManager.CurrentObjective is AIObjectiveCombat combatObjective && HumanAIController.IsFriendly(Controlled, combatObjective.Enemy))) 
-                    { 
-                        return; 
+                    alpha *= Math.Max(mouseDist / textSize, 0.5f);
+                }
+
+                iconPos.Y = -iconPos.Y;
+                if (GUIStyle.SpeechBubbleIconSliced.Value is { } speechBubbleIconSliced)
+                {
+                    Vector2 bubbleSize = bubble.TextSize + Vector2.One * GUI.IntScale(15);
+                    speechBubbleIconSliced.Draw(spriteBatch, new RectangleF(iconPos - bubbleSize / 2, bubbleSize), bubble.Color * Math.Min(bubble.LifeTime, 1.0f) * alpha);
+                }
+                GUI.DrawStringWithColors(spriteBatch, iconPos - bubble.TextSize / 2, bubble.Text.SanitizedValue, bubble.Color * Math.Min(bubble.LifeTime, 1.0f) * alpha, bubble.RichTextData, font: GUIStyle.SmallFont);
+            }
+            spriteBatch.End();
+        }
+
+        static partial void UpdateSpeechBubbles(float deltaTime)
+        {
+            for (int i = speechBubbles.Count - 1; i >= 0; i--)
+            {
+                var bubble = speechBubbles[i];
+                bubble.LifeTime -= deltaTime;
+                if (bubble.LifeTime <= 0 || bubble.Character is { Removed: true })
+                {
+                    speechBubbles.RemoveAt(i);
+                    continue;
+                }
+
+                bubble.PrevPosition = bubble.Position;
+
+                Vector2 desiredPos = bubble.GetDesiredPosition();
+                Vector2 diff = desiredPos - bubble.Position;
+                float dist = diff.Length();
+                //how far the bubble needs to be from the desired position to start moving
+                const float MoveThreshold = 100.0f;
+                const float MaxSpeed = 1000.0f;
+                if (dist < 1)
+                {
+                    bubble.Moving = false;
+                }
+                else if (dist > MoveThreshold || bubble.Moving)
+                {
+                    Vector2 moveAmount = diff / dist * MathHelper.Clamp(dist * 5, 0, MaxSpeed) * deltaTime;
+                    //slower vertical movement (don't want to interfere too much with the bubbles floating up
+                    //and the overlap prevention which works vertically)
+                    moveAmount.Y *= 0.1f;
+                    bubble.Position += moveAmount;
+                    bubble.Moving = true;
+                }
+
+                bubble.MoveUpAmount += deltaTime * 5.0f;
+                //go through the newer bubbles, move this one out of the way if one is overlapping
+                for (int j = i + 1; j < speechBubbles.Count; j++)
+                {
+                    var otherBubble = speechBubbles[j];
+                    {
+                        if (Math.Abs(bubble.Position.X - otherBubble.Position.X) < (bubble.TextSize.X + otherBubble.TextSize.X) / 2 &&
+                            Math.Abs(bubble.Position.Y - otherBubble.Position.Y) < (bubble.TextSize.Y + otherBubble.TextSize.Y) / 2 + 10)
+                        {
+                            bubble.Position += Vector2.UnitY * deltaTime * 50.0f;
+                        }
                     }
                 }
-            }
-
-            if (Params.ShowHealthBar && CharacterHealth.DisplayedVitality < MaxVitality * 0.98f && hudInfoVisible)
-            {
-                hudInfoAlpha = Math.Max(hudInfoAlpha, Math.Min(CharacterHealth.DamageOverlayTimer, 1.0f));
-
-                Vector2 healthBarPos = new Vector2(pos.X - 50, -pos.Y);
-                GUI.DrawProgressBar(spriteBatch, healthBarPos, new Vector2(100.0f, 15.0f),
-                    CharacterHealth.DisplayedVitality / MaxVitality,
-                    Color.Lerp(GUIStyle.Red, GUIStyle.Green, CharacterHealth.DisplayedVitality / MaxVitality) * 0.8f * hudInfoAlpha,
-                    new Color(0.5f, 0.57f, 0.6f, 1.0f) * hudInfoAlpha);
             }
         }
 
         public Color GetNameColor()
         {
             CharacterTeamType team = teamID;
-            if (Info?.IsDisguisedAsAnother != null)
+            if (Info is { IsDisguisedAsAnother: true })
             {
                 var idCard = Inventory.GetItemInLimbSlot(InvSlotType.Card)?.GetComponent<IdCard>();
                 if (idCard != null)
@@ -1039,18 +1272,22 @@ namespace Barotrauma
                 }
             }
 
+            CharacterTeamType myTeam = 
+                Controlled?.TeamID ?? 
+                GameMain.Client?.MyClient?.TeamID ??
+                CharacterTeamType.Team1;
+
             Color nameColor = GUIStyle.TextColorNormal;
-            if (Controlled != null && team != Controlled.TeamID)
+            if (TeamID == CharacterTeamType.FriendlyNPC)
             {
-                if (TeamID == CharacterTeamType.FriendlyNPC)
-                {
-                    nameColor = UniqueNameColor ?? Color.SkyBlue;
-                }
-                else
-                {
-                    nameColor = GUIStyle.Red;
-                }
+                nameColor = UniqueNameColor ?? Color.SkyBlue;
             }
+            else if (team != myTeam)
+            {
+                //opposing team is red when controlling a character
+                nameColor = GUIStyle.Red;
+            }
+
             return nameColor;
         }
 
@@ -1207,7 +1444,10 @@ namespace Barotrauma
 
         partial void OnTalentGiven(TalentPrefab talentPrefab)
         {
-            AddMessage(TextManager.Get("talentname." + talentPrefab.Identifier).Value, GUIStyle.Yellow, playSound: this == Controlled);
+            if (!talentPrefab.IsHiddenExtraTalent)
+            {
+                AddMessage(TextManager.Get("talentname." + talentPrefab.Identifier).Value, GUIStyle.Yellow, playSound: this == Controlled);
+            }
         }
     }
 }

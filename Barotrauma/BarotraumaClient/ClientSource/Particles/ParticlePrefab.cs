@@ -10,6 +10,7 @@ namespace Barotrauma.Particles
     {
         public static readonly PrefabCollection<ParticlePrefab> Prefabs = new PrefabCollection<ParticlePrefab>();
 
+        [Flags]
         public enum DrawTargetType { Air = 1, Water = 2, Both = 3 }
 
         public readonly List<Sprite> Sprites;
@@ -132,6 +133,9 @@ namespace Barotrauma.Particles
             }
         }
 
+        [Editable, Serialize(true, IsPropertySaveable.No, description: "Is the particle considered to be inside a submarine if it spawns at a position inside a hull (causing it to move with the sub)?")]
+        public bool CanEnterSubs { get; private set; }
+
         [Editable(0.0f, 10000.0f), Serialize(0.0f, IsPropertySaveable.No, description: "Radius of the particle's collider. Only has an effect if UseCollision is set to true.")]
         public float CollisionRadius { get; private set; }
 
@@ -148,15 +152,15 @@ namespace Barotrauma.Particles
         public float Friction { get; private set; }
 
         [Editable(0.0f, 1.0f)]
-        [Serialize(0.5f, IsPropertySaveable.No, description: "How much of the particle's velocity is conserved when it collides with something, i.e. the \"bounciness\" of the particle. (1.0 = the particle stops completely).")]
+        [Serialize(0.5f, IsPropertySaveable.No, description: "How much of the particle's velocity is conserved when it collides with something, i.e. the \"bounciness\" of the particle. (0.0 = the particle stops completely).")]
         public float Restitution { get; private set; }
 
         //size -----------------------------------------
 
-        [Editable, Serialize("1.0,1.0", IsPropertySaveable.No, description: "The minimum initial size of the particle.")]
+        [Editable(DecimalCount = 3), Serialize("1.0,1.0", IsPropertySaveable.No, description: "The minimum initial size of the particle.")]
         public Vector2 StartSizeMin { get; private set; }
 
-        [Editable, Serialize("1.0,1.0", IsPropertySaveable.No, description: "The maximum initial size of the particle.")]
+        [Editable(DecimalCount = 3), Serialize("1.0,1.0", IsPropertySaveable.No, description: "The maximum initial size of the particle.")]
         public Vector2 StartSizeMax { get; private set; }
         
         [Editable, Serialize("0.0,0.0", IsPropertySaveable.No, description: "How much the size of the particle changes per second. The rate of growth for each particle is randomize between SizeChangeMin and SizeChangeMax.")]
@@ -185,8 +189,8 @@ namespace Barotrauma.Particles
         [Editable, Serialize(DrawTargetType.Air, IsPropertySaveable.No, description: "Should the particle be rendered in air, water or both.")]
         public DrawTargetType DrawTarget { get; private set; }
 
-        [Editable, Serialize(false, IsPropertySaveable.No, description: "Should the particle be always rendered on top of entities?")]
-        public bool DrawOnTop { get; private set; }
+        [Editable, Serialize(ParticleDrawOrder.Default, IsPropertySaveable.No, description: "Should the particle be always forced to render on top of entities or behind everything?")]
+        public ParticleDrawOrder DrawOrder { get; private set; }
 
         [Editable, Serialize(false, IsPropertySaveable.No, description: "Draw the particle even when it's calculated to be outside of view (the formula doesn't take scales into account). ")]
         public bool DrawAlways { get; private set; }
@@ -223,6 +227,16 @@ namespace Barotrauma.Particles
 
             SerializableProperties = SerializableProperty.DeserializeProperties(this, element);
 
+            //backwards compatibility
+            if (element.GetAttributeBool("drawontop", false))
+            {
+                DrawOrder = ParticleDrawOrder.Foreground;
+            }
+            if (BlendState == ParticleBlendState.Additive && DrawOrder == ParticleDrawOrder.Background)
+            {
+                DebugConsole.AddWarning($"Error in particle prefab {Identifier}: additive particles cannot be rendered in the background.");
+            }
+
             foreach (var subElement in element.Elements())
             {
                 switch (subElement.Name.ToString().ToLowerInvariant())
@@ -244,7 +258,8 @@ namespace Barotrauma.Particles
 
             if (Sprites.Count == 0)
             {
-                DebugConsole.ThrowError($"Particle prefab \"{Name}\" in the file \"{file}\" has no sprites defined!");
+                DebugConsole.ThrowError($"Particle prefab \"{Name}\" in the file \"{file}\" has no sprites defined!",
+                    contentPackage: element.ContentPackage);
             }
 
             //if velocity change in water is not given, it defaults to the normal velocity change

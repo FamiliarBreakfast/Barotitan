@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 using Barotrauma.Extensions;
 using Barotrauma.Networking;
@@ -224,7 +224,8 @@ namespace Barotrauma
                 var selectedTraitor = SelectRandomTraitor();
                 if (selectedTraitor == null)
                 {
-                    DebugConsole.ThrowError($"Could not find a suitable traitor for the event \"{selectedPrefab.Identifier}\".");
+                    DebugConsole.ThrowError($"Could not find a suitable traitor for the event \"{selectedPrefab.Identifier}\".",
+                        contentPackage: selectedPrefab.ContentPackage);
                     return false;
                 }
                 CreateTraitorEvent(eventManager, selectedPrefab, selectedTraitor);
@@ -262,8 +263,9 @@ namespace Barotrauma
             if (amountToChoose > viableTraitors.Count)
             {
                 DebugConsole.ThrowError(
-                    $"Error in traitor event {traitorEvent.Prefab.Identifier}. Not enough players to choose {amountToChoose} secondary traitors."+
-                    $"Make sure the {nameof(traitorEvent.Prefab.MinPlayerCount)} of the event is high enough to support to desired amount of secondary traitors.");
+                    $"Error in traitor event {traitorEvent.Prefab.Identifier}. Not enough players to choose {amountToChoose} secondary traitors. " +
+                    $"Make sure the {nameof(traitorEvent.Prefab.MinPlayerCount)} of the event is high enough to support to desired amount of secondary traitors.",
+                        contentPackage: traitorEvent.Prefab.ContentPackage);
                 amountToChoose = viableTraitors.Count;
             }
 
@@ -271,8 +273,11 @@ namespace Barotrauma
             for (int i = 0; i < amountToChoose; i++)
             {
                 var traitor = viableTraitors.GetRandomUnsynced();
-                viableTraitors.Remove(traitor);
-                traitors.Add(traitor);
+                if (traitor != null)
+                {
+                    viableTraitors.Remove(traitor);
+                    traitors.Add(traitor);
+                }
             }
             return traitors;
         }
@@ -332,7 +337,7 @@ namespace Barotrauma
 
         private void CreateTraitorEvent(EventManager eventManager, TraitorEventPrefab selectedPrefab, Client traitor) 
         {
-            if (selectedPrefab.TryCreateInstance<TraitorEvent>(out var newEvent))
+            if (selectedPrefab.TryCreateInstance<TraitorEvent>(eventManager.RandomSeed, out var newEvent))
             {
                 var secondaryTraitors = SelectSecondaryTraitors(newEvent, traitor);
 
@@ -352,7 +357,8 @@ namespace Barotrauma
             }
             else
             {
-                DebugConsole.ThrowError($"Failed to create an instance of the traitor event prefab \"{selectedPrefab.Identifier}\"!");
+                DebugConsole.ThrowError($"Failed to create an instance of the traitor event prefab \"{selectedPrefab.Identifier}\"!",
+                    contentPackage: selectedPrefab.ContentPackage);
             }
         }
 
@@ -365,7 +371,8 @@ namespace Barotrauma
             var traitor = SelectRandomTraitor();
             if (traitor == null)
             {
-                DebugConsole.ThrowError($"Could not find a suitable traitor for the event \"{traitorEventPrefab.Identifier}\".");
+                DebugConsole.ThrowError($"Could not find a suitable traitor for the event \"{traitorEventPrefab.Identifier}\".",
+                    contentPackage: traitorEventPrefab.ContentPackage);
                 return;
             }
             CreateTraitorEvent(eventManager, traitorEventPrefab, traitor);
@@ -384,7 +391,7 @@ namespace Barotrauma
             {
                 if (level?.LevelData is { Type: LevelData.LevelType.LocationConnection })
                 {
-                    if (Submarine.MainSub.WorldPosition.X > level.Size.X / 2)
+                    if (Submarine.MainSub != null && Submarine.MainSub.WorldPosition.X > level.Size.X / 2)
                     {
                         //try starting ASAP if the submarine is already half-way through the level
                         //(brief delay regardless, because otherwise we might retry every frame if finding a suitable event fails below)
@@ -451,6 +458,15 @@ namespace Barotrauma
                     activeEvent.TraitorEvent.Prefab,
                     activeEvent.TraitorEvent.CurrentState,
                     activeEvent.Traitor));
+
+                if (activeEvent.TraitorEvent.CurrentState == TraitorEvent.State.Completed)
+                {
+                    AchievementManager.OnTraitorWin(activeEvent.TraitorEvent.Traitor?.Character);
+                    foreach (var secondaryTraitor in activeEvent.TraitorEvent.SecondaryTraitors)
+                    {
+                        AchievementManager.OnTraitorWin(secondaryTraitor?.Character);
+                    }
+                }
             }
             if (previousTraitorEvents.Count > MaxPreviousEventHistory)
             {

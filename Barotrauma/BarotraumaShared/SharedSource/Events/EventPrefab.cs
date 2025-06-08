@@ -1,4 +1,6 @@
-﻿using System;
+﻿using Barotrauma.Extensions;
+using System;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
 
@@ -10,16 +12,61 @@ namespace Barotrauma
 
         public readonly ContentXElement ConfigElement;
         public readonly Type EventType;
+
+        private readonly ImmutableHashSet<Identifier> tags;
+        public ImmutableHashSet<Identifier> Tags => tags;
+
+        /// <summary>
+        /// The probability for the event to do something if it gets selected. For example, the probability for a MonsterEvent to spawn the monster(s).
+        /// </summary>
         public readonly float Probability;
+
+        /// <summary>
+        /// When this event occurs, should it trigger the event cooldown during which no new events are triggered?
+        /// </summary>
         public readonly bool TriggerEventCooldown;
+
+        /// <summary>
+        /// The commonness of the event (i.e. how likely it is for this specific event to be chosen from the event set it's configured in). 
+        /// Only valid if the event set is configured to choose a random event (as opposed to just executing all the events in the set).
+        /// </summary>
         public readonly float Commonness;
+
+        /// <summary>
+        /// If set, the event set can only be chosen in this biome.
+        /// </summary>
         public readonly Identifier BiomeIdentifier;
+
+        /// <summary>
+        /// If set, this layer must be present somewhere in the level.
+        /// </summary>
+        public readonly Identifier RequiredLayer;
+
+        /// <summary>
+        /// If set, this spawn point tag must be present somewhere in the level.
+        /// </summary>
+        public readonly Identifier RequiredSpawnPointTag;
+
+        /// <summary>
+        /// If set, the event set can only be chosen in locations that belong to this faction.
+        /// </summary>
         public readonly Identifier Faction;
 
         public readonly LocalizedString Name;
 
+        /// <summary>
+        /// If set, this event is used as an event that can unlock a path to the next biome.
+        /// </summary>
         public readonly bool UnlockPathEvent;
+
+        /// <summary>
+        /// Only valid if UnlockPathEvent is set to true. The tooltip displayed on the pathway this event is blocking.
+        /// </summary>
         public readonly string UnlockPathTooltip;
+
+        /// <summary>
+        /// Only valid if UnlockPathEvent is set to true. The reputation requirement displayed on the pathway this event is blocking.
+        /// </summary>
         public readonly int UnlockPathReputation;
 
         public static EventPrefab Create(ContentXElement element, RandomEventsFile file, Identifier fallbackIdentifier = default)
@@ -44,40 +91,46 @@ namespace Barotrauma
                 EventType = Type.GetType("Barotrauma." + ConfigElement.Name, true, true);
                 if (EventType == null)
                 {
-                    DebugConsole.ThrowError("Could not find an event class of the type \"" + ConfigElement.Name + "\".");
+                    DebugConsole.ThrowError("Could not find an event class of the type \"" + ConfigElement.Name + "\".",
+                        contentPackage: element.ContentPackage);
                 }
             }
             catch
             {
-                DebugConsole.ThrowError("Could not find an event class of the type \"" + ConfigElement.Name + "\".");
+                DebugConsole.ThrowError("Could not find an event class of the type \"" + ConfigElement.Name + "\".",
+                    contentPackage: element.ContentPackage);
             }
 
             Name = TextManager.Get($"eventname.{Identifier}").Fallback(Identifier.ToString());
 
+            tags = ConfigElement.GetAttributeIdentifierImmutableHashSet(nameof(tags), ImmutableHashSet<Identifier>.Empty);
             BiomeIdentifier = ConfigElement.GetAttributeIdentifier("biome", Identifier.Empty);
             Faction = ConfigElement.GetAttributeIdentifier("faction", Identifier.Empty);
             Commonness = element.GetAttributeFloat("commonness", 1.0f);
             Probability = Math.Clamp(element.GetAttributeFloat(1.0f, "probability", "spawnprobability"), 0, 1);
             TriggerEventCooldown = element.GetAttributeBool("triggereventcooldown", EventType != typeof(ScriptedEvent));
 
+            RequiredLayer = element.GetAttributeIdentifier(nameof(RequiredLayer), Identifier.Empty);
+            RequiredSpawnPointTag = element.GetAttributeIdentifier(nameof(RequiredSpawnPointTag), Identifier.Empty);
+
             UnlockPathEvent = element.GetAttributeBool("unlockpathevent", false);
             UnlockPathTooltip = element.GetAttributeString("unlockpathtooltip", "lockedpathtooltip");
             UnlockPathReputation = element.GetAttributeInt("unlockpathreputation", 0);
         }
 
-        public bool TryCreateInstance<T>(out T instance) where T : Event
+        public bool TryCreateInstance<T>(int seed, out T instance) where T : Event
         {
-            instance = CreateInstance() as T;
+            instance = CreateInstance(seed) as T;
             return instance is not null;
         }
 
-        public Event CreateInstance()
+        public Event CreateInstance(int seed)
         {
-            ConstructorInfo constructor = EventType.GetConstructor(new[] { GetType() });
+            ConstructorInfo constructor = EventType.GetConstructor(new[] { GetType(), typeof(int) });
             Event instance = null;
             try
             {
-                instance = constructor.Invoke(new object[] { this }) as Event;
+                instance = constructor.Invoke(new object[] { this, seed }) as Event;
             }
             catch (Exception ex)
             {
@@ -104,6 +157,40 @@ namespace Barotrauma
             return
                 unlockPathEvents.FirstOrDefault(ep => ep.BiomeIdentifier == biomeIdentifier) ??
                 unlockPathEvents.FirstOrDefault(ep => ep.BiomeIdentifier == Identifier.Empty);
+        }
+
+        /// <summary>
+        /// Finds an event prefab with the specified identifier, or if it isn't defined, a random event prefab with the specified tag.
+        /// </summary>
+        /// <param name="source">Which content package is trying to find the event (if any)? Only used for logging error messages.</param>
+        /// <returns></returns>
+        public static EventPrefab FindEventPrefab(Identifier identifier, Identifier tag, ContentPackage source)
+        {
+            EventPrefab eventPrefab = null;
+            if (!identifier.IsEmpty)
+            {
+                eventPrefab = EventSet.GetEventPrefab(identifier);
+                if (eventPrefab == null)
+                {
+                    DebugConsole.ThrowError($"Failed to find an event prefab with the identifier {identifier}.",
+                        contentPackage: source);
+                }
+            }
+            else if (!tag.IsEmpty)
+            {
+                eventPrefab = EventSet.GetAllEventPrefabs().Where(e => e.Tags.Contains(tag)).GetRandomUnsynced();
+                if (eventPrefab == null)
+                {
+                    DebugConsole.ThrowError($"Failed to find an event prefab with the tag {tag}.",
+                        contentPackage: source);
+                }
+            }
+            else
+            {
+                DebugConsole.ThrowError($"Failed to find an event prefab: neither an identifier or tag were defined.",
+                    contentPackage: source);
+            }
+            return eventPrefab;
         }
     }
 }

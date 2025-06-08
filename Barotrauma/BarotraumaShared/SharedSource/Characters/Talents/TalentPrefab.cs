@@ -22,6 +22,17 @@ namespace Barotrauma
 
         public readonly Sprite Icon;
 
+        /// <summary>
+        /// When set to true, this talent will not be visible in the "Extra Talents" panel if it is not part of the character's job talent tree.
+        /// </summary>
+        public readonly bool IsHiddenExtraTalent;
+
+        /// <summary>
+        /// When set to a value the talent tooltip will display a text showing the current value of the stat and the max value.
+        /// For example "Progress: 37/100".
+        /// </summary>
+        public readonly Option<(Identifier PermanentStatIdentifier, int Max)> TrackedStat;
+
 #if CLIENT
         public readonly Option<Color> ColorOverride;
 #endif
@@ -44,11 +55,19 @@ namespace Barotrauma
 
             AbilityEffectsStackWithSameTalent = element.GetAttributeBool("abilityeffectsstackwithsametalent", true);
 
+            var trackedStat = element.GetAttributeIdentifier("trackedstat", Identifier.Empty);
+            var trackedMax = element.GetAttributeInt("trackedmax", 100);
+            TrackedStat = !trackedStat.IsEmpty 
+                ? Option.Some((trackedStat, trackedMax))
+                : Option.None;
+
             Identifier nameIdentifier = element.GetAttributeIdentifier("nameidentifier", Identifier.Empty);
             if (!nameIdentifier.IsEmpty)
             {
                 DisplayName = TextManager.Get(nameIdentifier).Fallback(Identifier.Value);
             }
+
+            IsHiddenExtraTalent = element.GetAttributeBool("ishiddenextratalent", false);
 
             Description = string.Empty;
 
@@ -84,7 +103,8 @@ namespace Barotrauma
                             }
                             catch (Exception e)
                             {
-                                DebugConsole.ThrowError($"Error while loading talent migration for talent \"{Identifier}\".", e);
+                                DebugConsole.ThrowError($"Error while loading talent migration for talent \"{Identifier}\".", e,
+                                    element?.ContentPackage);
                             }
                         }
                         break;

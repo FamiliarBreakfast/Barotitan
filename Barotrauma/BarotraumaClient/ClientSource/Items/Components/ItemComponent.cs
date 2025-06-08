@@ -62,6 +62,10 @@ namespace Barotrauma.Items.Components
         private readonly Dictionary<ActionType, List<ItemSound>> sounds;
         private Dictionary<ActionType, SoundSelectionMode> soundSelectionModes;
 
+        /// <summary>
+        /// Starts the timer for  delayed client-side corrections (<see cref="StartDelayedCorrection(IReadMessage, float, bool)"/>) - in other words,
+        /// the client will not attempt to read server updates for this component until the timer elapses.
+        /// </summary>
         protected float correctionTimer;
 
         public float IsActiveTimer;
@@ -150,12 +154,30 @@ namespace Barotrauma.Items.Components
 
         public GUIFrame GuiFrame { get; set; }
 
+        /// <summary>
+        /// Overlay (just a non-interactable sprite) drawn when the item is selected, equipped or focused to via Controllers (e.g. when operating a turret via a periscope or a camera via a monitor).
+        /// </summary>
+        public Sprite HUDOverlay { get; set; }
+
+        public float HUDOverlayAnimSpeed
+        {
+            get;
+            set;
+        }
+
         private GUIDragHandle guiFrameDragHandle;
 
         private bool guiFrameUpdatePending;
 
         [Serialize(false, IsPropertySaveable.No)]
         public bool AllowUIOverlap
+        {
+            get;
+            set;
+        }
+
+        [Serialize(true, IsPropertySaveable.No)]
+        public bool CloseByClickingOutsideGUIFrame
         {
             get;
             set;
@@ -260,6 +282,12 @@ namespace Barotrauma.Items.Components
             if (!hasSoundsOfType[(int)type]) { return; }
             if (GameMain.Client?.MidRoundSyncing ?? false) { return; }
 
+            //above the top boundary of the level (in an inactive respawn shuttle?)
+            if (item.Submarine != null && item.Submarine.IsAboveLevel) 
+            {
+                return; 
+            }
+
             if (loopingSound != null)
             {
                 if (Vector3.DistanceSquared(GameMain.SoundManager.ListenerPosition, new Vector3(item.WorldPosition, 0.0f)) > loopingSound.Range * loopingSound.Range ||
@@ -288,11 +316,13 @@ namespace Barotrauma.Items.Components
                         0.01f,
                         loopingSound.RoundSound.GetRandomFrequencyMultiplier(),
                         SoundPlayer.ShouldMuffleSound(Character.Controlled, item.WorldPosition, loopingSound.Range, Character.Controlled?.CurrentHull));
-                    loopingSoundChannel.Looping = true;
-                    item.CheckNeedsSoundUpdate(this);
-                    //TODO: tweak
-                    loopingSoundChannel.Near = loopingSound.Range * 0.4f;
-                    loopingSoundChannel.Far = loopingSound.Range;
+                    if (loopingSoundChannel != null) 
+                    { 
+                        loopingSoundChannel.Looping = true;
+                        item.CheckNeedsSoundUpdate(this);
+                        loopingSoundChannel.Near = loopingSound.Range * 0.4f;
+                        loopingSoundChannel.Far = loopingSound.Range;
+                    }
                 }
 
                 // Looping sound with manual selection mode should be changed if value of ManuallySelectedSound has changed
@@ -334,7 +364,7 @@ namespace Barotrauma.Items.Components
                 }
                 else if (soundSelectionMode == SoundSelectionMode.Manual)
                 {
-                    index = Math.Clamp(ManuallySelectedSound, 0, matchingSounds.Count);
+                    index = Math.Clamp(ManuallySelectedSound, 0, matchingSounds.Count - 1);
                 }
                 else
                 {
@@ -368,32 +398,27 @@ namespace Barotrauma.Items.Components
                     float volume = GetSoundVolume(itemSound);
                     if (volume <= 0.0001f) { return; }
                     loopingSound = itemSound;
-                    loopingSoundChannel = loopingSound.RoundSound.Sound.Play(
-                        new Vector3(position.X, position.Y, 0.0f), 
-                        0.01f,
-                        freqMult: itemSound.RoundSound.GetRandomFrequencyMultiplier(),
-                        muffle: SoundPlayer.ShouldMuffleSound(Character.Controlled, position, loopingSound.Range, Character.Controlled?.CurrentHull));
-                    loopingSoundChannel.Looping = true;
-                    //TODO: tweak
-                    loopingSoundChannel.Near = loopingSound.Range * 0.4f;
-                    loopingSoundChannel.Far = loopingSound.Range;
+                    loopingSoundChannel = SoundPlayer.PlaySound(loopingSound.RoundSound, position, volume: 0.01f, hullGuess: item.CurrentHull);
+                    if (loopingSoundChannel != null)
+                    {
+                        loopingSoundChannel.Looping = true;
+                        loopingSoundChannel.Near = loopingSound.Range * 0.4f;
+                        loopingSoundChannel.Far = loopingSound.Range;
+                    }
                 }
             }
             else
             {
                 float volume = GetSoundVolume(itemSound);
                 if (volume <= 0.0001f) { return; }
-                var channel = SoundPlayer.PlaySound(itemSound.RoundSound.Sound, position, volume, itemSound.Range, itemSound.RoundSound.GetRandomFrequencyMultiplier(), item.CurrentHull, ignoreMuffling: itemSound.RoundSound.IgnoreMuffling);
+                var channel = SoundPlayer.PlaySound(itemSound.RoundSound, position, volume, hullGuess: item.CurrentHull);
                 if (channel != null) { playingOneshotSoundChannels.Add(channel); }
             }
         }
 
-        public void StopSounds(ActionType type)
+        public void StopLoopingSound()
         {
             if (loopingSound == null) { return; }
-
-            if (loopingSound.Type != type) { return; }
-
             if (loopingSoundChannel != null)
             {
                 loopingSoundChannel.FadeOutAndDispose();
@@ -402,17 +427,34 @@ namespace Barotrauma.Items.Components
             }
         }
 
+        public void StopSounds(ActionType type)
+        {
+            if (loopingSound == null || loopingSound.Type != type) { return; }
+            StopLoopingSound();
+        }
+
         private float GetSoundVolume(ItemSound sound)
         {
             if (sound == null) { return 0.0f; }
             if (sound.VolumeProperty == "") { return sound.VolumeMultiplier; }
 
-            if (SerializableProperties.TryGetValue(sound.VolumeProperty, out SerializableProperty property))
+            SerializableProperty property = null;
+            ISerializableEntity targetEntity = null;
+            if (SerializableProperties.TryGetValue(sound.VolumeProperty, out property))
+            {
+                targetEntity = this;
+            }
+            else if (Item.SerializableProperties.TryGetValue(sound.VolumeProperty, out property))
+            {
+                targetEntity = Item;
+            }
+
+            if (property != null)
             {
                 float newVolume;
                 try
                 {
-                    newVolume = property.GetFloatValue(this);
+                    newVolume = property.GetFloatValue(targetEntity);
                 }
                 catch
                 {
@@ -461,7 +503,24 @@ namespace Barotrauma.Items.Components
             return linkToUIComponent;
         }
 
-        public virtual void DrawHUD(SpriteBatch spriteBatch, Character character) { }
+        public virtual void DrawHUD(SpriteBatch spriteBatch, Character character)
+        {
+            if (HUDOverlay != null)
+            {
+                Vector2 screenSize = new Vector2(GameMain.GraphicsWidth, GameMain.GraphicsHeight);
+                if (HUDOverlay is SpriteSheet spriteSheet)
+                {
+                    spriteSheet.Draw(spriteBatch,
+                        spriteIndex: (int)(Math.Floor(Timing.TotalTimeUnpaused * HUDOverlayAnimSpeed) % spriteSheet.FrameCount),
+                        pos: screenSize / 2, color: Color.White, origin: HUDOverlay.Origin, rotate: 0, scale: screenSize / spriteSheet.FrameSize.ToVector2());
+                }
+                else
+                {
+                    HUDOverlay.Draw(spriteBatch,
+                        pos: screenSize / 2, color: Color.White, origin: HUDOverlay.Origin, rotate: 0, scale: screenSize / HUDOverlay.size);
+                }
+            }
+        }
 
         public virtual void AddToGUIUpdateList(int order = 0)
         {
@@ -497,11 +556,19 @@ namespace Barotrauma.Items.Components
                 case "guiframe":
                     if (subElement.GetAttribute("rect") != null)
                     {
-                        DebugConsole.ThrowError($"Error in item config \"{item.ConfigFilePath}\" - GUIFrame defined as rect, use RectTransform instead.");
+                        DebugConsole.ThrowError($"Error in item config \"{item.ConfigFilePath}\" - GUIFrame defined as rect, use RectTransform instead.",
+                            contentPackage: subElement.ContentPackage);
                         break;
                     }
                     GuiFrameSource = subElement;
                     ReloadGuiFrame();
+                    break;
+                case "hudoverlayanimated":
+                    HUDOverlay = new SpriteSheet(subElement);
+                    HUDOverlayAnimSpeed = subElement.GetAttributeFloat("animspeed", 1.0f);
+                    break;
+                case "hudoverlay":
+                    HUDOverlay = new Sprite(subElement);
                     break;
                 case "alternativelayout":
                     AlternativeLayout = GUILayoutSettings.Load(subElement);
@@ -516,7 +583,8 @@ namespace Barotrauma.Items.Components
                     if (filePath.IsNullOrEmpty())
                     {
                         DebugConsole.ThrowError(
-                            $"Error when instantiating item \"{item.Name}\" - sound with no file path set");
+                            $"Error when instantiating item \"{item.Name}\" - sound with no file path set",
+                            contentPackage: subElement.ContentPackage);
                         break;
                     }
 
@@ -528,7 +596,8 @@ namespace Barotrauma.Items.Components
                     }
                     catch (Exception e)
                     {
-                        DebugConsole.ThrowError($"Invalid sound type \"{typeStr}\" in item \"{item.Prefab.Identifier}\"!", e);
+                        DebugConsole.ThrowError($"Invalid sound type \"{typeStr}\" in item \"{item.Prefab.Identifier}\"!", e,
+                            contentPackage: subElement.ContentPackage);
                         break;
                     }
                     
@@ -675,6 +744,9 @@ namespace Barotrauma.Items.Components
                             }),
                             new ContextMenuOption(TextManager.Get(LockGuiFramePosition ? "item.unlockuiposition" : "item.lockuiposition"), isEnabled: true, onSelected: () =>
                             {
+                                //ensure the offset is set to where the frame is now
+                                //(it may have been repositioned by the overlap prevention logic, which doesn't set this offset)
+                                GuiFrameOffset = GuiFrame.RectTransform.ScreenSpaceOffset;
                                 LockGuiFramePosition = !LockGuiFramePosition;
                                 guiFrameDragHandle.Enabled = !LockGuiFramePosition;
                                 if (SerializableProperties.TryGetValue(nameof(LockGuiFramePosition).ToIdentifier(), out var property))
@@ -699,7 +771,11 @@ namespace Barotrauma.Items.Components
         /// </summary>
         protected virtual void CreateGUI() { }
 
-        //Starts a coroutine that will read the correct state of the component from the NetBuffer when correctionTimer reaches zero.
+        /// <summary>
+        /// Starts a coroutine that will read the correct state of the component from the NetBuffer when correctionTimer reaches zero.
+        /// Useful in cases where we a client is constantly adjusting some value, and we don't want state updates from the server to interfere with it 
+        /// (e.g. setting the value back to what a client just set it to, when the client has already modified the value further).
+        /// </summary>
         protected void StartDelayedCorrection(IReadMessage buffer, float sendingTime, bool waitForMidRoundSync = false)
         {
             if (delayedCorrectionCoroutine != null) { CoroutineManager.StopCoroutines(delayedCorrectionCoroutine); }
@@ -757,6 +833,8 @@ namespace Barotrauma.Items.Components
                 dragHandle.DragArea = HUDLayoutSettings.ItemHUDArea;
             }
         }
+
+        public virtual void OnPlayerSkillsChanged() { }
 
         public virtual void AddTooltipInfo(ref LocalizedString name, ref LocalizedString description) { }
     }

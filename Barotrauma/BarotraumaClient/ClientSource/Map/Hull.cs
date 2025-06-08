@@ -81,16 +81,12 @@ namespace Barotrauma
         public override bool IsVisible(Rectangle worldView)
         {
             if (BallastFlora != null) { return true; }
-
             if (Screen.Selected != GameMain.SubEditorScreen && !GameMain.DebugDraw)
             {
                 if (decals.Count == 0 && paintAmount < minimumPaintAmountToDraw) { return false; }
 
-                Rectangle worldRect = WorldRect;
-                if (worldRect.X > worldView.Right || worldRect.Right < worldView.X) { return false; }
-                if (worldRect.Y < worldView.Y - worldView.Height || worldRect.Y - worldRect.Height > worldView.Y) { return false; }
             }
-            return true;
+            return base.IsVisible(worldView);
         }
 
         public override bool IsMouseOn(Vector2 position)
@@ -103,12 +99,31 @@ namespace Barotrauma
 
         private GUIComponent CreateEditingHUD(bool inGame = false)
         {
+            int heightScaled = GUI.IntScale(20);
             editingHUD = new GUIFrame(new RectTransform(new Vector2(0.3f, 0.25f), GUI.Canvas, Anchor.CenterRight) { MinSize = new Point(400, 0) }) { UserData = this };
             GUIListBox listBox = new GUIListBox(new RectTransform(new Vector2(0.95f, 0.8f), editingHUD.RectTransform, Anchor.Center), style: null)
             {
                 CanTakeKeyBoardFocus = false
             };
-            new SerializableEntityEditor(listBox.Content.RectTransform, this, inGame, showName: true, titleFont: GUIStyle.LargeFont);
+            var hullEditor = new SerializableEntityEditor(listBox.Content.RectTransform, this, inGame, showName: true, titleFont: GUIStyle.LargeFont);
+
+            if (!inGame)
+            {
+                if (Linkable)
+                {
+                    var linkText = new GUITextBlock(new RectTransform(new Point(editingHUD.Rect.Width, heightScaled), isFixedSize: true), TextManager.Get("HoldToLink"), font: GUIStyle.SmallFont);
+                    var hullLinkText = new GUITextBlock(new RectTransform(new Point(editingHUD.Rect.Width, heightScaled), isFixedSize: true), TextManager.Get("hulllinkinfo"), font: GUIStyle.SmallFont);
+                    var itemsText = new GUITextBlock(new RectTransform(new Point(editingHUD.Rect.Width, heightScaled), isFixedSize: true), TextManager.Get("AllowedLinks"), font: GUIStyle.SmallFont);
+                    LocalizedString allowedItems = AllowedLinks.None() ? TextManager.Get("None") : string.Join(", ", AllowedLinks);
+                    itemsText.Text = TextManager.AddPunctuation(':', itemsText.Text, allowedItems);
+                    hullEditor.AddCustomContent(linkText, 1);
+                    hullEditor.AddCustomContent(hullLinkText, 2);
+                    hullEditor.AddCustomContent(itemsText, 3);
+                    linkText.TextColor = GUIStyle.Orange;
+                    hullLinkText.TextColor = GUIStyle.Orange;
+                    itemsText.TextColor = GUIStyle.Orange;
+                }
+            }
 
             PositionEditingHUD();
 
@@ -170,16 +185,18 @@ namespace Barotrauma
                     {
                         if (!pendingSectionUpdates.Any() && !pendingDecalUpdates.Any())
                         {
-                            GameMain.NetworkMember?.CreateEntityEvent(this, new StatusEventData());
+                            //these are used to modify the amount water/fire in the hull with console commands
+                            //they should be usable even when not controlling a character
+                            GameMain.Client?.CreateEntityEvent(this, new StatusEventData(), requireControlledCharacter: false);
                         }
                         foreach (Decal decal in pendingDecalUpdates)
                         {
-                            GameMain.NetworkMember?.CreateEntityEvent(this, new DecalEventData(decal));
+                            GameMain.Client?.CreateEntityEvent(this, new DecalEventData(decal));
                         }
                         pendingDecalUpdates.Clear();
                         foreach (int pendingSectionUpdate in pendingSectionUpdates)
                         {
-                            GameMain.NetworkMember?.CreateEntityEvent(this, new BackgroundSectionsEventData(pendingSectionUpdate));
+                            GameMain.Client?.CreateEntityEvent(this, new BackgroundSectionsEventData(pendingSectionUpdate));
                         }
                         pendingSectionUpdates.Clear();
                         networkUpdatePending = false;
@@ -208,7 +225,9 @@ namespace Barotrauma
         {
             bool primaryMouseButtonHeld = PlayerInput.PrimaryMouseButtonHeld();
             bool secondaryMouseButtonHeld = PlayerInput.SecondaryMouseButtonHeld();
-            if (!primaryMouseButtonHeld && !secondaryMouseButtonHeld) { return; }
+            bool doubleClicked = PlayerInput.DoubleClicked();
+            bool secondaryDoubleClicked = PlayerInput.SecondaryDoubleClicked();
+            if (!primaryMouseButtonHeld && !secondaryMouseButtonHeld && !doubleClicked && !secondaryDoubleClicked) { return; }
 
             Vector2 position = cam.ScreenToWorld(PlayerInput.MousePosition);
             Hull hull = FindHull(position);
@@ -216,28 +235,67 @@ namespace Barotrauma
             if (hull == null || hull.IdFreed) { return; }
             if (EditWater)
             {
+                const float waterIncrement = 100000.0f;
                 if (primaryMouseButtonHeld)
                 {
-                    hull.WaterVolume += 100000.0f * deltaTime;
-                    hull.networkUpdatePending = true;
-                    hull.serverUpdateDelay = 0.5f;
+                    SetWaterVolume(hull.WaterVolume + waterIncrement * deltaTime);
                 }
                 else if (secondaryMouseButtonHeld)
                 {
-                    hull.WaterVolume -= 100000.0f * deltaTime;
+                    SetWaterVolume(hull.WaterVolume - waterIncrement * deltaTime);
+                }
+                
+                if (doubleClicked)
+                {
+                    SetWaterVolume(hull.Volume * MaxCompress);
+                }
+                else if (secondaryDoubleClicked)
+                {
+                    SetWaterVolume(0f);
+                }
+                
+                void SetWaterVolume(float newVolume)
+                {
+                    ShowHulls = true;
+                    hull.WaterVolume = newVolume;
                     hull.networkUpdatePending = true;
                     hull.serverUpdateDelay = 0.5f;
                 }
-                
             }
             else if (EditFire)
             {
+                bool networkUpdate = false;
+                
                 if (primaryMouseButtonHeld)
                 {
                     new FireSource(position, hull, isNetworkMessage: true);
+                    networkUpdate = true;
+                }
+                else if (secondaryMouseButtonHeld || secondaryDoubleClicked)
+                {
+                    for (int index = hull.FireSources.Count - 1; index >= 0; index--)
+                    {
+                        var currentFireSource = hull.FireSources[index];
+                        
+                        if (secondaryMouseButtonHeld)
+                        {
+                            const float extinguishAmount = 120f;
+                            currentFireSource.Extinguish(deltaTime, extinguishAmount);
+                            networkUpdate = true;
+                        }
+                        else
+                        {
+                            currentFireSource.Remove();
+                            networkUpdate = true;
+                        }
+                    }
+                }
+                
+                if (networkUpdate)
+                {
                     hull.networkUpdatePending = true;
                     hull.serverUpdateDelay = 0.5f;
-                }                
+                }
             }
         }
 
@@ -277,12 +335,21 @@ namespace Barotrauma
             Rectangle drawRect =
                 Submarine == null ? rect : new Rectangle((int)(Submarine.DrawPosition.X + rect.X), (int)(Submarine.DrawPosition.Y + rect.Y), rect.Width, rect.Height);
 
-            if ((IsSelected || IsHighlighted) && editing)
+            if (editing)
             {
+                if (IsSelected || IsHighlighted)
+                {
+                    GUI.DrawRectangle(spriteBatch,
+                        new Vector2(drawRect.X, -drawRect.Y),
+                        new Vector2(rect.Width, rect.Height),
+                        (IsHighlighted ? Color.LightBlue * 0.8f : GUIStyle.Red * 0.5f) * alpha, false, 0, (int)Math.Max(5.0f / Screen.Selected.Cam.Zoom, 1.0f));
+                }
+
+                float waterHeight = WaterVolume / rect.Width;
                 GUI.DrawRectangle(spriteBatch,
-                    new Vector2(drawRect.X, -drawRect.Y),
-                    new Vector2(rect.Width, rect.Height),
-                    (IsHighlighted ? Color.LightBlue * 0.8f : GUIStyle.Red * 0.5f) * alpha, false, 0, (int)Math.Max(5.0f / Screen.Selected.Cam.Zoom, 1.0f));
+                    new Vector2(drawRect.X, -drawRect.Y + drawRect.Height - waterHeight),
+                    new Vector2(drawRect.Width, waterHeight),
+                    Color.Blue * 0.25f, isFilled: true);
             }
 
             GUI.DrawRectangle(spriteBatch,
@@ -337,8 +404,8 @@ namespace Barotrauma
                     //GUI.DrawRectangle(spriteBatch, new Rectangle((int)fs.LastExtinguishPos.X, (int)-fs.LastExtinguishPos.Y, 5,5), Color.Yellow, true);
                 }
 
-
-                GUI.DrawLine(spriteBatch, new Vector2(drawRect.X, -WorldSurface), new Vector2(drawRect.Right, -WorldSurface), Color.Cyan * 0.5f);
+                float worldSurface = surface + Submarine.DrawPosition.Y;
+                GUI.DrawLine(spriteBatch, new Vector2(drawRect.X, -worldSurface), new Vector2(drawRect.Right, -worldSurface), Color.Cyan * 0.5f);
                 for (int i = 0; i < waveY.Length - 1; i++)
                 {
                     GUI.DrawLine(spriteBatch,
@@ -511,8 +578,7 @@ namespace Barotrauma
                 corners[4] = new Vector3(x, bottom, 0.0f);
                 //bottom right
                 corners[5] = new Vector3(x + width, bottom, 0.0f);
-
-                Vector2[] uvCoords = new Vector2[4];
+                
                 for (int n = 0; n < 4; n++)
                 {
                     uvCoords[n] = Vector2.Transform(new Vector2(corners[n].X, -corners[n].Y), transform);
@@ -746,7 +812,7 @@ namespace Barotrauma
 
                 var newFire = i < FireSources.Count ?
                     FireSources[i] :
-                    new FireSource(Submarine == null ? pos : pos + Submarine.Position, null, true);
+                    new FireSource(Submarine == null ? pos : pos + Submarine.Position, sourceCharacter: null, isNetworkMessage: true);
                 newFire.Position = pos;
                 newFire.Size = new Vector2(size, newFire.Size.Y);
 

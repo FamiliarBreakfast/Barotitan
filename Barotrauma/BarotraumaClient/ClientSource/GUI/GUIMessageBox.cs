@@ -3,12 +3,12 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Barotrauma.Extensions;
+using Microsoft.Xna.Framework.Input;
 
 namespace Barotrauma
 {
     public class GUIMessageBox : GUIFrame
     {
-        #warning TODO: change this to List<GUIMessageBox> and fix incorrect uses of this list
         public readonly static List<GUIComponent> MessageBoxes = new List<GUIComponent>();
         private static int DefaultWidth
         {
@@ -81,7 +81,14 @@ namespace Barotrauma
 
         public bool FlashOnAutoCloseCondition { get; set; }
 
+        public Action OnEnterPressed { get; set; }
+
         public Type MessageBoxType => type;
+
+        /// <summary>
+        /// If enabled, the box is always drawn in front of all other elements.
+        /// </summary>
+        public bool DrawOnTop;
 
         public static GUIComponent VisibleBox => MessageBoxes.LastOrDefault();
 
@@ -89,6 +96,10 @@ namespace Barotrauma
             : this(headerText, text, new LocalizedString[] { "OK" }, relativeSize, minSize, type: type)
         {
             this.Buttons[0].OnClicked = Close;
+            OnEnterPressed = () =>
+            {
+                Buttons[0].OnClicked(Buttons[0], Buttons[0].UserData);
+            };
         }
 
         public GUIMessageBox(RichString headerText, RichString text, LocalizedString[] buttons,
@@ -278,7 +289,7 @@ namespace Barotrauma
                     GUIStyle.Apply(Text, "", this);
                     Content.Recalculate();
                     Text.RectTransform.NonScaledSize = Text.RectTransform.MinSize = Text.RectTransform.MaxSize =
-                        new Point(Text.Rect.Width, Text.Rect.Height);
+                        new Point(Text.Rect.Width, Math.Min(Text.Rect.Height, GameMain.GraphicsHeight));
                     Text.RectTransform.IsFixedSize = true;
                     if (headerText.IsNullOrWhiteSpace())
                     {
@@ -470,13 +481,13 @@ namespace Barotrauma
                 for (int i = 0; i < MessageBoxes.Count; i++)
                 {
                     if (MessageBoxes[i] == null) { continue; }
-                    if (!(MessageBoxes[i] is GUIMessageBox messageBox))
+                    if (MessageBoxes[i] is not GUIMessageBox messageBox)
                     {
                         if (type == Type.Default)
                         {
                             // Message box not of type GUIMessageBox is likely the round summary
                             MessageBoxes[i].AddToGUIUpdateList();
-                            if (!(MessageBoxes[i].UserData is RoundSummary)) { break; }
+                            if (MessageBoxes[i].UserData is not RoundSummary) { break; }
                         }
                         continue;
                     }
@@ -487,8 +498,7 @@ namespace Barotrauma
                     }
 
                     // These are handled separately in GUI.HandlePersistingElements()
-                    if (MessageBoxes[i].UserData as string == "verificationprompt") { continue; }
-                    if (MessageBoxes[i].UserData as string == "bugreporter") { continue; }
+                    if (messageBox.DrawOnTop) { continue; }
 
                     messageBox.AddToGUIUpdateList();
                     break;
@@ -516,6 +526,11 @@ namespace Barotrauma
 
         protected override void Update(float deltaTime)
         {
+            if (PlayerInput.KeyHit(Keys.Enter))
+            {
+                OnEnterPressed?.Invoke();
+            }
+
             if (Draggable)
             {
                 GUIComponent parent = GUI.MouseOn?.Parent?.Parent;

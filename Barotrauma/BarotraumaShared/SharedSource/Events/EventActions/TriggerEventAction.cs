@@ -1,11 +1,17 @@
 ﻿namespace Barotrauma
 {
+    /// <summary>
+    /// Triggers another event (can also trigger things other than scripted events, for example monster events).
+    /// </summary>
     class TriggerEventAction : EventAction
     {
-        [Serialize("", IsPropertySaveable.Yes)] 
+        [Serialize("", IsPropertySaveable.Yes, description: "Identifier of the event to trigger.")] 
         public Identifier Identifier { get; set; }
 
-        [Serialize(false, IsPropertySaveable.Yes)]
+        [Serialize("", IsPropertySaveable.Yes, description: "Tag of the event to trigger.")]
+        public Identifier EventTag { get; set; }
+
+        [Serialize(false, IsPropertySaveable.Yes, description: "If set to true, the event will trigger at the beginning of the next round. Useful for e.g. triggering some scripted event in the outpost after you finish a mission.")]
         public bool NextRound { get; set; }
 
         private bool isFinished;
@@ -33,14 +39,10 @@
                 }
                 else
                 {
-                    var eventPrefab = EventSet.GetEventPrefab(Identifier);
-                    if (eventPrefab == null)
+                    EventPrefab eventPrefab = EventPrefab.FindEventPrefab(Identifier, EventTag, ParentEvent.Prefab.ContentPackage);
+                    if (eventPrefab != null)
                     {
-                        DebugConsole.ThrowError($"Error in TriggerEventAction - could not find an event with the identifier {Identifier}.");
-                    }
-                    else
-                    {
-                        var ev = eventPrefab.CreateInstance();
+                        var ev = eventPrefab.CreateInstance(GameMain.GameSession.EventManager.RandomSeed);
                         if (ev != null)
                         {
                             GameMain.GameSession.EventManager.QueuedEvents.Enqueue(ev);                            

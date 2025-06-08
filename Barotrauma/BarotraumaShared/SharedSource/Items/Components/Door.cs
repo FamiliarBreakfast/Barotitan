@@ -21,7 +21,7 @@ namespace Barotrauma.Items.Components
         private Gap linkedGap;
         private bool isOpen;
 
-        private float openState;
+        private float openState, lastOpenState;
         private readonly Sprite doorSprite, weldedSprite, brokenSprite;
         private readonly bool scaleBrokenSprite, fadeBrokenSprite;
         private readonly bool autoOrientGap;
@@ -58,6 +58,8 @@ namespace Barotrauma.Items.Components
 #endif
             }
         }
+
+        public bool IgnoreSignals { get; private set; }
 
         //how much "less stuck" partially doors get when opened
         const float StuckReductionOnOpen = 30.0f;
@@ -165,6 +167,8 @@ namespace Barotrauma.Items.Components
 
         public bool IsHorizontal { get; private set; }
 
+        public bool IsConvexHullHorizontal => autoOrientGap && linkedGap != null ? !linkedGap.IsHorizontal : IsHorizontal;
+
         [Serialize("0.0,0.0,0.0,0.0", IsPropertySaveable.No, description: "Position and size of the window on the door. The upper left corner is 0,0. Set the width and height to 0 if you don't want the door to have a window.")]
         public Rectangle Window { get; set; }
 
@@ -178,11 +182,29 @@ namespace Barotrauma.Items.Components
                 OpenState = isOpen ? 1.0f : 0.0f;
             }
         }
+
+        /// <summary>
+        /// Can be used by status effects to tell the door to open (setting IsOpen directly would make it immediately fully open)
+        /// </summary>
+        public bool ShouldBeOpen
+        {
+            get { return isOpen; }
+            set
+            {
+                if (isOpen != value)
+                {
+                    ToggleState(ActionType.OnUse, user: null);
+                }
+            }
+        }
+
         public bool IsClosed => !IsOpen;
 
         public bool IsFullyOpen => IsOpen && OpenState >= 1.0f;
 
         public bool IsFullyClosed => IsClosed && OpenState <= 0f;
+
+        public bool HasWindow => Window != Rectangle.Empty;
 
         [Serialize(false, IsPropertySaveable.No, description: "If the door has integrated buttons, it can be opened by interacting with it directly (instead of using buttons wired to it).")]
         public bool HasIntegratedButtons { get; private set; }
@@ -196,6 +218,7 @@ namespace Barotrauma.Items.Components
             get { return openState; }
             set 
             {
+                lastOpenState = openState;
                 openState = MathHelper.Clamp(value, 0.0f, 1.0f);
 #if CLIENT
                 float size = IsHorizontal ? item.Rect.Width : item.Rect.Height;
@@ -307,19 +330,30 @@ namespace Barotrauma.Items.Components
         private readonly LocalizedString cannotOpenText = TextManager.Get("DoorMsgCannotOpen");
         public override bool HasRequiredItems(Character character, bool addMessage, LocalizedString msg = null)
         {
-            Msg = HasAccess(character) ? "ItemMsgOpen" : "ItemMsgForceOpenCrowbar";
+            if (IsBroken)
+            {
+                return false;
+            }
+            if (isOpen)
+            {
+                Msg = HasAccess(character) ? "ItemMsgClose" : "ItemMsgForceCloseCrowbar";
+            }
+            else
+            {
+                Msg = HasAccess(character) ? "ItemMsgOpen" : "ItemMsgForceOpenCrowbar";
+            }
             ParseMsg();
             if (addMessage)
             {
-                msg = msg ?? (HasIntegratedButtons ? accessDeniedTxt : cannotOpenText).Value;
+                msg ??= (HasIntegratedButtons ? accessDeniedTxt : cannotOpenText).Value;
             }
-            return isBroken || base.HasRequiredItems(character, addMessage, msg);
+            return base.HasRequiredItems(character, addMessage, msg);
         }
 
         public override bool Pick(Character picker)
         {
             if (item.Condition < RepairThreshold && item.GetComponent<Repairable>().HasRequiredItems(picker, addMessage: false)) { return true; }
-            if (requiredItems.None()) { return false; }
+            if (RequiredItems.None()) { return false; }
             if (HasAccess(picker) && HasRequiredItems(picker, false)) { return false; }
             return base.Pick(picker);
         }
@@ -330,6 +364,7 @@ namespace Barotrauma.Items.Components
             if (!HasAccess(picker))
             {
                 ToggleState(ActionType.OnPicked, picker);
+                ApplyStatusEffects(ActionType.OnPicked, 1.0f, picker);
             }
             return false;
         }
@@ -341,7 +376,12 @@ namespace Barotrauma.Items.Components
                 OnFailedToOpen();
                 return;
             }
-            toggleCooldownTimer = ToggleCoolDown;
+            if (ToggleWhenClicked)
+            {
+                //do not activate cooldown at this point if the door doesn't get toggled when clicked
+                //(i.e. if it just sends out a signal that might get passed back to the door and try to toggle it)
+                toggleCooldownTimer = ToggleCoolDown;
+            }
             if (IsStuck || IsJammed)
             {
 #if CLIENT
@@ -381,6 +421,31 @@ namespace Barotrauma.Items.Components
             return false;
         }
 
+        /// <summary>
+        /// Is the given position inside the vertical bounds of the window, and roughly on the door horizontally? Or the other way around if the door opens horizontally.
+        /// </summary>
+        /// <param name="position">Position in the same coordinate space as the door.</param>
+        /// <param name="maxPerpendicularDistance">Maximum horizontal distance from the door (or vertical if the door opens horizontally)</param>
+        public bool IsPositionOnWindow(Vector2 position, float maxPerpendicularDistance = 10.0f)
+        {
+            if (IsHorizontal)
+            {
+                return 
+                    position.X >= item.Rect.X + Window.X && 
+                    position.X <= item.Rect.X + Window.X + Window.Width &&
+                    position.Y >= item.Rect.Y - maxPerpendicularDistance &&
+                    position.Y <= item.Rect.Y - item.Rect.Height - maxPerpendicularDistance;
+            }
+            else
+            {
+                return 
+                    position.Y >= item.Rect.Y + Window.Y && 
+                    position.Y <= item.Rect.Y + Window.Y + Window.Height &&
+                    position.X >= item.Rect.X - maxPerpendicularDistance &&
+                    position.X <= item.Rect.Right + maxPerpendicularDistance;
+            }
+        }
+
         public override void Update(float deltaTime, Camera cam)
         {
             UpdateProjSpecific(deltaTime);
@@ -408,12 +473,12 @@ namespace Barotrauma.Items.Components
                 if (PredictedState == null)
                 {
                     OpenState += deltaTime * (isOpen ? OpeningSpeed : -ClosingSpeed);
-                    isClosing = openState > 0.0f && openState < 1.0f && !isOpen;
+                    isClosing = openState is > 0.0f and < 1.0f && !isOpen;
                 }
                 else
                 {
-                    OpenState += deltaTime * ((bool)PredictedState ? OpeningSpeed : -ClosingSpeed);
-                    isClosing = openState > 0.0f && openState < 1.0f && !(bool)PredictedState;
+                    OpenState += deltaTime * (PredictedState.Value ? OpeningSpeed : -ClosingSpeed);
+                    isClosing = openState is > 0.0f and < 1.0f && !PredictedState.Value;
 
                     resetPredictionTimer -= deltaTime;
                     if (resetPredictionTimer <= 0.0f)
@@ -426,7 +491,11 @@ namespace Barotrauma.Items.Components
             
             if (isClosing)
             {
-                if (OpenState < 0.9f) { PushCharactersAway(); }
+                //server gives the clients more leeway on moving through closing doors
+                //latency can often otherwise make a client get blocked by a closing door server-side even if it seemed like they made it through client-side
+                float pushCharactersAwayThreshold = GameMain.NetworkMember is { IsServer: true } ? 0.1f : 0.9f;
+
+                if (OpenState < pushCharactersAwayThreshold) { PushCharactersAway(); }
                 if (CheckSubmarinesInDoorWay())
                 {
                     PredictedState = null;
@@ -535,6 +604,7 @@ namespace Barotrauma.Items.Components
 
         public void RefreshLinkedGap()
         {
+            LinkedGap.Layer = item.Layer;
             LinkedGap.ConnectedDoor = this;
             if (autoOrientGap)
             {
@@ -548,10 +618,10 @@ namespace Barotrauma.Items.Components
         {
             RefreshLinkedGap();
 #if CLIENT
-            convexHull = new ConvexHull(doorRect, IsHorizontal, item);
+            convexHull = new ConvexHull(doorRect, IsConvexHullHorizontal, item);
             if (Window != Rectangle.Empty)
             {
-                convexHull2 = new ConvexHull(doorRect, IsHorizontal, item);
+                convexHull2 = new ConvexHull(doorRect, IsConvexHullHorizontal, item);
             }
             UpdateConvexHulls();
 #endif
@@ -664,6 +734,7 @@ namespace Barotrauma.Items.Components
             foreach (Character c in Character.CharacterList)
             {
                 if (!c.Enabled) { continue; }
+                if (c.SelectedItem?.GetComponent<Controller>() is { } controller && controller.IsAttachedUser(c)) { continue; }
                 if (!MathUtils.IsValid(c.SimPosition))
                 {
                     if (!characterPosErrorShown.Contains(c))
@@ -724,11 +795,11 @@ namespace Barotrauma.Items.Components
             {
                 if (IsHorizontal)
                 {
-                    body.SetTransform(new Vector2(body.SimPosition.X, item.SimPosition.Y + dir * doorRectSimSize.Y * 2.0f), body.Rotation);
+                    body.SetTransformIgnoreContacts(new Vector2(body.SimPosition.X, item.SimPosition.Y + dir * doorRectSimSize.Y * 2.0f), body.Rotation);
                 }
                 else
                 {
-                    body.SetTransform(new Vector2(item.SimPosition.X + dir * doorRectSimSize.X * 1.2f, body.SimPosition.Y), body.Rotation);
+                    body.SetTransformIgnoreContacts(new Vector2(item.SimPosition.X + dir * doorRectSimSize.X * 1.2f, body.SimPosition.Y), body.Rotation);
                 }
             }
 
@@ -754,23 +825,20 @@ namespace Barotrauma.Items.Components
         }
 
         partial void OnFailedToOpen();
-
+        
         public override bool HasAccess(Character character)
         {
             if (!item.IsInteractable(character)) { return false; }
-            if (HasIntegratedButtons)
-            {
-                return base.HasAccess(character);
-            }
-            else
-            {
-                return base.HasAccess(character) && Item.GetConnectedComponents<Controller>(true).Any(b => b.HasAccess(character));
-            }
+            if (!base.HasAccess(character)) { return false; }
+            if (HasIntegratedButtons) { return true; }
+            var buttons = Item.GetConnectedComponents<Controller>(recursive: true);
+            // If there are no buttons, and we can access the door, treat it accessible. Might be controlled by some mechanism, such as motion sensor.
+            return buttons.None() || buttons.Any(b => b.HasAccess(character));
         }
 
         public override void ReceiveSignal(Signal signal, Connection connection)
         {
-            if (IsStuck || IsJammed) { return; }
+            if (IsStuck || IsJammed || IgnoreSignals) { return; }
 
             bool wasOpen = PredictedState == null ? isOpen : PredictedState.Value;
             

@@ -1,4 +1,4 @@
-using Barotrauma.Extensions;
+﻿using Barotrauma.Extensions;
 using Barotrauma.Items.Components;
 using Microsoft.Xna.Framework;
 using System;
@@ -11,13 +11,8 @@ namespace Barotrauma
     class AIObjectiveLoadItem : AIObjective
     {
         public override Identifier Identifier { get; set; } = "load item".ToIdentifier();
-        public override bool IsLoop
-        {
-            get => true;
-            set => throw new Exception("Trying to set the value for AIObjectiveLoadItem.IsLoop from: " + Environment.StackTrace.CleanupStackTrace());
-        }
 
-        public override bool AllowWhileHandcuffed => false;
+        protected override bool AllowWhileHandcuffed => false;
 
         private AIObjectiveLoadItems.ItemCondition TargetItemCondition { get; }
         private Item Container { get; }
@@ -27,7 +22,7 @@ namespace Barotrauma
         private static Dictionary<ItemPrefab, ImmutableHashSet<Identifier>> AllValidContainableItemIdentifiers { get; } = new Dictionary<ItemPrefab, ImmutableHashSet<Identifier>>();
 
         private int itemIndex;
-        private AIObjectiveDecontainItem decontainObjective;
+        private AIObjectiveMoveItem moveItemObjective;
         private readonly HashSet<Item> ignoredItems = new HashSet<Item>();
         private Item targetItem;
         private readonly string abandonGetItemDialogueIdentifier = "dialogcannotfindloadable";
@@ -163,7 +158,7 @@ namespace Barotrauma
         {
             if (!IsAllowed)
             {
-                HandleNonAllowed();
+                HandleDisallowed();
                 return Priority;
             }
             else if (!AIObjectiveLoadItems.IsValidTarget(Container, character, targetCondition: TargetItemCondition))
@@ -193,22 +188,25 @@ namespace Barotrauma
                     if (yDist > 100) { dist += yDist * 5; }
                     dist += Math.Abs(character.WorldPosition.X - targetPos.X);
                 }
-                float distanceFactor = dist > 0.0f ? MathHelper.Lerp(0.9f, 0, MathUtils.InverseLerp(0, 5000, dist)) : 0.9f;
+
+                float distanceFactor = 
+                    GetDistanceFactor(targetItem.WorldPosition, verticalDistanceMultiplier: 5, maxDistance: 5000, factorAtMinDistance: 0.9f, factorAtMaxDistance: 0);
+
                 bool hasContainable = character.HasItem(targetItem);
                 float devotion = (CumulatedDevotion + (hasContainable ? 100 - MaxDevotion : 0)) / 100;
                 float max = AIObjectiveManager.LowestOrderPriority - (hasContainable ? 1 : 2);
                 Priority = MathHelper.Lerp(0, max, MathHelper.Clamp(devotion + (distanceFactor * PriorityModifier), 0, 1));
-                if (decontainObjective != null && targetItem.Container != Container)
+                if (moveItemObjective != null && targetItem.Container != Container)
                 {
                     if (!IsValidContainable(targetItem))
                     {
                         // Target is not valid anymore, abandon the objective
-                        decontainObjective.Abandon = true;
+                        moveItemObjective.Abandon = true;
                     }
                     else if (!ItemContainer.Inventory.CanBePut(targetItem) && ItemContainer.Inventory.AllItems.None(i => AIObjectiveLoadItems.ItemMatchesTargetCondition(i, TargetItemCondition)))
                     {
                         // The container is full and there's no item that should be removed, abandon the objective
-                        decontainObjective.Abandon = true;
+                        moveItemObjective.Abandon = true;
                     }
                 }
                 if (ItemContainer.Inventory.IsFull())
@@ -259,26 +257,27 @@ namespace Barotrauma
             }
             else
             {
-                if(decontainObjective == null && !IsValidContainable(targetItem))
+                if(moveItemObjective == null && !IsValidContainable(targetItem))
                 {
                     IgnoreTargetItem();
                     Reset();
                     return;
                 }
-                TryAddSubObjective(ref decontainObjective,
-                    constructor: () => new AIObjectiveDecontainItem(character, targetItem, objectiveManager, targetContainer: ItemContainer, priorityModifier: PriorityModifier)
+                TryAddSubObjective(ref moveItemObjective,
+                    constructor: () => new AIObjectiveMoveItem(character, targetItem, objectiveManager, targetContainer: ItemContainer, priorityModifier: PriorityModifier)
                     {
                         AbandonGetItemDialogueCondition = () => IsValidContainable(targetItem),
                         AbandonGetItemDialogueIdentifier = abandonGetItemDialogueIdentifier,
                         Equip = true,
                         RemoveExistingWhenNecessary = true,
                         RemoveExistingPredicate = (i) => !ValidContainableItemIdentifiers.Contains(i.Prefab.Identifier) || AIObjectiveLoadItems.ItemMatchesTargetCondition(i, TargetItemCondition),
-                        RemoveExistingMax = 1
+                        RemoveExistingMax = 1,
+                        AllowToFindDivingGear = objectiveManager.HasOrder<AIObjectiveLoadItems>()
                     },
                     onCompleted: () =>
                     {
                         IsCompleted = true;
-                        RemoveSubObjective(ref decontainObjective);
+                        RemoveSubObjective(ref moveItemObjective);
                     },
                     onAbandon: () =>
                     {
@@ -295,12 +294,14 @@ namespace Barotrauma
             if (item.Removed) { return false; }
             if (!ValidContainableItemIdentifiers.Contains(item.Prefab.Identifier)) { return false; }
             if (ignoredItems.Contains(item)) { return false; }
+            if ((item.Illegitimate) == character.IsOnPlayerTeam) { return false; }
             if ((item.SpawnedInCurrentOutpost && !item.AllowStealing) == character.IsOnPlayerTeam) { return false; }
-            var rootInventoryOwner = item.GetRootInventoryOwner();
-            if (rootInventoryOwner is Character owner && owner != character) { return false; }
-            if (rootInventoryOwner is Item parentItem)
+            if (item.GetRootInventoryOwner() is Character owner && owner != character) { return false; }
+            Item parentItem = item.Container;
+            while (parentItem != null)
             {
                 if (parentItem.HasTag(Tags.DontTakeItems)) { return false; }
+                parentItem = parentItem.Container;
             }
             if (!item.HasAccess(character)) { return false; }
             if (!character.HasItem(item) && !CanEquip(item, allowWearing: false)) { return false; }
@@ -318,13 +319,13 @@ namespace Barotrauma
             return true;
         }
 
-        protected override bool CheckObjectiveSpecific() => IsCompleted;
+        protected override bool CheckObjectiveState() => IsCompleted;
 
         public override void Reset()
         {
             base.Reset();
             // Don't reset the target item when resetting the objective because it affects priority calculations
-            decontainObjective = null;
+            moveItemObjective = null;
             itemIndex = 0;
         }
 

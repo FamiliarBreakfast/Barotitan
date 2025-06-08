@@ -3,6 +3,7 @@
 name: Publish release
 
 on:
+  workflow_dispatch:
   workflow_call:
     inputs:
       target:
@@ -46,11 +47,19 @@ env:
     Publicized/Barotrauma.dll
     Publicized/DedicatedServer.dll
   ARCHIVE_FILES_SHARED: |
+    BarotraumaCore.dll
+    BarotraumaCore.pdb
+    Publicized/BarotraumaCore.dll
     0Harmony.dll
     Sigil.dll
     MoonSharp.Interpreter.dll
     MoonSharp.VsCodeDebugger.dll
-    MonoMod.Common.dll
+    MonoMod.Backports.dll
+    MonoMod.Core.dll
+    MonoMod.RuntimeDetour.dll
+    MonoMod.ILHelpers.dll
+    MonoMod.Utils.dll
+    MonoMod.Iced.dll
     Mono.Cecil.dll
     Mono.Cecil.Mdb.dll
     Mono.Cecil.Pdb.dll
@@ -76,7 +85,7 @@ jobs:
     needs: [build]
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a # v3.0.2
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           name: build
           path: ${{ env.CI_DIR }}
@@ -121,19 +130,26 @@ jobs:
           # Archive Refs, used by mod developers
           cp "${artifacts_dir}/Windows/Client/Publicized/Barotrauma.dll" "${refs_dir}/Windows/Barotrauma.dll"
           cp "${artifacts_dir}/Windows/Client/Publicized/DedicatedServer.dll" "${refs_dir}/Windows/DedicatedServer.dll"
+          cp "${artifacts_dir}/Windows/Client/Publicized/BarotraumaCore.dll" "${refs_dir}/Windows/BarotraumaCore.dll"
           cp "${artifacts_dir}/Linux/Client/Publicized/Barotrauma.dll" "${refs_dir}/Linux/Barotrauma.dll"
           cp "${artifacts_dir}/Linux/Client/Publicized/DedicatedServer.dll" "${refs_dir}/Linux/DedicatedServer.dll"
+          cp "${artifacts_dir}/Linux/Client/Publicized/BarotraumaCore.dll" "${refs_dir}/Linux/BarotraumaCore.dll"
           cp "${artifacts_dir}/Mac/Client/Barotrauma.app/Contents/MacOS/Publicized/Barotrauma.dll" "${refs_dir}/OSX/Barotrauma.dll"
           cp "${artifacts_dir}/Mac/Client/Barotrauma.app/Contents/MacOS/Publicized/DedicatedServer.dll" "${refs_dir}/OSX/DedicatedServer.dll"
+          cp "${artifacts_dir}/Mac/Client/Barotrauma.app/Contents/MacOS/Publicized/BarotraumaCore.dll" "${refs_dir}/OSX/BarotraumaCore.dll"
           cp "${artifacts_dir}/Windows/Client/Publicized/MonoGame.Framework.Windows.NetStandard.dll" "${refs_dir}/MonoGame.Framework.Windows.NetStandard.dll"
           cp "${artifacts_dir}/Linux/Client/Publicized/MonoGame.Framework.Linux.NetStandard.dll" "${refs_dir}/MonoGame.Framework.Linux.NetStandard.dll"
           cp "${artifacts_dir}/Mac/Client/Barotrauma.app/Contents/MacOS/Publicized/MonoGame.Framework.MacOS.NetStandard.dll" "${refs_dir}/MonoGame.Framework.MacOS.NetStandard.dll"
           # Those are the same across all the platforms, so i guess it doesn't matter?
           cp "${artifacts_dir}/Windows/Client/Publicized/0Harmony.dll" "${refs_dir}/0Harmony.dll"
+          cp "${artifacts_dir}/Windows/Client/Publicized/MonoMod.Utils.dll" "${refs_dir}/MonoMod.Utils.dll"
+          cp "${artifacts_dir}/Windows/Client/Publicized/MonoMod.RuntimeDetour.dll" "${refs_dir}/MonoMod.RuntimeDetour.dll"
+          cp "${artifacts_dir}/Windows/Client/Publicized/MonoMod.ILHelpers.dll" "${refs_dir}/MonoMod.ILHelpers.dll"
+          cp "${artifacts_dir}/Windows/Client/Publicized/MonoMod.Iced.dll" "${refs_dir}/MonoMod.Iced.dll"
+          cp "${artifacts_dir}/Windows/Client/Publicized/MonoMod.Backports.dll" "${refs_dir}/MonoMod.Backports.dll"
           cp "${artifacts_dir}/Windows/Client/Publicized/Farseer.NetStandard.dll" "${refs_dir}/Farseer.NetStandard.dll"
           cp "${artifacts_dir}/Windows/Client/Publicized/Lidgren.NetStandard.dll" "${refs_dir}/Lidgren.NetStandard.dll"
           cp "${artifacts_dir}/Windows/Client/Publicized/Mono.Cecil.dll" "${refs_dir}/Mono.Cecil.dll"
-          cp "${artifacts_dir}/Windows/Client/Publicized/MonoMod.Common.dll" "${refs_dir}/MonoMod.Common.dll"
           cp "${artifacts_dir}/Windows/Client/Publicized/MoonSharp.Interpreter.dll" "${refs_dir}/MoonSharp.Interpreter.dll"
           cp "${artifacts_dir}/Windows/Client/Publicized/XNATypes.dll" "${refs_dir}/XNATypes.dll"
           cd "${refs_dir}"

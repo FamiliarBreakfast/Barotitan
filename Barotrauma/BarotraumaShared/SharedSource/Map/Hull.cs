@@ -309,7 +309,11 @@ namespace Barotrauma
             {
                 if (!MathUtils.IsValid(value)) { return; }
                 waterVolume = MathHelper.Clamp(value, 0.0f, Volume * MaxCompress);
-                if (waterVolume < Volume) { Pressure = rect.Y - rect.Height + waterVolume / rect.Width; }
+                if (waterVolume <= Volume)
+                { 
+                    //recalculate pressure, but only if there's less water than the volume, above that point the "overpressure" logic kicks in
+                    Pressure = rect.Y - rect.Height + waterVolume / rect.Width; 
+                }
                 if (waterVolume > 0.0f)
                 {
                     update = true;
@@ -456,6 +460,11 @@ namespace Barotrauma
 
         public List<DummyFireSource> FakeFireSources { get; private set; }
 
+        /// <summary>
+        /// Can be used by conditionals
+        /// </summary>
+        public int FireCount => FireSources?.Count ?? 0;
+
         public BallastFloraBehavior BallastFlora { get; set; }
 
         public Hull(Rectangle rectangle)
@@ -561,7 +570,7 @@ namespace Barotrauma
             var clone = new Hull(rect, Submarine);
             foreach (KeyValuePair<Identifier, SerializableProperty> property in SerializableProperties)
             {
-                if (!property.Value.Attributes.OfType<Editable>().Any()) { continue; }
+                if (!property.Value.Attributes.OfType<Serialize>().Any()) { continue; }
                 clone.SerializableProperties[property.Key].TrySetValue(clone, property.Value.GetValue(this));
             }
 #if CLIENT
@@ -1164,8 +1173,10 @@ namespace Barotrauma
                 float distanceMultiplier = 1;
                 if (g.ConnectedDoor != null && !g.ConnectedDoor.IsBroken)
                 {
-                    //gap blocked if the door is not open or the predicted state is not open
-                    if ((g.ConnectedDoor.IsClosed && !g.ConnectedDoor.IsBroken) || (g.ConnectedDoor.PredictedState.HasValue && !g.ConnectedDoor.PredictedState.Value))
+                    //gap blocked if the door is closed, and we haven't made any predictions of it opening client-side
+                    if ((g.ConnectedDoor.IsClosed && !g.ConnectedDoor.PredictedState.HasValue) || 
+                        //OR we've predicted that the door is closed client-side
+                        (g.ConnectedDoor.PredictedState.HasValue && !g.ConnectedDoor.PredictedState.Value))
                     {
                         if (g.ConnectedDoor.OpenState < 0.1f)
                         {

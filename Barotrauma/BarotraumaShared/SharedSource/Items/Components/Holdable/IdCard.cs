@@ -1,4 +1,4 @@
-using Microsoft.Xna.Framework;
+﻿using Microsoft.Xna.Framework;
 using System.Collections.Immutable;
 
 namespace Barotrauma.Items.Components
@@ -23,7 +23,7 @@ namespace Barotrauma.Items.Components
         public string OwnerTags
         {
             get => string.Join(',', OwnerTagSet);
-            set => OwnerTagSet = value.Split(',').ToIdentifiers().ToImmutableHashSet();
+            set => OwnerTagSet = value.ToIdentifiers().ToImmutableHashSet();
         }
 
         [Serialize("", IsPropertySaveable.Yes, alwaysUseInstanceValues: true)]
@@ -80,9 +80,6 @@ namespace Barotrauma.Items.Components
         [Serialize("0,0", IsPropertySaveable.Yes, alwaysUseInstanceValues: true)]
         public Vector2 OwnerSheetIndex { get; set; }
 
-        [Serialize(false, IsPropertySaveable.Yes, alwaysUseInstanceValues: true)]
-        public bool SpawnPointTagsGiven { get; set; }
-
         public IdCard(Item item, ContentXElement element) : base(item, element) { }
 
         public void Initialize(WayPoint spawnPoint, Character character)
@@ -97,6 +94,10 @@ namespace Barotrauma.Items.Components
                 foreach (string s in spawnPoint.IdCardTags)
                 {
                     item.AddTag(s);
+                }
+                if (GameMain.GameSession?.GameMode is PvPMode)
+                {
+                    item.AddTag($"id_{character.TeamID}".ToIdentifier());
                 }
                 if (!string.IsNullOrWhiteSpace(spawnPoint.IdCardDesc)) 
                 { 

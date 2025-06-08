@@ -18,12 +18,8 @@ namespace Barotrauma
 
         public readonly int IncreaseHigh;
 
-        public readonly UpgradePrefab Prefab;
-
         public UpgradePrice(UpgradePrefab prefab, ContentXElement element)
         {
-            Prefab = prefab;
-
             IncreaseLow = UpgradePrefab.ParsePercentage(element.GetAttributeString("increaselow", string.Empty)!,
                 "IncreaseLow".ToIdentifier(), element, suppressWarnings: prefab.SuppressWarnings);
 
@@ -34,20 +30,21 @@ namespace Barotrauma
 
             if (BasePrice == -1)
             {
-                if (prefab.SuppressWarnings)
+                if (!prefab.SuppressWarnings)
                 {
                     DebugConsole.AddWarning($"Price attribute \"baseprice\" is not defined for {prefab?.Identifier}.\n " +
-                                            "The value has been assumed to be '1000'.");
+                                            "The value has been assumed to be '1000'.",
+                                            prefab!.ContentPackage);
                     BasePrice = 1000;
                 }
             }
         }
 
-        public int GetBuyPrice(int level, Location? location = null, ImmutableHashSet<Character>? characterList = null)
+        public int GetBuyPrice(UpgradePrefab prefab, int level, Location? location = null, ImmutableHashSet<Character>? characterList = null)
         {
             float price = BasePrice;
 
-            int maxLevel = Prefab.MaxLevel;
+            int maxLevel = prefab.MaxLevel;
 
             float lerpAmount = maxLevel is 0
                 ? level // avoid division by 0
@@ -57,6 +54,12 @@ namespace Barotrauma
             price += price * (priceMultiplier / 100f);
 
             price = location?.GetAdjustedMechanicalCost((int)price) ?? price;
+
+            // Adjust by campaign difficulty settings
+            if (GameMain.GameSession?.Campaign is CampaignMode campaign)
+            {
+                price *= campaign.Settings.ShipyardPriceMultiplier;
+            }
 
             characterList ??= GameSession.GetSessionCrewCharacters(CharacterType.Both);
 
@@ -342,7 +345,8 @@ namespace Barotrauma
                             {
                                 DebugConsole.AddWarning($"Upgrade \"{prefab.Identifier}\" is affecting a property that is also being affected by \"{matchingPrefab.Identifier}\".\n" +
                                                         "This is unsupported and might yield unexpected results if both upgrades are applied at the same time to the same item.\n" +
-                                                        "Add the attribute suppresswarnings=\"true\" to your XML element to disable this warning if you know what you're doing.");
+                                                        "Add the attribute suppresswarnings=\"true\" to your XML element to disable this warning if you know what you're doing.",
+                                                        prefab.ContentPackage);
                             }
                         }
                     }
@@ -395,14 +399,56 @@ namespace Barotrauma
         private Dictionary<string, string[]> targetProperties { get; }
         private readonly ImmutableArray<UpgradeMaxLevelMod> MaxLevelsMods;
         public readonly ImmutableHashSet<UpgradeResourceCost> ResourceCosts;
-
+        
+        public const int CrushDepthDefaultUpgradePrc = 15;
+        private static int? crushDepthUpgradePrc;
+        
+        public static int CrushDepthUpgradePrc
+        {
+            get
+            {
+                if (crushDepthUpgradePrc == null)
+                {
+                    if (Find("increasewallhealth".ToIdentifier()) is UpgradePrefab hullUpgradePrefab)
+                    {
+                        string updateValueStr = hullUpgradePrefab.SourceElement?.GetChildElement("Structure")?.GetAttributeString("crushdepth", null) ?? string.Empty;
+                        if (!string.IsNullOrEmpty(updateValueStr))
+                        {
+                            crushDepthUpgradePrc = ParsePercentage(updateValueStr, Identifier.Empty, suppressWarnings: true);
+                        }
+                    }
+                }
+                
+                return crushDepthUpgradePrc ?? CrushDepthDefaultUpgradePrc;
+            }
+        }
+        
+        public const int IncreaseWallHealthDefaultMaxLevel = 6;
+        private static int? increaseWallHealthMaxLevel;
+        
+        public static int IncreaseWallHealthMaxLevel
+        {
+            get
+            {
+                if (increaseWallHealthMaxLevel == null)
+                {
+                    if (Find("increasewallhealth".ToIdentifier()) is UpgradePrefab hullUpgradePrefab)
+                    {
+                        increaseWallHealthMaxLevel = hullUpgradePrefab.MaxLevel;
+                    }
+                }
+                
+                return increaseWallHealthMaxLevel ?? IncreaseWallHealthDefaultMaxLevel;
+            }
+        }
+        
         public UpgradePrefab(ContentXElement element, UpgradeModulesFile file) : base(element, file)
         {
-            Name = element.GetAttributeString("name", string.Empty)!;
-            Description = element.GetAttributeString("description", string.Empty)!;
-            MaxLevel = element.GetAttributeInt("maxlevel", 1);
-            SuppressWarnings = element.GetAttributeBool("supresswarnings", false);
-            HideInMenus = element.GetAttributeBool("hideinmenus", false);
+            Name = element.GetAttributeString(nameof(Name), string.Empty)!;
+            Description = element.GetAttributeString(nameof(Description), string.Empty)!;
+            MaxLevel = element.GetAttributeInt(nameof(MaxLevel), 1);
+            SuppressWarnings = element.GetAttributeBool(nameof(SuppressWarnings), false);
+            HideInMenus = element.GetAttributeBool(nameof(HideInMenus), false);
             SourceElement = element;
 
             var targetProperties = new Dictionary<string, string[]>();

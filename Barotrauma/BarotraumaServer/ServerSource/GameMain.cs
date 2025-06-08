@@ -88,8 +88,21 @@ namespace Barotrauma
             Console.WriteLine("Loading game settings");
             GameSettings.Init();
 
-            Console.WriteLine("Initializing SteamManager");
-            SteamManager.Initialize();
+            //no owner key = dedicated server
+            if (!CommandLineArgs.Any(a => a.Trim().Equals("-ownerkey", StringComparison.OrdinalIgnoreCase)))
+            {
+                Console.WriteLine("Initializing SteamManager");
+                SteamManager.Initialize();
+
+                if (!SteamManager.SteamworksLibExists)
+                {
+                    Console.WriteLine("Initializing EosManager");
+                    if (EosInterface.Core.Init(EosInterface.ApplicationCredentials.Server, enableOverlay: false).TryUnwrapFailure(out var initError))
+                    {
+                        Console.WriteLine($"EOS failed to initialize: {initError}");
+                    }
+                }
+            }
 
             //TODO: figure out how consent is supposed to work for servers
             //Console.WriteLine("Initializing GameAnalytics");
@@ -124,26 +137,13 @@ namespace Barotrauma
 
         private void CheckContentPackage()
         {
-            //TODO: reimplement using only core package?
-            /*foreach (ContentPackage contentPackage in Config.AllEnabledPackages)
+            if (Version < VanillaContent.GameVersion)
             {
-                var exePaths = contentPackage.GetFilesOfType(ContentType.ServerExecutable);
-                if (exePaths.Count() > 0 && AppDomain.CurrentDomain.FriendlyName != exePaths.First())
-                {
-                    DebugConsole.NewMessage(AppDomain.CurrentDomain.FriendlyName);
-                    DebugConsole.ShowQuestionPrompt(TextManager.GetWithVariables("IncorrectExe", new string[2] { "[selectedpackage]", "[exename]" }, new string[2] { contentPackage.Name, exePaths.First() }),
-                        (option) =>
-                        {
-                            if (option.ToLower() == "y" || option.ToLower() == "yes")
-                            {
-                                string fullPath = Path.GetFullPath(exePaths.First());
-                                ToolBox.OpenFileWithShell(fullPath);
-                                ShouldRun = false;
-                            }
-                        });
-                    break;
-                }
-            }*/
+                DebugConsole.ThrowErrorLocalized(
+                    TextManager.GetWithVariables("versionmismatchwarning",
+                        ("[gameversion]", Version.ToString()),
+                        ("[contentversion]", VanillaContent.GameVersion.ToString())));
+            }
         }
 
         public void StartServer()
@@ -156,8 +156,8 @@ namespace Barotrauma
             bool enableUpnp = false;
 
             int maxPlayers = 10; 
-            Option<int> ownerKey = Option<int>.None();
-            Option<SteamId> steamId = Option<SteamId>.None();
+            Option<int> ownerKey = Option.None;
+            Option<P2PEndpoint> ownerEndpoint = Option.None;
             IPAddress listenIp = IPAddress.Any;
 
             XDocument doc = XMLExtensions.TryLoadXml(ServerSettings.SettingsFile);
@@ -167,7 +167,9 @@ namespace Barotrauma
             }
             else
             {
-                name = doc.Root.GetAttributeString(nameof(ServerSettings.Name), "Server");
+                name = doc.Root.GetAttributeString(nameof(ServerSettings.ServerName),
+                    //backwards compatibility
+                    doc.Root.GetAttributeString("name", "Server"));
                 port = doc.Root.GetAttributeInt(nameof(ServerSettings.Port), NetConfig.DefaultPort);
                 queryPort = doc.Root.GetAttributeInt(nameof(ServerSettings.QueryPort), NetConfig.DefaultQueryPort);
                 publiclyVisible = doc.Root.GetAttributeBool(nameof(ServerSettings.IsPublic), false);
@@ -233,8 +235,8 @@ namespace Barotrauma
                         }
                         i++;
                         break;
-                    case "-steamid":
-                        steamId = SteamId.Parse(CommandLineArgs[i + 1]);
+                    case "-endpoint":
+                        ownerEndpoint = P2PEndpoint.Parse(CommandLineArgs[i + 1]);
                         i++;
                         break;
                     case "-pipes":
@@ -254,8 +256,8 @@ namespace Barotrauma
                 enableUpnp,
                 maxPlayers,
                 ownerKey,
-                steamId);
-            Server.StartServer();
+                ownerEndpoint);
+            Server.StartServer(registerToServerList: true);
 
             for (int i = 0; i < CommandLineArgs.Length; i++)
             {
@@ -287,6 +289,12 @@ namespace Barotrauma
                         {
                             Server.ServerSettings.Language = language;
                         }
+                        i++;
+                        break;
+                    case "-multiclienttestmode":
+#if DEBUG
+                        CharacterCampaignData.RequireClientNameMatch = true;
+#endif
                         i++;
                         break;
                 }
@@ -352,6 +360,7 @@ namespace Barotrauma
                     Server.Update((float)Timing.Step);
                     if (Server == null) { break; }
                     SteamManager.Update((float)Timing.Step);
+                    EosInterface.Core.Update();
                     TaskPool.Update();
                     CoroutineManager.Update(paused: false, (float)Timing.Step);
 

@@ -1,5 +1,7 @@
 ﻿using Barotrauma.Networking;
+using System.Linq;
 using System.Xml.Linq;
+using Barotrauma.Items.Components;
 
 namespace Barotrauma
 {
@@ -23,6 +25,27 @@ namespace Barotrauma
                 else
                 {
                     GameServer.Log(GameServer.CharacterLogName(this) + " has died (Cause of death: " + causeOfDeath + ")", ServerLog.MessageType.Attack);
+                }
+            }
+
+            if (GameMain.Server is { ServerSettings.RespawnMode: RespawnMode.Permadeath } && 
+                GameMain.GameSession?.Campaign is MultiPlayerCampaign mpCampaign &&
+                causeOfDeath != CauseOfDeathType.Disconnected)
+            {
+                Client ownerClient = GameMain.Server.ConnectedClients.FirstOrDefault(c => c.Character == this);
+                if (ownerClient != null)
+                {
+                    ownerClient.SpectateOnly = true;
+                    CharacterCampaignData matchingData = mpCampaign.GetClientCharacterData(ownerClient);
+                    if (matchingData != null)
+                    {
+                        matchingData.ApplyPermadeath();
+                        
+                        if (GameMain.Server?.ServerSettings is { IronmanModeActive: true })
+                        {
+                            mpCampaign.SaveSingleCharacter(matchingData);
+                        }
+                    }
                 }
             }
 
@@ -65,6 +88,17 @@ namespace Barotrauma
         partial void OnTalentGiven(TalentPrefab talentPrefab)
         {
             GameServer.Log($"{GameServer.CharacterLogName(this)} has gained the talent '{talentPrefab.DisplayName}'", ServerLog.MessageType.Talent);
+        }
+        
+        private void SyncInGameEditables(Item item)
+        {
+            foreach (ItemComponent itemComponent in item.Components)
+            {
+                foreach (var serializableProperty in SerializableProperty.GetProperties<InGameEditable>(itemComponent))
+                {
+                    GameMain.Server.CreateEntityEvent(item, new Item.ChangePropertyEventData(serializableProperty, itemComponent));
+                }
+            }
         }
     }
 }

@@ -4,17 +4,13 @@ using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Xml.Linq;
 
 namespace Barotrauma
 {
     partial class EscortMission : Mission
     {
-        private readonly ContentXElement characterConfig;
         private readonly ContentXElement itemConfig;
-
-        private readonly List<Character> characters = new List<Character>();
-        private readonly Dictionary<Character, List<Item>> characterItems = new Dictionary<Character, List<Item>>();
+        
         private readonly Dictionary<HumanPrefab, List<StatusEffect>> characterStatusEffects = new Dictionary<HumanPrefab, List<StatusEffect>>();
 
         private readonly int baseEscortedCharacters;
@@ -36,7 +32,6 @@ namespace Barotrauma
             : base(prefab, locations, sub)
         {
             missionSub = sub;
-            characterConfig = prefab.ConfigElement.GetChildElement("Characters");
             baseEscortedCharacters = prefab.ConfigElement.GetAttributeInt("baseescortedcharacters", 1);
             scalingEscortedCharacters = prefab.ConfigElement.GetAttributeFloat("scalingescortedcharacters", 0);
             terroristChance = prefab.ConfigElement.GetAttributeFloat("terroristchance", 0);
@@ -61,7 +56,7 @@ namespace Barotrauma
             if (descriptionWithoutReward != null) { description = descriptionWithoutReward.Replace("[reward]", rewardText); }
         }
 
-        public override int GetReward(Submarine sub)
+        public override float GetBaseReward(Submarine sub)
         {
             if (sub != missionSub)
             {
@@ -77,7 +72,8 @@ namespace Barotrauma
             {
                 if (inMission)
                 {
-                    DebugConsole.ThrowError("MainSub was null when trying to retrieve submarine size for determining escorted character count!");
+                    DebugConsole.ThrowError("MainSub was null when trying to retrieve submarine size for determining escorted character count!",
+                        contentPackage: Prefab.ContentPackage);
                 }
                 return 1;
             }
@@ -117,7 +113,10 @@ namespace Barotrauma
                         {
                             characterStatusEffects[humanPrefab] = new List<StatusEffect> { newEffect };
                         }
-                        characterStatusEffects[humanPrefab].Add(newEffect);                             
+                        else
+                        {
+                            characterStatusEffects[humanPrefab].Add(newEffect);
+                        }                           
                     }
                 }
             }
@@ -156,14 +155,13 @@ namespace Barotrauma
 
             if (terroristChance > 0f)
             {
-                int terroristCount = (int)Math.Ceiling(terroristChance * Rand.Range(0.8f, 1.2f) * characters.Count);
+                int terroristCount = (int)Math.Ceiling(terroristChance * Rand.Range(0.8f, 1.2f) * characters.Count); 
                 terroristCount = Math.Clamp(terroristCount, 1, characters.Count);
 
                 terroristCharacters.Clear();
                 characters.GetRange(0, terroristCount).ForEach(c => terroristCharacters.Add(c));
-
+                terroristCharacters.ForEach(c => c.IsHostileEscortee = true);
                 terroristDistanceSquared = Vector2.DistanceSquared(Level.Loaded.StartPosition, Level.Loaded.EndPosition) * Rand.Range(0.35f, 0.65f);
-
 #if DEBUG
                 DebugConsole.AddWarning("Terrorists will trigger at range  " + Math.Sqrt(terroristDistanceSquared));
                 foreach (Character character in terroristCharacters)
@@ -180,7 +178,8 @@ namespace Barotrauma
 
             if (scalingCharacterCount * characterConfig.Elements().Count() != characters.Count)
             {
-                DebugConsole.AddWarning("Character count did not match expected character count in InitCharacters of EscortMission");
+                DebugConsole.AddWarning("Character count did not match expected character count in InitCharacters of EscortMission",
+                    Prefab.ContentPackage);
                 return;
             }
             int i = 0;
@@ -188,7 +187,6 @@ namespace Barotrauma
             foreach (ContentXElement element in characterConfig.Elements())
             {
                 string escortIdentifier = element.GetAttributeString("escortidentifier", string.Empty);
-                string colorIdentifier = element.GetAttributeString("color", string.Empty);
                 for (int k = 0; k < scalingCharacterCount; k++)
                 {
                     // for each element defined, we need to initialize that type of character equal to the scaling escorted character count
@@ -220,7 +218,8 @@ namespace Barotrauma
 
             if (characterConfig == null)
             {
-                DebugConsole.ThrowError("Failed to initialize characters for escort mission (characterConfig == null)");
+                DebugConsole.ThrowError("Failed to initialize characters for escort mission (characterConfig == null)",
+                    contentPackage: Prefab.ContentPackage);
                 return;
             }
 
@@ -245,6 +244,7 @@ namespace Barotrauma
                 // decoupled from range check to prevent from weirdness if players handcuff a terrorist and move backwards
                 foreach (Character character in terroristCharacters)
                 {
+                    character.IsHostileEscortee = true;
                     if (character.HasTeamChange(TerroristTeamChangeIdentifier))
                     {
                         // already triggered
@@ -258,7 +258,7 @@ namespace Barotrauma
                         {
                             character.Speak(TextManager.Get("dialogterroristannounce").Value, null, Rand.Range(0.5f, 3f));
                         }
-                        XElement randomElement = itemConfig.Elements().GetRandomUnsynced(e => e.GetAttributeFloat(0f, "mindifficulty") <= Level.Loaded.Difficulty);
+                        ContentXElement randomElement = itemConfig.Elements().GetRandomUnsynced(e => e.GetAttributeFloat(0f, "mindifficulty") <= Level.Loaded.Difficulty);
                         if (randomElement != null)
                         {
                             HumanPrefab.InitializeItem(character, randomElement, character.Submarine, humanPrefab: null, createNetworkEvents: true);

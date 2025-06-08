@@ -4,6 +4,7 @@ using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Security.Cryptography;
@@ -11,6 +12,9 @@ using System.Text;
 
 namespace Barotrauma.Networking
 {
+    [AttributeUsage(AttributeTargets.Property)]
+    public class DoNotSyncOverNetwork : Attribute { }
+
     public enum SelectionMode
     {
         Manual = 0, Random = 1, Vote = 2
@@ -29,6 +33,15 @@ namespace Barotrauma.Networking
         Rampage = 3,
         SomethingDifferent = 4
     }
+
+    public enum RespawnMode
+    {
+        None,
+        MidRound,
+        BetweenRounds,
+        Permadeath,
+    }
+
 
     internal enum LootedMoneyDestination
     {
@@ -49,8 +62,6 @@ namespace Barotrauma.Networking
         public enum NetFlags : byte
         {
             None = 0x0,
-            Name = 0x1,
-            Message = 0x2,
             Properties = 0x4,
             Misc = 0x8,
             LevelSeed = 0x10,
@@ -58,6 +69,7 @@ namespace Barotrauma.Networking
         }
 
         public static readonly string PermissionPresetFile = "Data" + Path.DirectorySeparatorChar + "permissionpresets.xml";
+        public static readonly string PermissionPresetFileCustom = "Data" + Path.DirectorySeparatorChar + "permissionpresets_player.xml";
 
         public string Name
         {
@@ -274,7 +286,9 @@ namespace Barotrauma.Networking
 
             HiddenSubs = new HashSet<string>();
 
+            PermissionPreset.List.Clear();
             PermissionPreset.LoadAll(PermissionPresetFile);
+            PermissionPreset.LoadAll(PermissionPresetFileCustom);
             InitProjSpecific();
 
             ServerName = serverName;
@@ -295,8 +309,9 @@ namespace Barotrauma.Networking
                     string typeName = SerializableProperty.GetSupportedTypeName(property.PropertyType);
                     if (typeName != null || property.PropertyType.IsEnum)
                     {
+                        if (property.GetAttribute<DoNotSyncOverNetwork>() is not null) { continue; }
                         NetPropertyData netPropertyData = new NetPropertyData(this, property, typeName);
-                        UInt32 key = ToolBox.IdentifierToUint32Hash(netPropertyData.Name, md5);
+                        UInt32 key = ToolBoxCore.IdentifierToUint32Hash(netPropertyData.Name, md5);
                         if (key == 0) { key++; } //0 is reserved to indicate the end of the netproperties section of a message
                         if (netProperties.ContainsKey(key)){ throw new Exception("Hashing collision in ServerSettings.netProperties: " + netProperties[key] + " has same key as " + property.Name + " (" + key.ToString() + ")"); }
                         netProperties.Add(key, netPropertyData);
@@ -313,7 +328,7 @@ namespace Barotrauma.Networking
                     if (typeName != null || property.PropertyType.IsEnum)
                     {
                         NetPropertyData netPropertyData = new NetPropertyData(networkMember.KarmaManager, property, typeName);
-                        UInt32 key = ToolBox.IdentifierToUint32Hash(netPropertyData.Name, md5);
+                        UInt32 key = ToolBoxCore.IdentifierToUint32Hash(netPropertyData.Name, md5);
                         if (netProperties.ContainsKey(key)) { throw new Exception("Hashing collision in ServerSettings.netProperties: " + netProperties[key] + " has same key as " + property.Name + " (" + key.ToString() + ")"); }
                         netProperties.Add(key, netPropertyData);
                     }
@@ -321,24 +336,26 @@ namespace Barotrauma.Networking
             }
         }
 
-        private string serverName;
+        private string serverName = string.Empty;
+
+        [Serialize("", IsPropertySaveable.Yes)]
         public string ServerName
         {
             get { return serverName; }
             set
             {
-                string val = value;
-                if (val.Length > NetConfig.ServerNameMaxLength) { val = val.Substring(0, NetConfig.ServerNameMaxLength); }
-                if (serverName == val) { return; }
-                serverName = val;
+                string newName = value;
+                if (newName.Length > NetConfig.ServerNameMaxLength) { newName = newName.Substring(0, NetConfig.ServerNameMaxLength); }
+                if (serverName == newName) { return; }
+                if (newName.IsNullOrWhiteSpace()) { return; }
+                serverName = newName;
                 ServerDetailsChanged = true;
-#if SERVER
-                UpdateFlag(NetFlags.Name);
-#endif
             }
         }
 
         private string serverMessageText;
+
+        [Serialize("", IsPropertySaveable.Yes)]
         public string ServerMessageText
         {
             get { return serverMessageText; }
@@ -347,11 +364,17 @@ namespace Barotrauma.Networking
                 string val = value;
                 if (val.Length > NetConfig.ServerMessageMaxLength) { val = val.Substring(0, NetConfig.ServerMessageMaxLength); }
                 if (serverMessageText == val) { return; }
+#if SERVER
+                GameMain.Server?.SendChatMessage(TextManager.AddPunctuation(':', TextManager.Get("servermotd"), val).Value, ChatMessageType.Server);
+#elif CLIENT
+                if (GameMain.NetLobbyScreen.ServerMessageButton is { } serverMessageButton)
+                {
+                    serverMessageButton.Flash(GUIStyle.Green);
+                    serverMessageButton.Pulsate(Vector2.One, Vector2.One * 1.2f, 1.0f);
+                }
+#endif
                 serverMessageText = val;
                 ServerDetailsChanged = true;
-#if SERVER
-                UpdateFlag(NetFlags.Message);
-#endif
             }
         }
 
@@ -401,6 +424,26 @@ namespace Barotrauma.Networking
             set { tickRate = MathHelper.Clamp(value, 1, 60); }
         }
 
+        private int maxLagCompensation = 150;
+        [Serialize(150, IsPropertySaveable.Yes, description:
+            "Maximum amount of lag compensation for firing weapons, in milliseconds. " +
+            "E.g. when a client fires a gun, the server will be notified about it with some latency, and checks if it hit anything in the past (at the time the shot was taken), up to this limit. " +
+            "The largest allowed lag compensation is 500 milliseconds.")]
+        public int MaxLagCompensation
+        {
+            get { return maxLagCompensation; }
+            set { maxLagCompensation = MathHelper.Clamp(value, 0, 500); }
+        }
+
+        public float MaxLagCompensationSeconds => maxLagCompensation / 1000.0f;
+
+        [Serialize(true, IsPropertySaveable.Yes, description: "Do clients need to be authenticated (e.g. based on Steam ID or an EGS ownership token). Can be disabled if you for example want to play the game in a local network without a connection to external services.")]
+        public bool RequireAuthentication
+        {
+            get;
+            set;
+        }
+
         [Serialize(true, IsPropertySaveable.Yes)]
         public bool RandomizeSeed
         {
@@ -436,7 +479,7 @@ namespace Barotrauma.Networking
             private set;
         }
 
-        [Serialize(50f, IsPropertySaveable.Yes)]
+        [Serialize(20f, IsPropertySaveable.Yes)]
         /// <summary>
         /// How much skills drop towards the job's default skill levels when dying
         /// </summary>
@@ -445,6 +488,52 @@ namespace Barotrauma.Networking
             get;
             private set;
         }
+
+        [Serialize(10f, IsPropertySaveable.Yes)]
+        /// <summary>
+        /// How much more the skills drop towards the job's default skill levels
+        /// when dying, in addition to SkillLossPercentageOnDeath, if the player
+        /// chooses to respawn in the middle of the round
+        /// </summary>
+        public float SkillLossPercentageOnImmediateRespawn
+        {
+            get;
+            private set;
+        }
+        
+        [Serialize(100f, IsPropertySaveable.Yes)]
+        /// <summary>
+        /// Percentage modifier for the cost of hiring a new character to replace a permanently killed one.
+        /// </summary>
+        public float ReplaceCostPercentage
+        {
+            get;
+            private set;
+        }
+
+        [Serialize(true, IsPropertySaveable.Yes)]
+        /// <summary>
+        /// Are players allowed to take over bots when permadeath is enabled?
+        /// </summary>
+        public bool AllowBotTakeoverOnPermadeath
+        {
+            get;
+            private set;
+        }
+        
+        [Serialize(false, IsPropertySaveable.Yes)]
+        /// <summary>
+        /// This is an optional setting for permadeath mode. When it's enabled, a player client whose character dies cannot
+        /// respawn or get a new character in any way in that game (unlike in normal permadeath mode), and can only spectate.
+        /// NOTE: this setting will do nothing if respawn mode is not set to PermaDeath.
+        /// </summary> 
+        public bool IronmanMode
+        {
+            get;
+            private set;
+        }
+
+        public bool IronmanModeActive => IronmanMode && respawnMode == RespawnMode.Permadeath;
 
         [Serialize(60.0f, IsPropertySaveable.Yes)]
         public float AutoRestartInterval
@@ -459,9 +548,58 @@ namespace Barotrauma.Networking
             get;
             set;
         }
+        
+        [Serialize(PvpTeamSelectionMode.PlayerPreference, IsPropertySaveable.Yes)]
+        public PvpTeamSelectionMode PvpTeamSelectionMode
+        {
+            get; 
+            private set;
+        }
+        
+        [Serialize(1, IsPropertySaveable.Yes)]
+        public int PvpAutoBalanceThreshold
+        {
+            get;
+            private set;
+        }
 
         [Serialize(0.8f, IsPropertySaveable.Yes)]
         public float StartWhenClientsReadyRatio
+        {
+            get;
+            private set;
+        }
+        
+        [Serialize(0.0f, IsPropertySaveable.Yes)]
+        public float PvPStunResist
+        {
+            get;
+            private set;
+        }
+        
+        [Serialize(false, IsPropertySaveable.Yes)]
+        public bool PvPSpawnMonsters
+        {
+            get;
+            private set;
+        }
+        
+        [Serialize(true, IsPropertySaveable.Yes)]
+        public bool PvPSpawnWrecks
+        {
+            get;
+            private set;
+        }
+        
+        [Serialize("Random", IsPropertySaveable.Yes)]
+        public Identifier Biome
+        {
+            get;
+            private set;
+        }
+
+        [Serialize("Random", IsPropertySaveable.Yes)]
+        public Identifier SelectedOutpostName
         {
             get;
             private set;
@@ -476,6 +614,19 @@ namespace Barotrauma.Networking
             {
                 if (allowSpectating == value) { return; }
                 allowSpectating = value;
+                ServerDetailsChanged = true;
+            }
+        }
+
+        private bool allowAFK;
+        [Serialize(true, IsPropertySaveable.Yes)]
+        public bool AllowAFK
+        {
+            get { return allowAFK; }
+            private set
+            {
+                if (allowAFK == value) { return; }
+                allowAFK = value;
                 ServerDetailsChanged = true;
             }
         }
@@ -553,6 +704,7 @@ namespace Barotrauma.Networking
             }
         }
 
+        [Serialize(false, IsPropertySaveable.Yes)]
         public bool AutoRestart
         {
             get { return autoRestart; }
@@ -587,15 +739,17 @@ namespace Barotrauma.Networking
             get; set;
         }
 
-        private bool allowRespawn;
-        [Serialize(true, IsPropertySaveable.Yes)]
-        public bool AllowRespawn
+        private RespawnMode respawnMode;
+        [Serialize(RespawnMode.MidRound, IsPropertySaveable.Yes)]
+        public RespawnMode RespawnMode
         {
-            get { return allowRespawn; }
+            get { return respawnMode; }
             set
             {
-                if (allowRespawn == value) { return; }
-                allowRespawn = value;
+                if (respawnMode == value) { return; }
+                //can't change this when a round is running (but clients can, if the server says so, e.g. when a client joins and needs to know what it's set to despite a round being running)
+                if (GameMain.NetworkMember is { GameStarted: true, IsServer: true }) { return; }
+                respawnMode = value;
                 ServerDetailsChanged = true;
             }
         }
@@ -628,6 +782,7 @@ namespace Barotrauma.Networking
             set;
         }
 
+        [Serialize(0.0f, IsPropertySaveable.Yes)]
         public float SelectedLevelDifficulty
         {
             get { return selectedLevelDifficulty; }
@@ -643,6 +798,13 @@ namespace Barotrauma.Networking
 
         [Serialize(true, IsPropertySaveable.Yes)]
         public bool AllowRewiring
+        {
+            get;
+            set;
+        }
+
+        [Serialize(true, IsPropertySaveable.Yes)]
+        public bool AllowImmediateItemDelivery
         {
             get;
             set;
@@ -664,6 +826,13 @@ namespace Barotrauma.Networking
 
         [Serialize(true, IsPropertySaveable.Yes)]
         public bool AllowFriendlyFire
+        {
+            get;
+            set;
+        }
+        
+        [Serialize(true, IsPropertySaveable.Yes)]
+        public bool AllowDragAndDropGive
         {
             get;
             set;
@@ -749,13 +918,18 @@ namespace Barotrauma.Networking
                 if (traitorDangerLevel == clampedValue) { return; }
                 traitorDangerLevel = clampedValue;
                 ServerDetailsChanged = true;
+#if CLIENT
+                GameMain.NetLobbyScreen?.SetTraitorDangerLevel(traitorDangerLevel);
+#endif
             }
         }
+
+        private int traitorsMinPlayerCount;
         [Serialize(defaultValue: 1, isSaveable: IsPropertySaveable.Yes)]
         public int TraitorsMinPlayerCount
         {
-            get;
-            set;
+            get { return traitorsMinPlayerCount; }
+            set { traitorsMinPlayerCount = MathHelper.Clamp(value, 1, NetConfig.MaxPlayers); }
         }
 
         [Serialize(defaultValue: 50.0f, isSaveable: IsPropertySaveable.Yes)]
@@ -830,9 +1004,24 @@ namespace Barotrauma.Networking
             get;
             private set;
         }
-
+        
+        /// <summary>
+        /// The number of seconds a disconnected player's Character remains in the world until despawned (via "braindeath").
+        /// </summary>
         [Serialize(300.0f, IsPropertySaveable.Yes)]
         public float KillDisconnectedTime
+        {
+            get;
+            set;
+        }
+        
+        /// <summary>
+        /// The number of seconds a disconnected player's Character remains in the world until despawned, in permadeath mode.
+        /// The Character is helpless and vulnerable, this should be short enough to avoid unintended permadeath, but
+        /// also long enough to discourage disconnecting just to avoid a potential incoming permadeath.
+        /// </summary>
+        [Serialize(10.0f, IsPropertySaveable.Yes)]
+        public float DespawnDisconnectedPermadeathTime
         {
             get;
             private set;
@@ -840,6 +1029,13 @@ namespace Barotrauma.Networking
 
         [Serialize(600.0f, IsPropertySaveable.Yes)]
         public float KickAFKTime
+        {
+            get;
+            private set;
+        }
+
+        [Serialize(10.0f, IsPropertySaveable.Yes)]
+        public float MinimumMidRoundSyncTimeout
         {
             get;
             private set;
@@ -854,7 +1050,11 @@ namespace Barotrauma.Networking
             {
                 karmaEnabled = value;
 #if CLIENT
-                if (karmaSettingsBlocker != null) { karmaSettingsBlocker.Visible = !karmaEnabled || karmaPresetDD.SelectedData as string != "custom"; }
+                if (karmaSettingsList != null)
+                {
+                    SetElementInteractability(karmaSettingsList.Content, !karmaEnabled || KarmaPreset != "custom");
+                }
+                karmaElements.ForEach(e => e.Visible = karmaEnabled);
 #endif
             }
         }
@@ -883,10 +1083,14 @@ namespace Barotrauma.Networking
         }
 
         [Serialize("All", IsPropertySaveable.Yes)]
-        public string MissionType
+        public string MissionTypes
         {
-            get;
-            set;
+            get => string.Join(",", AllowedRandomMissionTypes.Select(t => t.ToIdentifier()));
+            set
+            {
+                AllowedRandomMissionTypes = value.Split(",").Select(t => t.ToIdentifier()).Distinct().ToList();
+                ValidateMissionTypes();
+            }
         }
 
         [Serialize(8, IsPropertySaveable.Yes)]
@@ -896,10 +1100,13 @@ namespace Barotrauma.Networking
             set { maxPlayers = MathHelper.Clamp(value, 0, NetConfig.MaxPlayers); }
         }
 
-        public List<MissionType> AllowedRandomMissionTypes
+        /// <summary>
+        /// Wrapper for <see cref="MissionTypes"/>.
+        /// </summary>
+        public List<Identifier> AllowedRandomMissionTypes
         {
             get;
-            set;
+            private set;
         }
 
         [Serialize(60f * 60.0f, IsPropertySaveable.Yes)]
@@ -921,6 +1128,27 @@ namespace Barotrauma.Networking
 
         [Serialize(999999, IsPropertySaveable.Yes)]
         public int MaximumMoneyTransferRequest { get; set; }
+
+        [Serialize(0f, IsPropertySaveable.Yes)]
+        public float NewCampaignDefaultSalary { get; set; }
+
+        [Serialize(true, IsPropertySaveable.Yes)]
+        public bool TrackOpponentInPvP { get; set; }
+
+        [Serialize(7, IsPropertySaveable.Yes)]
+        public int DisembarkPointAllowance { get; set; }
+
+        [Serialize("", IsPropertySaveable.Yes), DoNotSyncOverNetwork]
+        public Identifier[] SelectedCoalitionPerks { get; set; } = Array.Empty<Identifier>();
+
+        /// <summary>
+        /// The score required to win a PvP mission (if it is a mission with some scoring system, such as a deathmatch mission)
+        /// </summary>
+        [Serialize(200, IsPropertySaveable.Yes)]
+        public int WinScorePvP { get; set; }
+
+        [Serialize("", IsPropertySaveable.Yes), DoNotSyncOverNetwork]
+        public Identifier[] SelectedSeparatistsPerks { get; set; } = Array.Empty<Identifier>();
 
         public CampaignSettings CampaignSettings { get; set; } = CampaignSettings.Empty;
 
@@ -980,6 +1208,9 @@ namespace Barotrauma.Networking
         public void SetPassword(string password)
         {
             this.password = string.IsNullOrEmpty(password) ? null : password;
+#if SERVER
+            GameMain.Server?.ClearRecentlyDisconnectedClients();
+#endif
         }
 
         public static byte[] SaltPassword(byte[] password, int salt)
@@ -1023,9 +1254,10 @@ namespace Barotrauma.Networking
             => monsterEnabled.Keys
                 .OrderBy(k => CharacterPrefab.Prefabs[k].UintIdentifier)
                 .ToImmutableArray();
-        
-        public void ReadMonsterEnabled(IReadMessage inc)
+
+        public bool ReadMonsterEnabled(IReadMessage inc)
         {
+            bool changed = false;
             InitMonstersEnabled();
             var monsterNames = ExtractAndSortKeys(MonsterEnabled);
             uint receivedMonsterCount = inc.ReadVariableUInt32();
@@ -1038,10 +1270,13 @@ namespace Barotrauma.Networking
             {
                 foreach (Identifier s in monsterNames)
                 {
+                    MonsterEnabled.TryGetValue(s, out bool prevEnabled);
                     MonsterEnabled[s] = inc.ReadBoolean();
+                    changed |= prevEnabled != MonsterEnabled[s];
                 }
             }
             inc.ReadPadBits();
+            return changed;
         }
 
         public void WriteMonsterEnabled(IWriteMessage msg, Dictionary<Identifier, bool> monsterEnabled = null)
@@ -1097,6 +1332,75 @@ namespace Barotrauma.Networking
             }
         }
 
+        public void WritePerks(IWriteMessage msg)
+        {
+            List<DisembarkPerkPrefab> coalitionPerks = GetPerks(SelectedCoalitionPerks);
+
+            msg.WriteVariableUInt32((uint)coalitionPerks.Count);
+            foreach (DisembarkPerkPrefab perk in coalitionPerks)
+            {
+                msg.WriteUInt32(perk.UintIdentifier);
+            }
+
+            List<DisembarkPerkPrefab> separatistsPerks = GetPerks(SelectedSeparatistsPerks);
+            msg.WriteVariableUInt32((uint)separatistsPerks.Count);
+            foreach (DisembarkPerkPrefab perk in separatistsPerks)
+            {
+                msg.WriteUInt32(perk.UintIdentifier);
+            }
+
+            static List<DisembarkPerkPrefab> GetPerks(Identifier[] perkIdentifiers)
+            {
+                List<DisembarkPerkPrefab> perks = new();
+                foreach (Identifier perk in perkIdentifiers)
+                {
+                    if (!DisembarkPerkPrefab.Prefabs.TryGet(perk, out var prefab)) { continue; }
+                    perks.Add(prefab);
+                }
+                return perks;
+            }
+        }
+
+        public bool ReadPerks(IReadMessage msg)
+        {
+            uint coalitionCount = msg.ReadVariableUInt32();
+            Identifier[] newCoalitionPerks = new Identifier[coalitionCount];
+            for (int i = 0; i < coalitionCount; i++)
+            {
+                uint id = msg.ReadUInt32();
+                DisembarkPerkPrefab prefab = DisembarkPerkPrefab.Prefabs.Find(p => p.UintIdentifier == id);
+                if (prefab == null)
+                {
+                    DebugConsole.ThrowError($"Perk not found: {id}");
+                    continue;
+                }
+
+                newCoalitionPerks[i] = prefab.Identifier;
+            }
+
+            uint separatistsCount = msg.ReadVariableUInt32();
+            Identifier[] newSeparatistsPerks = new Identifier[separatistsCount];
+            for (int i = 0; i < separatistsCount; i++)
+            {
+                uint id = msg.ReadUInt32();
+                DisembarkPerkPrefab prefab = DisembarkPerkPrefab.Prefabs.Find(p => p.UintIdentifier == id);
+                if (prefab == null)
+                {
+                    DebugConsole.ThrowError($"Perk not found: {id}");
+                    continue;
+                }
+
+                newSeparatistsPerks[i] = prefab.Identifier;
+            }
+
+            bool changed = !SelectedCoalitionPerks.SequenceEqual(newCoalitionPerks) ||
+                           !SelectedSeparatistsPerks.SequenceEqual(newSeparatistsPerks);
+
+            SelectedCoalitionPerks = newCoalitionPerks;
+            SelectedSeparatistsPerks = newSeparatistsPerks;
+            return changed;
+        }
+
         public void ReadHiddenSubs(IReadMessage msg)
         {
             var subList = GameMain.NetLobbyScreen.GetSubList();
@@ -1124,6 +1428,77 @@ namespace Barotrauma.Networking
             foreach (string submarineName in HiddenSubs)
             {
                 msg.WriteUInt16((UInt16)subList.FindIndex(s => s.Name.Equals(submarineName, StringComparison.OrdinalIgnoreCase)));
+            }
+        }
+        
+        public void UpdateServerListInfo(Action<Identifier, object> setter)
+        {
+            void set(string key, object obj) => setter(key.ToIdentifier(), obj);
+
+            set("ServerName", ServerName);
+            set("MaxPlayers", MaxPlayers);
+            set("HasPassword", HasPassword);
+            set("message", ServerMessageText);
+            set("version", GameMain.Version);
+            set("playercount", GameMain.NetworkMember.ConnectedClients.Count);
+            set("contentpackages", ContentPackageManager.EnabledPackages.All.Where(p => p.HasMultiplayerSyncedContent));
+            set("modeselectionmode", ModeSelectionMode);
+            set("subselectionmode", SubSelectionMode);
+            set("voicechatenabled", VoiceChatEnabled);
+            set("allowspectating", AllowSpectating);
+            set("allowrespawn", RespawnMode is RespawnMode.MidRound or RespawnMode.BetweenRounds);
+            set("traitors", TraitorProbability.ToString(CultureInfo.InvariantCulture));
+            set("friendlyfireenabled", AllowFriendlyFire);
+            set("karmaenabled", KarmaEnabled);
+            set("gamestarted", GameMain.NetworkMember.GameStarted);
+            set("gamemode", GameModeIdentifier);
+            set("playstyle", PlayStyle);
+            set("language", Language.ToString());
+#if SERVER
+            set("eoscrossplay", EosInterface.Core.IsInitialized);
+#else
+            set("eoscrossplay", EosInterface.IdQueries.IsLoggedIntoEosConnect || Eos.EosSessionManager.CurrentOwnedSession.IsSome());
+#endif
+            if (GameMain.NetLobbyScreen?.SelectedSub != null)
+            {
+                set("submarine", GameMain.NetLobbyScreen.SelectedSub.Name);
+            }
+            if (Steamworks.SteamClient.IsLoggedOn)
+            {
+                string pingLocation = Steamworks.SteamNetworkingUtils.LocalPingLocation?.ToString();
+                if (!pingLocation.IsNullOrEmpty())
+                {
+                    set("steampinglocation", pingLocation);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Ensures that there's at least one mission type selected for both co-op and PvP game modes.
+        /// </summary>
+        private void ValidateMissionTypes()
+        {
+            ValidateMissionTypes(MissionPrefab.CoOpMissionClasses.Values);
+            ValidateMissionTypes(MissionPrefab.PvPMissionClasses.Values);
+        }
+
+        private void ValidateMissionTypes(IEnumerable<Type> availableMissionClasses)
+        {
+            if (AllowedRandomMissionTypes.Contains(Tags.MissionTypeAll)) { return; }
+            //no selectable mission types that match any of the available mission classes
+            //(e.g. no mission types that use pvp-specific mission classes)
+            if (MissionPrefab.GetAllMultiplayerSelectableMissionTypes().None(missionType =>
+                MissionPrefab.Prefabs.Any(p => p.Type == missionType && AllowedRandomMissionTypes.Contains(p.Type) && availableMissionClasses.Contains(p.MissionClass))))
+            {
+                var matchingMission = MissionPrefab.Prefabs.First(p => availableMissionClasses.Contains(p.MissionClass));
+                if (matchingMission == null)
+                {
+                    DebugConsole.ThrowError($"No missions found for any of the available mission classes ({string.Join(",", availableMissionClasses)})");
+                }
+                else
+                {
+                    AllowedRandomMissionTypes.Add(matchingMission.Type);
+                }
             }
         }
     }

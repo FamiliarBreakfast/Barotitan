@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 using System.Xml.Linq;
 using Barotrauma.Items.Components;
@@ -148,8 +148,14 @@ namespace Barotrauma
                     }
                     case CircuitBoxNodeConnection node when two is CircuitBoxInputConnection input:
                     {
-                        if (node.ExternallyConnectedFrom.Contains(input)) { break; }
-                        node.ExternallyConnectedFrom.Add(input);
+                        if (!node.Connection.CircuitBoxConnections.Contains(input))
+                        {
+                            node.Connection.CircuitBoxConnections.Add(input);
+                        }
+                        if (!node.ExternallyConnectedFrom.Contains(input))
+                        {
+                            node.ExternallyConnectedFrom.Add(input);
+                        }
                         break;
                     }
                 }
@@ -176,7 +182,10 @@ namespace Barotrauma
                 To.Connection.DisconnectWire(wire);
             }
             // if EntitySpawner is not available
-            wireItem.Remove();
+            if (!wireItem.Removed)
+            {
+                wireItem.Remove();
+            }
         }
 
         public static ItemPrefab DefaultWirePrefab => ItemPrefab.Prefabs[Tags.RedWire];

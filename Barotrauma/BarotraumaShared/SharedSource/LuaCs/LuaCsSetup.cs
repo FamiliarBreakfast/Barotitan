@@ -10,18 +10,31 @@ using System.Diagnostics;
 using MoonSharp.VsCodeDebugger;
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Xml.Linq;
+using Barotrauma.Networking;
 
 namespace Barotrauma
 {
     class LuaCsSetupConfig
     {
-        public bool FirstTimeCsWarning = true;
-        public bool ForceCsScripting = false;
-        public bool TreatForcedModsAsNormal = false;
+        public bool EnableCsScripting = false;
+        public bool TreatForcedModsAsNormal = true;
         public bool PreferToUseWorkshopLuaSetup = false;
         public bool DisableErrorGUIOverlay = false;
+        public bool HideUserNames
+        {
+            get { return LuaCsLogger.HideUserNames; }
+            set { LuaCsLogger.HideUserNames = value; }
+        }
 
         public LuaCsSetupConfig() { }
+        public LuaCsSetupConfig(LuaCsSetupConfig config)
+        {
+            EnableCsScripting = config.EnableCsScripting;
+            TreatForcedModsAsNormal = config.TreatForcedModsAsNormal;
+            PreferToUseWorkshopLuaSetup = config.PreferToUseWorkshopLuaSetup;
+            DisableErrorGUIOverlay = config.DisableErrorGUIOverlay;
+        }
     }
 
     internal delegate void LuaCsMessageLogger(string message);
@@ -53,6 +66,18 @@ namespace Barotrauma
         public const bool IsClient = true;
 #endif
 
+        public static bool IsRunningInsideWorkshop
+        {
+            get
+            {
+#if SERVER
+                return Path.GetDirectoryName(System.Reflection.Assembly.GetEntryAssembly().Location) != Directory.GetCurrentDirectory();
+#else
+                return false; // unnecessary but just keeps things clear that this is NOT for client stuff
+#endif
+            }
+        }
+
         private static int executionNumber = 0;
 
 
@@ -83,7 +108,11 @@ namespace Barotrauma
         {
             get
             {
-                return GetPackage(CsForBarotraumaId, false, true) != null || Config.ForceCsScripting;
+#if SERVER
+                if (GetPackage(CsForBarotraumaId, false, false) != null && GameMain.Server.ServerPeer is LidgrenServerPeer) { return true; }
+#endif
+
+                return Config.EnableCsScripting;
             }
         }
 
@@ -98,17 +127,7 @@ namespace Barotrauma
             Networking = new LuaCsNetworking();
             DebugServer = new MoonSharpVsCodeDebugServer();
 
-            if (File.Exists(configFileName))
-            {
-                using (var file = File.Open(configFileName, FileMode.Open, FileAccess.Read))
-                {
-                    Config = LuaCsConfig.Load<LuaCsSetupConfig>(file);
-                }
-            }
-            else
-            {
-                Config = new LuaCsSetupConfig();
-            }
+            ReadSettings();
         }
         
         [Obsolete("Use AssemblyManager::GetTypesByName()")]
@@ -149,13 +168,42 @@ namespace Barotrauma
 
         public void DetachDebugger() => DebugServer.Detach(Lua);
 
-        public void UpdateConfig()
+        public void ReadSettings()
         {
-            FileStream file;
-            if (!File.Exists(configFileName)) { file = File.Create(configFileName); }
-            else { file = File.Open(configFileName, FileMode.Truncate, FileAccess.Write); }
-            LuaCsConfig.Save(file, Config);
-            file.Close();
+            Config = new LuaCsSetupConfig();
+
+            if (File.Exists(configFileName))
+            {
+                try
+                {
+                    using (var file = File.Open(configFileName, FileMode.Open, FileAccess.Read))
+                    {
+                        XDocument document = XDocument.Load(file);
+                        Config.EnableCsScripting = document.Root.GetAttributeBool("EnableCsScripting", Config.EnableCsScripting);
+                        Config.TreatForcedModsAsNormal = document.Root.GetAttributeBool("TreatForcedModsAsNormal", Config.TreatForcedModsAsNormal);
+                        Config.PreferToUseWorkshopLuaSetup = document.Root.GetAttributeBool("PreferToUseWorkshopLuaSetup", Config.PreferToUseWorkshopLuaSetup);
+                        Config.DisableErrorGUIOverlay = document.Root.GetAttributeBool("DisableErrorGUIOverlay", Config.DisableErrorGUIOverlay);
+                        Config.HideUserNames = document.Root.GetAttributeBool("HideUserNames", Config.HideUserNames);
+                    }
+                }
+                catch (Exception e)
+                {
+                    LuaCsLogger.HandleException(e, LuaCsMessageOrigin.LuaCs);
+                }
+            }
+        }
+
+        public void WriteSettings()
+        {
+            XDocument document = new XDocument();
+            document.Add(new XElement("LuaCsSetupConfig"));
+            document.Root.SetAttributeValue("EnableCsScripting", Config.EnableCsScripting);
+            document.Root.SetAttributeValue("EnableCsScripting", Config.EnableCsScripting);
+            document.Root.SetAttributeValue("TreatForcedModsAsNormal", Config.TreatForcedModsAsNormal);
+            document.Root.SetAttributeValue("PreferToUseWorkshopLuaSetup", Config.PreferToUseWorkshopLuaSetup);
+            document.Root.SetAttributeValue("DisableErrorGUIOverlay", Config.DisableErrorGUIOverlay);
+            document.Root.SetAttributeValue("HideUserNames", Config.HideUserNames);
+            document.Save(configFileName);
         }
 
         public static ContentPackage GetPackage(ContentPackageId id, bool fallbackToAll = true, bool useBackup = false)
@@ -324,7 +372,11 @@ namespace Barotrauma
         public void Initialize(bool forceEnableCs = false)
         {
             if (IsInitialized)
+            {
                 Stop();
+            }
+
+            IsInitialized = true;
 
             LuaCsLogger.LogMessage("Lua! Version " + AssemblyInfo.GitRevision);
 
@@ -367,12 +419,6 @@ namespace Barotrauma
             UserData.RegisterType<LuaUserData>();
             UserData.RegisterType<LuaCsPerformanceCounter>();
             UserData.RegisterType<IUserDataDescriptor>();
-            UserData.RegisterType<CsPackageManager>();
-            UserData.RegisterType<AssemblyManager>();
-            UserData.RegisterType<IAssemblyPlugin>();
-
-            UserData.RegisterExtensionType(typeof(MathUtils));
-            UserData.RegisterExtensionType(typeof(XMLExtensions));
 
             Lua.Globals["printerror"] = (DynValue o) => { LuaCsLogger.LogError(o.ToString(), LuaCsMessageOrigin.LuaMod); };
 
@@ -395,7 +441,7 @@ namespace Barotrauma
             Lua.Globals["Networking"] = Networking;
             Lua.Globals["Steam"] = Steam;
             Lua.Globals["PerformanceCounter"] = PerformanceCounter;
-            Lua.Globals["LuaCsConfig"] = Config;
+            Lua.Globals["LuaCsConfig"] = new LuaCsSetupConfig(Config);
 
             Lua.Globals["ExecutionNumber"] = executionNumber;
             Lua.Globals["CSActive"] = csActive;
@@ -412,13 +458,9 @@ namespace Barotrauma
             {
                 LuaCsLogger.LogMessage("Cs! Version " + AssemblyInfo.GitRevision);
 
-                if (Config.FirstTimeCsWarning)
-                {
-                    Config.FirstTimeCsWarning = false;
-                    UpdateConfig();
-
-                    DebugConsole.AddWarning("Cs package active! Cs mods are NOT sandboxed, use it at your own risk!");
-                }
+                UserData.RegisterType<CsPackageManager>();
+                UserData.RegisterType<AssemblyManager>();
+                UserData.RegisterType<IAssemblyPlugin>();
 
                 Lua.Globals["PluginPackageManager"] = PluginPackageManager;
                 Lua.Globals["AssemblyManager"] = AssemblyManager;
@@ -457,8 +499,6 @@ namespace Barotrauma
                 {
                     ModUtils.Logging.PrintError($"{nameof(LuaCsSetup)}::{nameof(Initialize)}() | Error while loading assemblies! Details: {e.Message} | {e.StackTrace}");
                 }
-
-                IsInitialized = true;
             }
 
 
@@ -495,6 +535,10 @@ namespace Barotrauma
                 else if (luaPackage != null) { RunWorkshop(); }
                 else { RunNone(); }
             }
+
+#if SERVER
+            GameMain.Server.ServerSettings.LoadClientPermissions();
+#endif
 
             executionNumber++;
         }

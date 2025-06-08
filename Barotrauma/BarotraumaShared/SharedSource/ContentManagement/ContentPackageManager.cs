@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 using Barotrauma.Extensions;
 using System;
 using System.Collections;
@@ -65,8 +65,13 @@ namespace Barotrauma
             public static void ReloadCore()
             {
                 if (Core == null) { return; }
-                Core.UnloadContent();
-                Core.LoadContent();
+                ReloadPackage(Core);
+            }
+
+            public static void ReloadPackage(ContentPackage p)
+            {
+                p.UnloadContent();
+                p.LoadContent();
                 SortContent();
             }
 
@@ -155,6 +160,7 @@ namespace Barotrauma
                     .Distinct(new TypeComparer<ContentFile>())
                     .ForEach(f => f.Sort());
                 MergedHash = Md5Hash.MergeHashes(All.Select(cp => cp.Hash));
+                TextManager.IncrementLanguageVersion();
             }
 
             public static int IndexOf(ContentPackage contentPackage)
@@ -308,7 +314,7 @@ namespace Barotrauma
                     {
                         onLoadFail?.Invoke(
                             fileListPath,
-                            result.TryUnwrapFailure(out var exception) ? exception : throw new Exception("unreachable"));
+                            result.TryUnwrapFailure(out var exception) ? exception : throw new UnreachableCodeException());
                         continue;
                     }
                     
@@ -523,7 +529,7 @@ namespace Barotrauma
             List<RegularPackage> enabledRegularPackages = new List<RegularPackage>();
 
 #if CLIENT
-            TaskPool.Add("EnqueueWorkshopUpdates", EnqueueWorkshopUpdates(), t => { });
+            TaskPool.AddWithResult("EnqueueWorkshopUpdates", EnqueueWorkshopUpdates(), t => { });
 #else
             #warning TODO: implement Workshop updates for servers at some point
 #endif
@@ -588,6 +594,26 @@ namespace Barotrauma
             }
 
             yield return LoadProgress.Progress(1.0f);
+        }
+
+        public static void CheckMissingDependencies()
+        {
+            foreach (var enabledPackage in EnabledPackages.All)
+            {
+                enabledPackage.ClearMissingDependencies();
+                enabledPackage.TryFetchUgcChildren((Steamworks.Data.PublishedFileId[]? children) =>
+                {
+                    if (children == null) { return; }
+                    var missingChildren = children
+                        .Where(childUgcItemId =>
+                            EnabledPackages.All.None(package =>
+                                package.UgcId.TryUnwrap(out var ugcId) && ugcId is SteamWorkshopId workshopId && workshopId.Value == childUgcItemId.Value));
+                    foreach (var missingChild in missingChildren)
+                    {
+                        enabledPackage.AddMissingDependency(missingChild);
+                    }
+                });
+            }
         }
 
         public static void LogEnabledRegularPackageErrors()

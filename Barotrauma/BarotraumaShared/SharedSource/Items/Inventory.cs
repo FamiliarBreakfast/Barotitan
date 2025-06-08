@@ -58,7 +58,12 @@ namespace Barotrauma
                 return true;
             }
 
-            public bool CanBePut(ItemPrefab itemPrefab, float? condition = null, int? quality = null)
+            /// <summary>
+            /// Can an instance of the item prefab be put into the slot? 
+            /// Note that if the condition and quality aren't given, they are ignored, and the method can return true even if the item can't go in the slot
+            /// due to it being occupied by another item with a different condition or quality (which disallows stacking).
+            /// </summary>
+            public bool CanProbablyBePut(ItemPrefab itemPrefab, float? condition = null, int? quality = null)
             {
                 if (itemPrefab == null) { return false; }
                 if (items.Count > 0)
@@ -228,12 +233,23 @@ namespace Barotrauma
 
         public readonly Entity Owner;
 
+        /// <summary>
+        /// Capacity, or the number of slots in the inventory.
+        /// </summary>
         protected readonly int capacity;
         protected readonly ItemSlot[] slots;
-        
+
         public bool Locked;
 
         protected float syncItemsDelay;
+
+
+        private int extraStackSize;
+        public int ExtraStackSize
+        {
+            get => extraStackSize;
+            set => extraStackSize = MathHelper.Max(value, 0);
+        }
 
         /// <summary>
         /// All items contained in the inventory. Stacked items are returned as individual instances. DO NOT modify the contents of the inventory while enumerating this list.
@@ -263,6 +279,21 @@ namespace Barotrauma
         public int Capacity
         {
             get { return capacity; }
+        }
+        
+        public static bool IsDragAndDropGiveAllowed
+        {
+            get
+            {
+                // allowed for single player
+                if (GameMain.NetworkMember == null)
+                {
+                    return true;
+                }
+                
+                // controlled by server setting in multiplayer
+                return GameMain.NetworkMember.ServerSettings.AllowDragAndDropGive;
+            }
         }
 
         public int EmptySlotCount => slots.Count(i => !i.Empty());
@@ -300,13 +331,16 @@ namespace Barotrauma
             }
 #endif
         }
-
-        protected IEnumerable<Item> GetAllItems(bool checkForDuplicates)
+        
+        public IEnumerable<Item> GetAllItems(bool checkForDuplicates)
         {
             for (int i = 0; i < capacity; i++)
             {
-                foreach (var item in slots[i].Items)
+                var items = slots[i].Items;
+                // ReSharper disable once ForCanBeConvertedToForeach, because this is performance-sensitive code.
+                for (int j = 0; j < items.Count; j++)
                 {
+                    var item = items[j];
                     if (item == null)
                     {
 #if DEBUG
@@ -318,9 +352,9 @@ namespace Barotrauma
                     if (checkForDuplicates)
                     {
                         bool duplicateFound = false;
-                        for (int j = 0; j < i; j++)
+                        for (int s = 0; s < i; s++)
                         {
-                            if (slots[j].Items.Contains(item))
+                            if (slots[s].Items.Contains(item))
                             {
                                 duplicateFound = true;
                                 break;
@@ -333,7 +367,7 @@ namespace Barotrauma
                         yield return item;
                     }
                 }
-            }            
+            }
         }
 
         private void NotifyItemComponentsOfChange()
@@ -389,12 +423,17 @@ namespace Barotrauma
             return null;
         }
 
+        private bool IsIndexInRange(int index)
+        {
+            return index >= 0 && index < slots.Length;
+        }
+
         /// <summary>
         /// Get the item stored in the specified inventory slot. If the slot contains a stack of items, returns the first item in the stack.
         /// </summary>
         public Item GetItemAt(int index)
         {
-            if (index < 0 || index >= slots.Length) { return null; }
+            if (!IsIndexInRange(index)) { return null; }
             return slots[index].FirstOrDefault();
         }
 
@@ -403,14 +442,13 @@ namespace Barotrauma
         /// </summary>
         public IEnumerable<Item> GetItemsAt(int index)
         {
-            if (index < 0 || index >= slots.Length) { return Enumerable.Empty<Item>(); }
+            if (!IsIndexInRange(index)) { return Enumerable.Empty<Item>(); }
             return slots[index].Items;
         }
 
         public int GetItemStackSlotIndex(Item item, int index)
         {
-            if (index < 0 || index >= slots.Length) { return -1; }
-
+            if (!IsIndexInRange(index)) { return -1; }
             return slots[index].Items.IndexOf(item);
         }
 
@@ -445,7 +483,7 @@ namespace Barotrauma
         public virtual bool ItemOwnsSelf(Item item)
         {
             if (Owner == null) { return false; }
-            if (!(Owner is Item)) { return false; }
+            if (Owner is not Item) { return false; }
             Item ownerItem = Owner as Item;
             if (ownerItem == item) { return true; }
             if (ownerItem.ParentInventory == null) { return false; }
@@ -488,11 +526,16 @@ namespace Barotrauma
         public virtual bool CanBePutInSlot(Item item, int i, bool ignoreCondition = false)
         {
             if (ItemOwnsSelf(item)) { return false; }
-            if (i < 0 || i >= slots.Length) { return false; }
+            if (!IsIndexInRange(i)) { return false; }
             return slots[i].CanBePut(item, ignoreCondition);
         }
 
-        public bool CanBePut(ItemPrefab itemPrefab, float? condition = null, int? quality = null)
+        /// <summary>
+        /// Can an instance of the item prefab be put into the inventory? 
+        /// Note that if the condition and quality aren't given, they are ignored, and the method can return true even if the item can't go in the inventory
+        /// due to the slots being occupied by another item with a different condition or quality (which disallows stacking).
+        /// </summary>
+        public bool CanProbablyBePut(ItemPrefab itemPrefab, float? condition = null, int? quality = null)
         {
             for (int i = 0; i < capacity; i++)
             {
@@ -503,8 +546,8 @@ namespace Barotrauma
 
         public virtual bool CanBePutInSlot(ItemPrefab itemPrefab, int i, float? condition = null, int? quality = null)
         {
-            if (i < 0 || i >= slots.Length) { return false; }
-            return slots[i].CanBePut(itemPrefab, condition);
+            if (!IsIndexInRange(i)) { return false; }
+            return slots[i].CanProbablyBePut(itemPrefab, condition, quality);
         }
 
         public int HowManyCanBePut(ItemPrefab itemPrefab, float? condition = null)
@@ -519,7 +562,7 @@ namespace Barotrauma
 
         public virtual int HowManyCanBePut(ItemPrefab itemPrefab, int i, float? condition, bool ignoreItemsInSlot = false)
         {
-            if (i < 0 || i >= slots.Length) { return 0; }
+            if (!IsIndexInRange(i)) { return 0; }
             return slots[i].HowManyCanBePut(itemPrefab, condition: condition, ignoreItemsInSlot: ignoreItemsInSlot);
         }
 
@@ -537,7 +580,7 @@ namespace Barotrauma
 
         public virtual bool TryPutItem(Item item, int i, bool allowSwapping, bool allowCombine, Character user, bool createNetworkEvent = true, bool ignoreCondition = false)
         {
-            if (i < 0 || i >= slots.Length)
+            if (!IsIndexInRange(i))
             {
                 string thisItemStr = item?.Prefab.Identifier.Value ?? "null";
                 string ownerStr = "null";
@@ -601,7 +644,7 @@ namespace Barotrauma
 
         protected virtual void PutItem(Item item, int i, Character user, bool removeItem = true, bool createNetworkEvent = true)
         {
-            if (i < 0 || i >= slots.Length)
+            if (!IsIndexInRange(i))
             {
                 string errorMsg = "Inventory.PutItem failed: index was out of range(" + i + ").\n" + Environment.StackTrace.CleanupStackTrace();
                 GameAnalyticsManager.AddErrorEventOnce("Inventory.PutItem:IndexOutOfRange", GameAnalyticsManager.ErrorSeverity.Error, errorMsg);
@@ -780,14 +823,15 @@ namespace Barotrauma
             {
                 for (int j = 0; j < otherInventory.capacity; j++)
                 {
-                    if (otherInventory.slots[j].Contains(item)) 
+                    // in case the item is in multiple slots like OuterClothes | InnerClothes, prevent it from being added twice to the list
+                    if (otherInventory.slots[j].Contains(item) && !stackedItems.Contains(item)) 
                     {
                         stackedItems.AddRange(otherInventory.slots[j].Items);
                         otherInventory.slots[j].RemoveAllItems(); 
                     }
                 }
             }
-            else
+            else if (!stackedItems.Contains(item))
             {
                 stackedItems.Add(item);
                 otherInventory.slots[otherIndex].RemoveItem(item);
@@ -1028,7 +1072,6 @@ namespace Barotrauma
                     visualSlots[n].ShowBorderHighlight(Color.White, 0.1f, 0.4f);
                     if (selectedSlot?.Inventory == this) { selectedSlot.ForceTooltipRefresh = true; }
                 }
-                syncItemsDelay = 1.0f;
 #endif
                 CharacterHUD.RecreateHudTextsIfFocused(item);
             }
@@ -1061,8 +1104,14 @@ namespace Barotrauma
 
         public bool IsInSlot(Item item, int index)
         {
-            if (index < 0 || index >= slots.Length) { return false; }
+            if (!IsIndexInRange(index)) { return false; }
             return slots[index].Contains(item);
+        }
+
+        public bool IsSlotEmpty(int index)
+        {
+            if (!IsIndexInRange(index)) { return false; }
+            return slots[index].Empty();
         }
 
         public void SharedRead(IReadMessage msg, List<ushort>[] receivedItemIds, out bool readyToApply)

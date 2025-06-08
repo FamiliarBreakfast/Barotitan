@@ -13,7 +13,7 @@ namespace Barotrauma.Abilities
 
         public AbilityCondition(CharacterTalent characterTalent, ContentXElement conditionElement) 
         {
-            this.characterTalent = characterTalent;
+            this.characterTalent = characterTalent ?? throw new ArgumentNullException(nameof(characterTalent));
             character = characterTalent.Character;
             invert = conditionElement.GetAttributeBool("invert", false);
         }
@@ -40,7 +40,8 @@ namespace Barotrauma.Abilities
             {
                 if (!Enum.TryParse(targetTypeString, true, out TargetType targetType))
                 {
-                    DebugConsole.ThrowError("Invalid target type type \"" + targetTypeString + "\" in CharacterTalent (" + characterTalent.DebugIdentifier + ")");
+                    DebugConsole.ThrowError("Invalid target type type \"" + targetTypeString + "\" in CharacterTalent (" + characterTalent.DebugIdentifier + ")",
+                        contentPackage: characterTalent.Prefab.ContentPackage);
                 }
                 targetTypes.Add(targetType);
             }
@@ -68,21 +69,20 @@ namespace Barotrauma.Abilities
             switch (targetType)
             {
                 case TargetType.Enemy:
-                    return !HumanAIController.IsFriendly(character, targetCharacter);
+                    return !HumanAIController.IsFriendly(character, targetCharacter, onlySameTeam: false);
                 case TargetType.Ally:
-                    return HumanAIController.IsFriendly(character, targetCharacter);
+                    return HumanAIController.IsFriendly(character, targetCharacter, onlySameTeam: true);
                 case TargetType.NotSelf:
                     return targetCharacter != character;
                 case TargetType.Alive:
                     return !targetCharacter.IsDead;
                 case TargetType.Monster:
-                    return !targetCharacter.IsHuman;
+                    return !targetCharacter.IsHuman && !targetCharacter.IsPet;
                 case TargetType.InFriendlySubmarine:
                     return targetCharacter.Submarine != null && targetCharacter.Submarine.TeamID == character.TeamID;
                 default:
                     return true;
             }
         }
-
     }
 }

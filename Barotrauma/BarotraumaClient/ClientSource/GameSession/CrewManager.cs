@@ -28,7 +28,7 @@ namespace Barotrauma
         public GUIComponent ReportButtonFrame { get; set; }
 
         private GUIFrame guiFrame;
-        private GUIFrame crewArea;
+        private GUILayoutGroup crewArea;
         private GUIListBox crewList;
         private float crewListOpenState;
         private bool _isCrewMenuOpen = true;
@@ -47,7 +47,7 @@ namespace Barotrauma
 
         /// <summary>
         /// This property stores the preference in settings. Don't use for automatic logic.
-        /// Use AutoShowCrewList(), AutoHideCrewList(), and ResetCrewList().
+        /// Use AutoHideCrewList(), and ResetCrewList().
         /// </summary>
         public bool IsCrewMenuOpen
         {
@@ -62,11 +62,9 @@ namespace Barotrauma
 
         public static bool PreferCrewMenuOpen = true;
 
-        public bool AutoShowCrewList() => _isCrewMenuOpen = true;
-
         public void AutoHideCrewList() => _isCrewMenuOpen = false;
 
-        public void ResetCrewList() => _isCrewMenuOpen = PreferCrewMenuOpen;
+        public void ResetCrewListOpenState() => _isCrewMenuOpen = PreferCrewMenuOpen;
 
         const float CommandNodeAnimDuration = 0.2f;
 
@@ -93,11 +91,29 @@ namespace Barotrauma
 
             #region Crew Area
 
-            crewArea = new GUIFrame(HUDLayoutSettings.ToRectTransform(HUDLayoutSettings.CrewArea, guiFrame.RectTransform), style: null, color: Color.Transparent)
+            crewArea = new GUILayoutGroup(HUDLayoutSettings.ToRectTransform(HUDLayoutSettings.CrewArea, guiFrame.RectTransform), childAnchor: Anchor.TopCenter)
             {
-                CanBeFocused = false
+                Stretch = true
             };
             crewArea.RectTransform.NonScaledSize = HUDLayoutSettings.CrewArea.Size;
+
+            for (int i = 0; i < 2; i++)
+            {
+                CharacterTeamType teamId = i == 0 ? CharacterTeamType.Team1 : CharacterTeamType.Team2;
+                var nameText = new GUITextBlock(new RectTransform(new Point(crewArea.Rect.Width - GUI.IntScale(10), GUI.IntScale(30)), crewArea.RectTransform), CombatMission.GetTeamName(teamId), textColor: CombatMission.GetTeamColor(teamId))
+                {
+                    ForceUpperCase = ForceUpperCase.Yes,
+                    TextGetter = () => CombatMission.GetTeamName(teamId),
+                    Visible = false,
+                    IgnoreLayoutGroups = true,
+                    UserData = teamId
+                };
+                var teamIcon = new GUIImage(new RectTransform(Vector2.One, nameText.RectTransform, Anchor.CenterLeft, scaleBasis: ScaleBasis.BothHeight), style: i == 0 ? "CoalitionIcon" : "SeparatistIcon")
+                {
+                    Color = nameText.TextColor
+                };
+                nameText.Padding = new Vector4(teamIcon.Rect.Width + nameText.Padding.X, nameText.Padding.Y, nameText.Padding.Z, nameText.Padding.W);
+            }
 
             // AbsoluteOffset is set in UpdateProjectSpecific based on crewListOpenState
             crewList = new GUIListBox(new RectTransform(Vector2.One, crewArea.RectTransform), style: null, isScrollBarOnDefaultSide: false)
@@ -157,6 +173,7 @@ namespace Barotrauma
                                 Character.Controlled.Info.Name,
                                 msg, messageType,
                                 Character.Controlled);
+                            Character.Controlled.ShowSpeechBubble(ChatMessage.MessageColor[(int)messageType], text);
                             if (messageType == ChatMessageType.Radio && headset != null)
                             {
                                 Signal s = new Signal(msg, sender: Character.Controlled, source: headset.Item);
@@ -175,6 +192,12 @@ namespace Barotrauma
                 };
 
                 ChatBox.InputBox.OnTextChanged += ChatBox.TypingChatMessage;
+            }
+            else if (GameMain.Client == null)
+            {
+                //this method would throw a non-descriptive nullref exception later when trying to access the chatbox
+                //if we'd try to continue from here, better to throw a more descriptive one at this point
+                throw new InvalidOperationException($"Attempted to initialize {nameof(CrewManager)} for multiplayer, but no multiplayer client is active. Are you trying to load a multiplayer save in singleplayer?");
             }
 
             #endregion
@@ -288,6 +311,14 @@ namespace Barotrauma
         #endregion
 
         #region Character list management
+
+        /// <summary>
+        /// Note: this is only works client-side. TODO: make it work server-side too?
+        /// </summary>
+        public IEnumerable<Character> GetCharacters()
+        {
+            return characters;
+        }
 
         public Rectangle GetActiveCrewArea()
         {
@@ -521,6 +552,11 @@ namespace Barotrauma
                 }
             }
 
+            if (GameMain.GameSession?.Campaign?.CampaignUI?.HRManagerUI is { } crewManagement)
+            {
+                crewManagement.RefreshUI();
+            }
+
             return background;
         }
 
@@ -530,6 +566,10 @@ namespace Barotrauma
             {
                 crewList.RemoveChild(component);
                 traitorButtons.RemoveAll(t => t.IsChildOf(component, recursive: true));
+            }
+            if (GameMain.GameSession?.Campaign?.CampaignUI?.HRManagerUI is { } crewManagement)
+            {
+                crewManagement.RefreshUI();
             }
         }
 
@@ -552,8 +592,18 @@ namespace Barotrauma
         public bool CharacterClicked(GUIComponent component, object selection)
         {
             if (!AllowCharacterSwitch) { return false; }
-            if (!(selection is Character character) || character.IsDead || character.IsUnconscious) { return false; }
+            if (selection is not Character character || character.IsDead || character.IsUnconscious) { return false; }
             if (!character.IsOnPlayerTeam) { return false; }
+
+            if (GameMain.IsMultiplayer)
+            {
+                if (Character.Controlled == null)
+                {
+                    Camera cam = Screen.Selected.Cam;
+                    cam.Position = character.DrawPosition;
+                }
+                return true;
+            }
 
             SelectCharacter(character);
             if (GUI.KeyboardDispatcher.Subscriber == crewList) { GUI.KeyboardDispatcher.Subscriber = null; }
@@ -620,11 +670,10 @@ namespace Barotrauma
         private void OnCrewListRearranged(GUIListBox crewList, object draggedElementData)
         {
             if (crewList != this.crewList) { return; }
-            if (!(draggedElementData is Character)) { return; }
-            if (!IsSinglePlayer) { return; }
+            if (draggedElementData is not Character) { return; }
             if (crewList.HasDraggedElementIndexChanged)
             {
-                UpdateCrewListIndices();
+                if (IsSinglePlayer) { UpdateCrewListIndices(); }
             }
             else
             {
@@ -635,36 +684,42 @@ namespace Barotrauma
         private void ResetCrewListIndex(Character c)
         {
             if (c?.Info == null) { return; }
-            c.Info.CrewListIndex = -1;
-            UpdateCrewListIndices();
+            //default to the bottom of the list
+            c.Info.CrewListIndex = int.MaxValue;
         }
 
+        /// <summary>
+        /// Refresh the <see cref="CharacterInfo.CrewListIndex"/> of the characters based on their order in the crew list
+        /// </summary>
         private void UpdateCrewListIndices()
         {
             if (crewList == null) { return; }
             for (int i = 0; i < crewList.Content.CountChildren; i++)
             {
                 var characterComponent = crewList.Content.GetChild(i);
-                if (!(characterComponent?.UserData is Character c)) { continue; }
+                if (characterComponent?.UserData is not Character c) { continue; }
                 if (c.Info == null) { continue; }
                 c.Info.CrewListIndex = i;
             }
         }
 
+        /// <summary>
+        /// Order the crew list according to the characters' <see cref="CharacterInfo.CrewListIndex"/>
+        /// </summary>
         private void SortCrewList()
         {
             if (crewList == null) { return; }
             crewList.Content.RectTransform.SortChildren((x, y) =>
             {
-                var infoX = (x.GUIComponent.UserData as Character)?.Info?.CrewListIndex;
-                var infoY = (y.GUIComponent.UserData as Character)?.Info?.CrewListIndex;
-                if (infoX.HasValue)
+                int? index1 = (x.GUIComponent.UserData as Character)?.Info?.CrewListIndex;
+                int? index2 = (y.GUIComponent.UserData as Character)?.Info?.CrewListIndex;
+                if (index1.HasValue)
                 {
-                    return infoY.HasValue ? infoX.Value.CompareTo(infoY.Value) : -1;
+                    return index2.HasValue ? index1.Value.CompareTo(index2.Value) : -1;
                 }
                 else
                 {
-                    return infoY.HasValue ? 1 : 0;
+                    return index2.HasValue ? 1 : 0;
                 }
             });
             UpdateCrewListIndices();
@@ -677,11 +732,12 @@ namespace Barotrauma
         /// <summary>
         /// Adds the message to the single player chatbox.
         /// </summary>
-        public void AddSinglePlayerChatMessage(LocalizedString senderName, LocalizedString text, ChatMessageType messageType, Character sender)
+        public void AddSinglePlayerChatMessage(LocalizedString senderName, LocalizedString text, ChatMessageType messageType, Entity sender)
         {
             AddSinglePlayerChatMessage(senderName.Value, text.Value, messageType, sender);
         }
-        public void AddSinglePlayerChatMessage(string senderName, string text, ChatMessageType messageType, Character sender)
+
+        public void AddSinglePlayerChatMessage(string senderName, string text, ChatMessageType messageType, Entity sender)
         {
             if (!IsSinglePlayer)
             {
@@ -690,9 +746,13 @@ namespace Barotrauma
             }
             if (string.IsNullOrEmpty(text)) { return; }
 
-            if (sender != null)
+            if (sender is Character character)
             {
-                GameMain.GameSession.CrewManager.SetCharacterSpeaking(sender);
+                GameMain.GameSession.CrewManager?.SetCharacterSpeaking(character);
+                if (!character.IsBot)
+                {
+                    character.TextChatVolume = 1f;
+                }
             }
             ChatBox.AddMessage(ChatMessage.Create(senderName, text, messageType, sender));
         }
@@ -706,9 +766,9 @@ namespace Barotrauma
             }
             if (string.IsNullOrEmpty(message.Text)) { return; }
 
-            if (message.Sender != null)
+            if (message.SenderCharacter != null)
             {
-                GameMain.GameSession.CrewManager.SetCharacterSpeaking(message.Sender);
+                GameMain.GameSession.CrewManager?.SetCharacterSpeaking(message.SenderCharacter);
             }
             ChatBox.AddMessage(message);
         }
@@ -798,13 +858,45 @@ namespace Barotrauma
                     hull ??= order.OrderGiver.CurrentHull;
                     AddOrder(order.WithTargetEntity(hull), order.FadeOutTime);
                 }
+                if (order.IsDeconstructOrder)
+                {
+                    if (order.TargetEntity is Item item)
+                    {
+                        if (order.Identifier == Tags.DeconstructThis)
+                        {
+                            foreach (var stackedItem in item.GetStackedItems())
+                            {
+                                Item.DeconstructItems.Add(stackedItem);
+                            }
+                            HintManager.OnItemMarkedForDeconstruction(order.OrderGiver);
+                        }
+                        else
+                        {
+                            foreach (var stackedItem in item.GetStackedItems())
+                            {
+                                Item.DeconstructItems.Remove(stackedItem);
+                            }
+                        }
+                    }
+                }
                 else if (order.IsIgnoreOrder)
                 {
                     WallSection ws = null;
                     if (order.TargetType == Order.OrderTargetType.Entity && order.TargetEntity is IIgnorable ignorable)
                     {
-                        ignorable.OrderedToBeIgnored = order.Identifier == "ignorethis";
-                        AddOrder(order.Clone(), null);
+                        if (ignorable is Item item)
+                        {
+                            foreach (var stackedItem in item.GetStackedItems())
+                            {
+                                stackedItem.OrderedToBeIgnored = order.Identifier == Tags.IgnoreThis;
+                                AddOrder(order.Clone().WithTargetEntity(stackedItem), fadeOutTime: null);
+                            }
+                        }
+                        else
+                        {
+                            ignorable.OrderedToBeIgnored = order.Identifier == Tags.IgnoreThis;
+                            AddOrder(order.Clone(), fadeOutTime: null);
+                        }
                     }
                     else if (order.TargetType == Order.OrderTargetType.WallSection && order.TargetEntity is Structure s)
                     {
@@ -812,8 +904,8 @@ namespace Barotrauma
                         ws = s.GetSection(wallSectionIndex);
                         if (ws != null)
                         {
-                            ws.OrderedToBeIgnored = order.Identifier == "ignorethis";
-                            AddOrder(order.WithWallSection(s, wallSectionIndex), null);
+                            ws.OrderedToBeIgnored = order.Identifier == Tags.IgnoreThis;
+                            AddOrder(order.WithWallSection(s, wallSectionIndex), fadeOutTime: null);
                         }
                     }
                     else
@@ -824,9 +916,9 @@ namespace Barotrauma
                     {
                         hull = Hull.FindHull(ws.WorldPosition);
                     }
-                    else if (order.TargetEntity is Item i)
+                    else if (order.TargetEntity is Item item)
                     {
-                        hull = i.CurrentHull;
+                        hull = item.CurrentHull;
                     }
                     else if (order.TargetEntity is ISpatialEntity se)
                     {
@@ -835,7 +927,9 @@ namespace Barotrauma
                 }
                 if (IsSinglePlayer)
                 {
-                    order.OrderGiver?.Speak(order.GetChatMessage("", hull?.DisplayName?.Value, givingOrderToSelf: character == order.OrderGiver, isNewOrder: isNewOrder), ChatMessageType.Order);
+                    order.OrderGiver?.Speak(
+                        order.GetChatMessage("", hull?.DisplayName?.Value, givingOrderToSelf: character == order.OrderGiver, isNewOrder: isNewOrder), 
+                        ChatMessageType.Order);
                 }
                 else
                 {
@@ -1219,7 +1313,7 @@ namespace Barotrauma
             if (GUI.DisableHUD) { return; }
             if (CoroutineManager.IsCoroutineRunning("LevelTransition") || CoroutineManager.IsCoroutineRunning("SubmarineTransition")) { return; }
 
-            commandFrame?.AddToGUIUpdateList();
+            commandFrame?.AddToGUIUpdateList(order: 1);
 
             if (GUI.DisableUpperHUD) { return; }
 
@@ -1263,6 +1357,7 @@ namespace Barotrauma
         {
             if (ConversationAction.IsDialogOpen) { return; }
             if (!AllowCharacterSwitch) { return; }
+            if (character == null || character.Removed) { return; }
             //make the previously selected character wait in place for some time
             //(so they don't immediately start idling and walking away from their station)
             var aiController = Character.Controlled?.AIController;
@@ -1273,6 +1368,16 @@ namespace Barotrauma
             if (GameSession.TabMenuInstance != null && TabMenu.SelectedTab == TabMenu.InfoFrameTab.Talents)
             {
                 GameSession.TabMenuInstance.SelectInfoFrameTab(TabMenu.SelectedTab);
+            }
+            if (character.SelectedItem?.GetComponent<Controller>() == null && character.SelectedCharacter == null)
+            {
+                ResetCrewListOpenState();
+                ChatBox.ResetChatBoxOpenState();
+            }
+            else
+            {
+                AutoHideCrewList();
+                ChatBox.AutoHideChatBox();
             }
         }
 
@@ -1291,7 +1396,7 @@ namespace Barotrauma
                 if (index > lastIndex) { index = 0; }
                 if (index < 0) { index = lastIndex; }
 
-                if ((crewList.Content.GetChild(index)?.UserData as Character)?.IsOnPlayerTeam ?? false)
+                if (crewList.Content.GetChild(index)?.UserData is Character { IsOnPlayerTeam: true, Removed: false })
                 {
                     return index;
                 }
@@ -1404,9 +1509,10 @@ namespace Barotrauma
             if (PlayerInput.KeyDown(InputType.Command) &&
                 (GUI.KeyboardDispatcher.Subscriber == null || (GUI.KeyboardDispatcher.Subscriber is GUIComponent component && (component == crewList || component.IsChildOf(crewList)))) &&
                 commandFrame == null && !clicklessSelectionActive && CanIssueOrders && !(GameMain.GameSession?.Campaign?.ShowCampaignUI ?? false) &&
-                Character.Controlled?.SelectedItem?.Prefab is not { DisableCommandMenuWhenSelected: true })
+                Character.Controlled?.SelectedItem?.Prefab is not { DisableCommandMenuWhenSelected: true } &&
+                !Inventory.IsMouseOnInventory)
             {
-                if (PlayerInput.IsShiftDown())
+                if (PlayerInput.KeyDown(InputType.ContextualCommand))
                 {
                     CreateCommandUI(FindEntityContext(), true);
                 }
@@ -1535,14 +1641,14 @@ namespace Barotrauma
                 {
                     if (node.Keys != Keys.None && PlayerInput.KeyHit(node.Keys))
                     {
-                        var b = node.Button as GUIButton;
-                        if (PlayerInput.IsShiftDown() && b?.OnSecondaryClicked != null)
+                        var button = node.Button;
+                        if (PlayerInput.IsShiftDown() && button?.OnSecondaryClicked != null)
                         {
-                            b.OnSecondaryClicked.Invoke(node.Button as GUIButton, node.Button.UserData);
+                            button.OnSecondaryClicked.Invoke(button, button.UserData);
                         }
                         else
                         {
-                            b?.OnClicked?.Invoke(node.Button as GUIButton, node.Button.UserData);
+                            button?.OnClicked?.Invoke(button, button.UserData);
                         }
                         ResetNodeSelection();
                         hotkeyHit = true;
@@ -1585,6 +1691,18 @@ namespace Barotrauma
             {
                 crewArea.Visible = characters.Count > 0 && CharacterHealth.OpenHealthWindow == null;
 
+                CharacterTeamType myTeam = Character.Controlled?.TeamID ?? GameMain.Client?.MyClient?.TeamID ?? CharacterTeamType.Team1;
+                if (GameMain.GameSession?.GameMode is PvPMode)
+                {
+                    var team1Text = crewArea.GetChildByUserData(CharacterTeamType.Team1);
+                    team1Text.Visible = myTeam == CharacterTeamType.Team1;
+                    team1Text.IgnoreLayoutGroups = !team1Text.Visible;
+
+                    var team2Text = crewArea.GetChildByUserData(CharacterTeamType.Team2);
+                    team2Text.Visible = myTeam == CharacterTeamType.Team2;
+                    team2Text.IgnoreLayoutGroups = !team2Text.Visible;
+                }
+
                 foreach (GUIComponent characterComponent in crewList.Content.Children)
                 {
                     if (characterComponent.UserData is Character character)
@@ -1595,7 +1713,7 @@ namespace Barotrauma
                             continue;
                         }
 
-                        characterComponent.Visible = Character.Controlled == null || Character.Controlled.TeamID == character.TeamID;
+                        characterComponent.Visible = myTeam == character.TeamID;
                         if (character.TeamID == CharacterTeamType.FriendlyNPC && Character.Controlled != null && 
                             (character.CurrentHull == Character.Controlled.CurrentHull || Vector2.DistanceSquared(Character.Controlled.WorldPosition, character.WorldPosition) < 500.0f * 500.0f))
                         {
@@ -1612,7 +1730,7 @@ namespace Barotrauma
                             {
                                 foreach (var orderIcon in currentOrderIconList.Content.Children)
                                 {
-                                    if (!(orderIcon.UserData is Order order)) { continue; }
+                                    if (orderIcon.UserData is not Order order) { continue; }
                                     if (order.ColoredWhenControllingGiver && order.OrderGiver != Character.Controlled)
                                     {
                                         orderIcon.Color = AIObjective.ObjectiveIconColor;
@@ -1701,7 +1819,7 @@ namespace Barotrauma
                 bool foundMatch = false;
                 foreach (var orderIcon in currentOrderIconList.Content.Children)
                 {
-                    if (!(orderIcon.GetChildByUserData("glow") is GUIComponent glowComponent)) { continue; }
+                    if (orderIcon.GetChildByUserData("glow") is not GUIComponent glowComponent) { continue; }
                     glowComponent.Color = orderIcon.Color;
                     if (foundMatch)
                     {
@@ -1823,7 +1941,7 @@ namespace Barotrauma
         {
             get
             {
-                if (GameMain.GameSession?.CrewManager == null)
+                if (GameMain.GameSession?.CrewManager == null || Screen.Selected is { IsEditor: true })
                 {
                     return false;
                 }
@@ -1946,16 +2064,21 @@ namespace Barotrauma
             }
         }
 
+        public void OpenCommandUI(Entity entityContext = null, bool forceContextual = false)
+        {
+            CreateCommandUI(entityContext, forceContextual);
+            SoundPlayer.PlayUISound(GUISoundType.PopupMenu);
+            clicklessSelectionActive = isOpeningClick = true;
+        }
+
         private void CreateCommandUI(Entity entityContext = null, bool forceContextual = false)
         {
             if (commandFrame != null) { DisableCommandUI(); }
 
-            CharacterHealth.OpenHealthWindow = null;
-
             // Character context works differently to others as we still use the "basic" command interface,
             // but the order will be automatically assigned to this character
             isContextual = forceContextual;
-            if (entityContext is Character character)
+            if (entityContext is Character { Info: not null } character)
             {
                 characterContext = character;
                 itemContext = null;
@@ -2018,7 +2141,7 @@ namespace Barotrauma
                     new RectTransform(Vector2.One, startNode.RectTransform, anchor: Anchor.Center),
                     (spriteBatch, _) =>
                     {
-                        if (!(entityContext is Character character) || character?.Info == null) { return; }
+                        if (entityContext is not Character character || character?.Info == null) { return; }
                         var node = startNode;
                         character.Info.DrawJobIcon(spriteBatch,
                             new Rectangle((int)(node.Rect.X + node.Rect.Width * 0.5f), (int)(node.Rect.Y + node.Rect.Height * 0.1f), (int)(node.Rect.Width * 0.6f), (int)(node.Rect.Height * 0.8f)));
@@ -2043,7 +2166,7 @@ namespace Barotrauma
             CreateNodeConnectors();
             if (Character.Controlled != null)
             {
-                Character.Controlled.dontFollowCursor = true;
+                Character.Controlled.FollowCursor = false;
             }
 
             HintManager.OnShowCommandInterface();
@@ -2082,7 +2205,7 @@ namespace Barotrauma
             returnNodeMargin = returnNodeSize.X * 0.5f;
 
             nodeDistance = (int)(150 * GUI.Scale);
-            shorcutCenterNodeOffset = new Point(0, (int)(1.25f * nodeDistance));
+            shorcutCenterNodeOffset = new Point(0, (int)(1.35f * nodeDistance));
         }
 
         private List<OrderCategory> GetAvailableCategories()
@@ -2115,7 +2238,7 @@ namespace Barotrauma
             if (centerNode == null || optionNodes == null) { return; }
             var startNodePos = centerNode.Rect.Center.ToVector2();
             // Don't draw connectors for assignment nodes
-            if (!(optionNodes.FirstOrDefault()?.Button.UserData is Character))
+            if (optionNodes.FirstOrDefault()?.Button.UserData is not Character)
             {
                 // Regular option nodes
                 if (targetFrame == null || !targetFrame.Visible)
@@ -2187,14 +2310,14 @@ namespace Barotrauma
             returnNodeHotkey = expandNodeHotkey = Keys.None;
             if (Character.Controlled != null)
             {
-                Character.Controlled.dontFollowCursor = false;
+                Character.Controlled.FollowCursor = true;
             }
         }
 
         private bool NavigateForward(GUIButton node, object userData)
         {
             if (commandFrame == null) { return false; }
-            if (!(optionNodes.Find(n => n.Button == node) is OptionNode optionNode) || !optionNodes.Remove(optionNode))
+            if (optionNodes.Find(n => n.Button == node) is not OptionNode optionNode || !optionNodes.Remove(optionNode))
             {
                 shortcutNodes.Remove(node);
             };
@@ -2352,7 +2475,7 @@ namespace Barotrauma
                     matchingItems = nodeOrder.GetMatchingItems(submarine, true, interactableFor: characterContext ?? Character.Controlled);
                 }
                 //more than one target item -> create a minimap-like selection with a pic of the sub
-                if (itemContext == null && !(nodeOrder.TargetEntity is Item) && matchingItems != null && matchingItems.Count > 1)
+                if (itemContext == null && nodeOrder.TargetEntity is not Item && matchingItems != null && matchingItems.Count > 1)
                 {
                     CreateMinimapNodes(nodeOrder, submarine, matchingItems);
                 }
@@ -2417,7 +2540,7 @@ namespace Barotrauma
 
             node.RectTransform.MoveOverTime(offset, CommandNodeAnimDuration);
             var icon = OrderCategoryIcon.OrderCategoryIcons.FirstOrDefault(ic => ic.Category == category);
-            if (!(icon is null))
+            if (icon is not null)
             {
                 var tooltip = TextManager.Get($"ordercategorytitle.{category}");
                 var categoryDescription = TextManager.Get($"ordercategorydescription.{category}");
@@ -2456,7 +2579,7 @@ namespace Barotrauma
             // --> Create shortcut node for Steer order
             if (CanFitMoreNodes() && ShouldDelegateOrder("steer") && IsNonDuplicateOrderPrefab(OrderPrefab.Prefabs["steer"]) &&
                 subItems.Find(i => i.HasTag(Tags.NavTerminal) && i.IsPlayerTeamInteractable) is Item nav && characters.None(c => c.SelectedItem == nav) &&
-                nav.GetComponent<Steering>() is Steering steering && steering.Voltage > steering.MinVoltage)
+                nav.GetComponent<Steering>() is Steering { HasPower: true } steering)
             {
                 var order = new Order(OrderPrefab.Prefabs["steer"], steering.Item, steering);
                 AddOrderNode(order);
@@ -2484,7 +2607,7 @@ namespace Barotrauma
                 // TODO: Doesn't work for player issued reports, because they don't have a target.
                 bool useSpecificRepairOrder = false;
                 if (CanFitMoreNodes() && ShouldDelegateOrder("repairelectrical") &&
-                    ActiveOrders.Any(o => o.Order.Prefab == reportBrokenDevices && o.Order.TargetItemComponent is Repairable r && r.requiredSkills.Any(s => s.Identifier == "electrical")))
+                    ActiveOrders.Any(o => o.Order.Prefab == reportBrokenDevices && o.Order.TargetItemComponent is Repairable r && r.RequiredSkills.Any(s => s.Identifier == "electrical")))
                 {
                     if (IsNonDuplicateOrderPrefab(OrderPrefab.Prefabs["repairelectrical"]))
                     {
@@ -2493,7 +2616,7 @@ namespace Barotrauma
                     useSpecificRepairOrder = true;
                 }
                 if (CanFitMoreNodes() && ShouldDelegateOrder("repairmechanical") &&
-                    ActiveOrders.Any(o => o.Order.Prefab == reportBrokenDevices && o.Order.TargetItemComponent is Repairable r && r.requiredSkills.Any(s => s.Identifier == "mechanical")))
+                    ActiveOrders.Any(o => o.Order.Prefab == reportBrokenDevices && o.Order.TargetItemComponent is Repairable r && r.RequiredSkills.Any(s => s.Identifier == "mechanical")))
                 {
                     if (IsNonDuplicateOrderPrefab(OrderPrefab.Prefabs["repairmechanical"]))
                     {
@@ -2565,14 +2688,14 @@ namespace Barotrauma
             static bool ShouldDelegateOrder(string orderIdentifier) => ShouldDelegateOrderId(orderIdentifier.ToIdentifier());
             static bool ShouldDelegateOrderId(Identifier orderIdentifier)
             {
-                return !(Character.Controlled is Character c) || !(c?.Info?.Job != null && c.Info.Job.Prefab.AppropriateOrders.Contains(orderIdentifier));
+                return Character.Controlled is not Character c || !(c?.Info?.Job != null && c.Info.Job.Prefab.AppropriateOrders.Contains(orderIdentifier));
             }
             bool IsNonDuplicateOrder(Order order) => IsNonDuplicateOrderPrefab(order.Prefab, order.Option);
             bool IsNonDuplicateOrderPrefab(OrderPrefab orderPrefab, Identifier option = default)
             {
-                return characterContext == null || (option.IsEmpty ?
+                return characterContext == null || (characterContext.CurrentOrders != null && (option.IsEmpty ?
                     characterContext.CurrentOrders.None(oi => oi?.Identifier == orderPrefab?.Identifier) :
-                    characterContext.CurrentOrders.None(oi => oi?.Identifier == orderPrefab?.Identifier && oi.Option == option));
+                    characterContext.CurrentOrders.None(oi => oi?.Identifier == orderPrefab?.Identifier && oi?.Option == option)));
             }
             void AddOrderNodeWithIdentifier(string identifier)
             {
@@ -2642,6 +2765,7 @@ namespace Barotrauma
                                 new Order(p, itemContext, targetComponent));
                         }
                     }
+
                     // If targeting a periscope connected to a turret, show the 'operateweapons' order
                     var operateWeaponsPrefab = OrderPrefab.Prefabs["operateweapons"];
                     if (contextualOrders.None(o => o.Identifier == "operateweapons") && itemContext.Components.Any(c => c is Controller))
@@ -2656,11 +2780,11 @@ namespace Barotrauma
                     // If targeting a repairable item with condition below the repair threshold, show the 'repairsystems' order
                     if (contextualOrders.None(order => order.Identifier == "repairsystems") && itemContext.Repairables.Any(r => r.IsBelowRepairThreshold))
                     {
-                        if (itemContext.Repairables.Any(r => r != null && r.requiredSkills.Any(s => s != null && s.Identifier.Equals("electrical"))))
+                        if (itemContext.Repairables.Any(r => r != null && r.RequiredSkills.Any(s => s != null && s.Identifier.Equals("electrical"))))
                         {
                             contextualOrders.Add(new Order(OrderPrefab.Prefabs["repairelectrical"], itemContext, targetItem: null));
                         }
-                        else if (itemContext.Repairables.Any(r => r != null && r.requiredSkills.Any(s => s != null && s.Identifier.Equals("mechanical"))))
+                        else if (itemContext.Repairables.Any(r => r != null && r.RequiredSkills.Any(s => s != null && s.Identifier.Equals("mechanical"))))
                         {
                             contextualOrders.Add(new Order(OrderPrefab.Prefabs["repairmechanical"], itemContext, targetItem: null));
                         }
@@ -2694,14 +2818,14 @@ namespace Barotrauma
                 }
                 void AddIgnoreOrder(IIgnorable target)
                 {
-                    var orderIdentifier = "ignorethis";
+                    var orderIdentifier = Tags.IgnoreThis;
                     if (!target.OrderedToBeIgnored && contextualOrders.None(order => order.Identifier == orderIdentifier))
                     {
                         AddOrder();
                     }
                     else
                     {
-                        orderIdentifier = "unignorethis";
+                        orderIdentifier = Tags.UnignoreThis;
                         if (target.OrderedToBeIgnored && contextualOrders.None(order => order.Identifier == orderIdentifier))
                         {
                             AddOrder();
@@ -2751,20 +2875,6 @@ namespace Barotrauma
                     CreateOrderOptionNode(nodeSize, commandFrame.RectTransform, offsets[i].ToPoint(), order, hotkey);
                 optionNodes.Add(new OptionNode(component, !disableNode ? Keys.D0 + (i + 1) % 10 : Keys.None));
             }
-        }
-
-        // TODO: there's duplicate logic here and above -> would be better to refactor so that the conditions are only defined in one place
-        public static bool DoesItemHaveContextualOrders(Item item)
-        {
-            if (OrderPrefab.Prefabs.Any(o => o.TargetItemsMatchItem(item))) { return true; }
-            if (OrderPrefab.Prefabs.Any(o => o.TryGetTargetItemComponent(item, out _))) { return true; }
-            if (AIObjectiveCleanupItems.IsValidTarget(item, Character.Controlled, checkInventory: false)) { return true; }
-            if (AIObjectiveCleanupItems.IsValidContainer(item, Character.Controlled)) { return true; }
-            if (OrderPrefab.Prefabs.TryGet("loaditems", out OrderPrefab loadItemsPrefab) && AIObjectiveLoadItems.IsValidTarget(item, Character.Controlled, targetContainerTags: loadItemsPrefab.GetTargetItems())) { return true; }
-            if (item.Repairables.Any(r => r.IsBelowRepairThreshold)) { return true; }
-            return OrderPrefab.Prefabs.TryGet("operateweapons", out OrderPrefab operateWeaponsPrefab) && item.Components.Any(c => c is Controller) &&
-                   (item.GetConnectedComponents<Turret>().Any(c => operateWeaponsPrefab.TargetItemsMatchItem(c.Item)) ||
-                    item.GetConnectedComponents<Turret>(recursive: true).Any(c => operateWeaponsPrefab.TargetItemsMatchItem(c.Item)));
         }
 
         /// <param name="hotkey">Use a negative value (e.g. -1) if there should be no hotkey associated with the node</param>
@@ -2958,7 +3068,7 @@ namespace Barotrauma
                 {
                     optionElement.OnSecondaryClicked = (button, _) => CreateAssignmentNodes(button);
                 }
-                var colorMultiplier = characters.Any(c => c.CurrentOrders.Any(o => o != null &&
+                var colorMultiplier = characters.Any(c => c.CurrentOrders != null && c.CurrentOrders.Any(o => o != null &&
                     o.Identifier == userData.Order.Identifier &&
                     o.TargetEntity == userData.Order.TargetEntity)) ? 0.5f : 1f;
                 CreateNodeIcon(Vector2.One, optionElement.RectTransform, item.Prefab.MinimapIcon ?? order.SymbolSprite, order.Color * colorMultiplier, tooltip: item.Name);
@@ -3612,7 +3722,7 @@ namespace Barotrauma
                 bool hasLeaks = Character.Controlled.CurrentHull.ConnectedGaps.Any(g => !g.IsRoomToRoom && g.Open > 0.0f);
                 ToggleReportButton("reportbreach", hasLeaks);
 
-                bool hasIntruders = Character.CharacterList.Any(c => c.CurrentHull == Character.Controlled.CurrentHull && AIObjectiveFightIntruders.IsValidTarget(c, Character.Controlled, false));
+                bool hasIntruders = Character.CharacterList.Any(c => c.CurrentHull == Character.Controlled.CurrentHull && AIObjectiveFightIntruders.IsValidTarget(c, Character.Controlled, targetCharactersInOtherSubs: false));
                 ToggleReportButton("reportintruders", hasIntruders);
 
                 foreach (GUIComponent reportButton in ReportButtonFrame.Children)
@@ -3659,6 +3769,9 @@ namespace Barotrauma
             crewList.ClearChildren();
         }
 
+        /// <summary>
+        /// Saves the current crew. Note that this is client-only code (only used in the single player campaign) - saving in multiplayer is handled in the server-side code of <see cref="MultiPlayerCampaign"/>.
+        /// </summary>
         public XElement Save(XElement parentElement)
         {
             var element = new XElement("crew");
@@ -3719,21 +3832,88 @@ namespace Barotrauma
                     switch (order.TargetType)
                     {
                         case Order.OrderTargetType.Entity:
-                            if (!(order.TargetEntity is IIgnorable ignorableEntity)) { break; }
-                            ignorableEntity.OrderedToBeIgnored = order.Identifier == "ignorethis";
+                            if (order.TargetEntity is not IIgnorable ignorableEntity) { break; }
+                            ignorableEntity.OrderedToBeIgnored = order.Identifier == Tags.IgnoreThis;
                             break;
                         case Order.OrderTargetType.Position:
                             throw new NotImplementedException();
                         case Order.OrderTargetType.WallSection:
                             if (!order.WallSectionIndex.HasValue) { break; }
-                            if (!(order.TargetEntity is Structure s)) { break; }
-                            if (!(s.GetSection(order.WallSectionIndex.Value) is IIgnorable ignorableWall)) { break; }
-                            ignorableWall.OrderedToBeIgnored = order.Identifier == "ignorethis";
+                            if (order.TargetEntity is not Structure s) { break; }
+                            if (s.GetSection(order.WallSectionIndex.Value) is not IIgnorable ignorableWall) { break; }
+                            ignorableWall.OrderedToBeIgnored = order.Identifier == Tags.IgnoreThis;
                             break;
                     }
                 }
                 GameMain.GameSession?.CrewManager?.AddOrder(order, fadeOutTime);
             }
+        }
+        
+        private class CharacterInfoComparer : IEqualityComparer<CharacterInfo>
+        {
+            public bool Equals(CharacterInfo x, CharacterInfo y)
+            {
+                if (ReferenceEquals(x, y))
+                {
+                    return true;
+                }
+                
+                if (x is null || y is null)
+                {
+                    return false;
+                }
+                
+                return x.ID == y.ID;
+            }
+            
+            public int GetHashCode(CharacterInfo obj)
+            {
+                return obj.ID;
+            }
+        }
+        
+        public bool UpdateReserveBenchIfNeeded(IEnumerable<CharacterInfo> updatedReserveBench)
+        {
+            var newBench = updatedReserveBench.ToHashSet(new CharacterInfoComparer());
+            var currentBench = reserveBench.ToHashSet(new CharacterInfoComparer());
+
+            bool updateNeeded = !newBench.SetEquals(currentBench);
+            if (updateNeeded)
+            {
+                reserveBench.Clear(); // since this is the reserve bench (characters not instantiated), there's no need to retain any references etc
+                reserveBench.AddRange(updatedReserveBench);
+            }
+            
+            return updateNeeded;
+        }
+        
+        /// <summary>
+        /// This will update which CharacterInfos should be in CrewManager and which shouldn't, excluding the reserve bench.
+        /// The CharacterInfos themselves aren't updated, they will only be either added, removed, or kept as-is. 
+        /// </summary>
+        public bool UpdateCrewManagerIfNecessary(List<CharacterInfo> updatedCrewManager)
+        {
+            // CharacterInfos no longer in the server's CrewManager
+            var toRemove = characterInfos.Where(original => updatedCrewManager.None(updated => updated.ID == original.ID)).ToList();
+            // CharacterInfos that are in the server's CrewManager but not on the client yet
+            var toAdd = updatedCrewManager.Where(updated => characterInfos.None(original => original.ID == updated.ID)).ToList();
+            
+            foreach (CharacterInfo characterInfo in toRemove)
+            {
+                if (characterInfo.Character is Character existingCharacter)
+                {
+                    if (!existingCharacter.IsBot) { continue; } // on client side players are also stored here, we should skip those in this case
+                    RemoveCharacter(characterInfo.Character, removeInfo: true, resetCrewListIndex: true);
+                }
+                else
+                {
+                    characterInfos.Remove(characterInfo);
+                }
+            }
+            
+            characterInfos.AddRange(toAdd);
+            
+            return toRemove.Count > 0 || toAdd.Count > 0;
         }
     }
 }

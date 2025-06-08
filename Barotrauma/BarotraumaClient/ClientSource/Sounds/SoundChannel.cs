@@ -13,7 +13,7 @@ namespace Barotrauma.Sounds
             private set;
         }
 
-        public SoundSourcePool(int sourceCount = SoundManager.SOURCE_COUNT)
+        public SoundSourcePool(int sourceCount = SoundManager.SourceCount)
         {
             int alError;
 
@@ -262,6 +262,9 @@ namespace Barotrauma.Sounds
             }
         }
 
+        public const float MinFrequencyMultiplier = 0.25f;
+        public const float MaxFrequencyMultiplier = 4.0f;
+        
         public float frequencyMultiplier;
         public float FrequencyMultiplier
         {
@@ -271,11 +274,11 @@ namespace Barotrauma.Sounds
             }
             set
             {
-                if (value < 0.25f || value > 4.0f)
+                if (value is < MinFrequencyMultiplier or > MaxFrequencyMultiplier)
                 {
                     DebugConsole.ThrowError($"Frequency multiplier out of range: {value}" + Environment.StackTrace.CleanupStackTrace());
                 }
-                frequencyMultiplier = Math.Clamp(value, 0.25f, 4.0f);
+                frequencyMultiplier = Math.Clamp(value, MinFrequencyMultiplier, MaxFrequencyMultiplier);
 
                 if (ALSourceIndex < 0) { return; }
 
@@ -395,8 +398,8 @@ namespace Barotrauma.Sounds
             }
         }
 
-        private string category;
-        public string Category
+        private Identifier category;
+        public Identifier Category
         {
             get { return category; }
             set
@@ -431,6 +434,8 @@ namespace Barotrauma.Sounds
         private readonly uint[] unqueuedBuffers;
         private readonly float[] streamBufferAmplitudes;
 
+        public bool MuteBackgroundMusic;
+
         public int StreamSeekPos
         {
             get { return streamSeekPos; }
@@ -441,6 +446,18 @@ namespace Barotrauma.Sounds
                     throw new InvalidOperationException("Cannot set StreamSeekPos on a non-streaming sound channel.");
                 }
                 streamSeekPos = Math.Max(value, 0);
+            }
+        }
+
+        public long MaxStreamSeekPos
+        {
+            get
+            {
+                if (!IsStream || Sound is not OggSound oggSound)
+                {
+                    return 0;
+                }
+                return oggSound.MaxStreamSamplePos; 
             }
         }
 
@@ -466,7 +483,7 @@ namespace Barotrauma.Sounds
             }
         }
 
-        public SoundChannel(Sound sound, float gain, Vector3? position, float freqMult, float near, float far, string category, bool muffle = false)
+        public SoundChannel(Sound sound, float gain, Vector3? position, float freqMult, float near, float far, Identifier category, bool muffle = false)
         {
             Sound = sound;
 
@@ -564,7 +581,7 @@ namespace Barotrauma.Sounds
                                 throw new Exception("Generated streamBuffer[" + i.ToString() + "] is invalid! " + debugName);
                             }
                         }
-                        Sound.Owner.InitStreamThread();
+                        Sound.Owner.InitUpdateChannelThread();
                         SetProperties();
                     }
                 }
@@ -609,6 +626,7 @@ namespace Barotrauma.Sounds
         public void FadeOutAndDispose()
         {
             FadingOutAndDisposing = true;
+            Sound.Owner.InitUpdateChannelThread();
         }
 
         public void Dispose()

@@ -184,7 +184,8 @@ namespace Barotrauma
             connection.CrackSegments.Clear();
             connection.CrackSegments.AddRange(MathUtils.GenerateJaggedLine(
                 connectionStart, connectionEnd,
-                iterations, connectionLength * generationParams.ConnectionIndicatorDisplacementMultiplier));
+                iterations, connectionLength * generationParams.ConnectionIndicatorDisplacementMultiplier,
+                rng: Rand.GetRNG(Rand.RandSync.ServerAndClient)));
         }
 
         private void LocationChanged(Location prevLocation, Location newLocation)
@@ -291,14 +292,14 @@ namespace Barotrauma
 
         private readonly List<MapNotification> mapNotifications = new List<MapNotification>();
 
-        partial void ChangeLocationTypeProjSpecific(Location location, string prevName, LocationTypeChange change)
+        partial void ChangeLocationTypeProjSpecific(Location location, LocalizedString prevName, LocationTypeChange change)
         {
             var messages = change.GetMessages(location.Faction);
             if (!messages.Any()) { return; }
 
             string msg = messages.GetRandom(Rand.RandSync.Unsynced)
                 .Replace("[previousname]", $"‖color:gui.yellow‖{prevName}‖end‖")
-                .Replace("[name]", $"‖color:gui.yellow‖{location.Name}‖end‖");
+                .Replace("[name]", $"‖color:gui.yellow‖{location.DisplayName}‖end‖");
             location.LastTypeChangeMessage = msg;
 
             mapNotifications.Add(new MapNotification(msg, GUIStyle.SubHeadingFont, mapNotifications, location));           
@@ -377,17 +378,24 @@ namespace Barotrauma
 
             bool showReputation = hudVisibility > 0.0f && location.Type.HasOutpost && location.Reputation != null;
 
-            new GUITextBlock(new RectTransform(new Vector2(1.0f, 0.0f), content.RectTransform), location.Name, font: GUIStyle.LargeFont) { Padding = Vector4.Zero };
+            LocationType locationTypeToDisplay = location.GetLocationTypeToDisplay(out Identifier overrideDescriptionIdentifier);
+
+            new GUITextBlock(new RectTransform(new Vector2(1.0f, 0.0f), content.RectTransform), location.DisplayName, font: GUIStyle.LargeFont) { Padding = Vector4.Zero };
             if (!location.Type.Name.IsNullOrEmpty())
             {
-                new GUITextBlock(new RectTransform(new Vector2(1.0f, 0.0f), content.RectTransform), location.Type.Name, font: GUIStyle.SubHeadingFont) { Padding = Vector4.Zero };
+                new GUITextBlock(new RectTransform(new Vector2(1.0f, 0.0f), content.RectTransform), locationTypeToDisplay.Name, font: GUIStyle.SubHeadingFont) { Padding = Vector4.Zero };
             }
 
             CreateSpacing(10);
 
-            if (!location.Type.Description.IsNullOrEmpty())
+            var description = locationTypeToDisplay.Description;
+            if (!overrideDescriptionIdentifier.IsEmpty)
             {
-                CreateTextWithIcon(location.Type.Description, location.Type.Sprite);
+                description = TextManager.Get(overrideDescriptionIdentifier);
+            }
+            if (!description.IsNullOrEmpty())
+            {
+                CreateTextWithIcon(description, locationTypeToDisplay.Sprite);
             }
 
             int highestSubTier = location.HighestSubmarineTierAvailable();
@@ -460,7 +468,9 @@ namespace Barotrauma
                 new GUICustomComponent(new RectTransform(new Vector2(0.6f, 1.0f), repBarHolder.RectTransform), onDraw: (sb, component) =>
                 {
                     if (location.Reputation == null) { return; }
-                    RoundSummary.DrawReputationBar(sb, component.Rect, location.Reputation.NormalizedValue);
+                    RoundSummary.DrawReputationBar(sb, component.Rect, 
+                        location.Reputation.NormalizedValue, 
+                        location.Reputation.MinReputation, location.Reputation.MaxReputation);
                 });
 
                 new GUITextBlock(new RectTransform(new Vector2(0.4f, 1.0f), repBarHolder.RectTransform),
@@ -696,6 +706,7 @@ namespace Barotrauma
                             CurrentLocation.CreateStores();
                             ProgressWorld(campaign);
                             Radiation?.OnStep(1);
+                            mapAnimQueue.Clear();
                         }
                         else
                         {
@@ -825,7 +836,7 @@ namespace Barotrauma
 
                     if (!rect.Intersects(drawRect)) { continue; }
 
-                    Color color = location.Type.SpriteColor;
+                    Color color = location.OverrideIconColor ?? location.Type.SpriteColor;
                     if (!location.Visited) { color = Color.White; }
                     if (location.Connections.Find(c => c.Locations.Contains(currentDisplayLocation)) == null)
                     {
@@ -846,6 +857,27 @@ namespace Barotrauma
                         color = Color.Lerp(color, GUIStyle.Yellow, notificationColorLerp);
                         iconScale *= notificationPulseAmount;
                     }
+
+#if DEBUG
+                    if (generationParams.ShowStoreInfo)
+                    {
+                        if (location.Stores == null || location.Stores.None())
+                        {
+                            color = Color.DarkBlue;
+                        }
+                        //stores created, but nothing in stock
+                        else if (location.Stores.Values.None(s => s.Stock.Any()))
+                        {
+                            color = Color.Yellow;
+                        }
+                        else
+                        {
+                            color = Color.Green;
+                        }
+
+                        GUI.DrawString(spriteBatch, pos + Vector2.One * 20, "Time since visited: " +location.WorldStepsSinceVisited, Color.Yellow);
+                    }
+#endif
 
                     locationSprite.Draw(spriteBatch, pos, color,
                         scale: generationParams.LocationIconSize / locationSprite.size.X * iconScale * zoom);
@@ -920,31 +952,32 @@ namespace Barotrauma
 
                     if (GameMain.DebugDraw)
                     {
-                        Vector2 dPos = pos;
+                        //move the debug texts upwards so they don't go under the info panel that appears when highlighted
+                        Vector2 dPos = pos + new Vector2(15, -100);
                         if (location == HighlightedLocation)
                         {
-                            dPos.Y -= 80;
-                            GUI.DrawString(spriteBatch, dPos + new Vector2(15, 32), "Faction: " + (location.Faction?.Prefab.Name ?? "none"), Color.White, Color.Black, font: GUIStyle.SubHeadingFont);
-                            GUI.DrawString(spriteBatch, dPos + new Vector2(15, 50), "Secondary Faction: " + (location.SecondaryFaction?.Prefab.Name ?? "none"), Color.White, Color.Black, font: GUIStyle.SubHeadingFont);
-                            dPos.Y += 48;
+                            GUI.DrawString(spriteBatch, dPos, "Faction: " + (location.Faction?.Prefab.Name ?? "none"), Color.White, Color.Black, font: GUIStyle.SubHeadingFont);
+                            GUI.DrawString(spriteBatch, dPos + new Vector2(0, 18), "Secondary Faction: " + (location.SecondaryFaction?.Prefab.Name ?? "none"), Color.White, Color.Black, font: GUIStyle.SubHeadingFont);
+                            dPos.Y += 50;
 
                             if (PlayerInput.KeyDown(Keys.LeftShift))
                             {
-                                GUI.DrawString(spriteBatch, new Vector2(150,150), "Dist: " +
+                                GUI.DrawString(spriteBatch, new Vector2(150, 150), "Dist: " +
                                     GetDistanceToClosestLocationOrConnection(CurrentLocation, int.MaxValue, loc => loc == location), Color.White, Color.Black, font: GUIStyle.SubHeadingFont);
-
                             }
+                            GUI.DrawString(spriteBatch, dPos, $"Difficulty: {location.LevelData.Difficulty.FormatSingleDecimal()}",
+                                ToolBox.GradientLerp(location.LevelData.Difficulty / 100.0f, GUIStyle.Blue, GUIStyle.Yellow, GUIStyle.Red), Color.Black * 0.8f, 4, font: GUIStyle.SmallFont);
+                            
+                            dPos.Y += 25;
+                            GUI.DrawString(spriteBatch, dPos, $"Biome: {location.LevelData.Biome.DisplayName} ({location.LevelData.GenerationParams.Identifier})", Color.White, Color.Black, font: GUIStyle.SmallFont);
                         }
-                        dPos.Y += 48;
-                        GUI.DrawString(spriteBatch, dPos, $"Difficulty: {location.LevelData.Difficulty.FormatSingleDecimal()}", Color.White, Color.Black * 0.8f, 4, font: GUIStyle.SmallFont);
                     }
                 }
             }
 
             DrawDecorativeHUD(spriteBatch, rect);
 
-            bool drawRadiationTooltip = true;
-            
+            bool drawRadiationTooltip = HighlightedLocation == null;            
             if (tooltip != null)
             {
                 GUIComponent.DrawToolTip(spriteBatch, tooltip.Value.tip, tooltip.Value.targetArea);
@@ -1053,7 +1086,7 @@ namespace Barotrauma
                 }
                 else
                 {
-                    if (MathUtils.GetLineRectangleIntersection(start, end, new Rectangle(viewArea.X, viewArea.Y + viewArea.Height, viewArea.Width, viewArea.Height), out Vector2 intersection))
+                    if (MathUtils.GetLineWorldRectangleIntersection(start, end, new Rectangle(viewArea.X, viewArea.Y + viewArea.Height, viewArea.Width, viewArea.Height), out Vector2 intersection))
                     {
                         if (!viewArea.Contains(start))
                         {
@@ -1080,6 +1113,7 @@ namespace Barotrauma
                 }
                 float dist = Vector2.Distance(start, end);
                 var connectionSprite = connection.Passed ? generationParams.PassedConnectionSprite : generationParams.ConnectionSprite;
+                if (connectionSprite?.Texture == null) { continue; }
 
                 Color segmentColor = connectionColor;
                 int segmentWidth = width;
@@ -1091,9 +1125,6 @@ namespace Barotrauma
                     { 
                         segmentWidth /= 2; 
                         segmentColor = connection.Passed ? generationParams.ConnectionColor : generationParams.UnvisitedConnectionColor; 
-                    }
-                    else 
-                    { 
                     }
                 }
 
@@ -1114,13 +1145,23 @@ namespace Barotrauma
 
                 float subCrushDepth = SubmarineInfo.GetSubCrushDepth(SubmarineSelection.CurrentOrPendingSubmarine(), ref pendingSubInfo);
                 string crushDepthWarningIconStyle = null;
-                if (connection.LevelData.InitialDepth * Physics.DisplayToRealWorldRatio > subCrushDepth)
+
+                var levelData = connection.LevelData;
+                float spawnDepth =
+                    levelData.InitialDepth +
+                    //base the warning on the start or end position of the level, whichever is deeper
+                    levelData.Size.Y * Math.Max(levelData.GenerationParams.StartPosition.Y, levelData.GenerationParams.EndPosition.Y);
+
+                //"high warning" if the sub spawns at/below crush depth
+                if (spawnDepth * Physics.DisplayToRealWorldRatio > subCrushDepth)
                 {
                     iconCount++;
                     crushDepthWarningIconStyle = "CrushDepthWarningHighIcon";
                     tooltip = "crushdepthwarninghigh";
                 }
-                else if ((connection.LevelData.InitialDepth + connection.LevelData.Size.Y) * Physics.DisplayToRealWorldRatio > subCrushDepth)
+                //"low warning" if the spawn position is less than the level's height away from crush depth
+                //(i.e. the crush depth is pretty close to the spawn pos, possibly inside the level or at least close enough that many parts of the abyss are unreachable)
+                else if ((spawnDepth + connection.LevelData.Size.Y) * Physics.DisplayToRealWorldRatio > subCrushDepth)
                 {
                     iconCount++;
                     crushDepthWarningIconStyle = "CrushDepthWarningLowIcon";
@@ -1129,8 +1170,11 @@ namespace Barotrauma
 
                 if (connection.LevelData.HasBeaconStation)
                 {
-                    var beaconStationIconStyle = connection.LevelData.IsBeaconActive ? "BeaconStationActive" : "BeaconStationInactive";
-                    DrawIcon(beaconStationIconStyle, (int)(28 * zoom), connection.LevelData.IsBeaconActive ? beaconStationActiveText : beaconStationInactiveText);
+                    bool beaconActive =
+                        connection.LevelData.IsBeaconActive ||
+                        (Level.Loaded?.LevelData == connection.LevelData && Level.Loaded.CheckBeaconActive());
+                    var beaconStationIconStyle = beaconActive ? "BeaconStationActive" : "BeaconStationInactive";
+                    DrawIcon(beaconStationIconStyle, (int)(28 * zoom), beaconActive ? beaconStationActiveText : beaconStationInactiveText);
                 }
 
                 if (connection.Locked)
@@ -1182,7 +1226,9 @@ namespace Barotrauma
                 Vector2 center = rectCenter + (connection.CenterPos + viewOffset) * zoom;
                 if (viewArea.Contains(center) && connection.Biome != null)
                 {
-                    GUI.DrawString(spriteBatch, center, (connection.LevelData?.GenerationParams?.Identifier ?? connection.Biome.Identifier) + " (" + connection.Difficulty.FormatSingleDecimal() + ")", Color.White);
+                    GUI.DrawString(spriteBatch, center - Vector2.UnitX * 50,
+                        $"{(connection.LevelData?.GenerationParams?.Identifier ?? connection.Biome.Identifier)} ({connection.Difficulty.FormatSingleDecimal()})",
+                        ToolBox.GradientLerp(connection.Difficulty / 100.0f, GUIStyle.Blue, GUIStyle.Yellow, GUIStyle.Red), backgroundColor: Color.Black * 0.7f, font: GUIStyle.SmallFont);
                 }
             }
 

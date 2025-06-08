@@ -1,11 +1,13 @@
-﻿using Microsoft.Xna.Framework;
+﻿using Barotrauma.Items.Components;
+using Microsoft.Xna.Framework;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Xml.Linq;
-using Barotrauma.Items.Components;
+using Barotrauma.Extensions;
 
 namespace Barotrauma
-{    
+{
     public enum HitDetection
     {
         Distance,
@@ -23,11 +25,22 @@ namespace Barotrauma
         NotDefined
     }
 
+    [Flags]
     public enum AttackTarget
     {
-        Any,
-        Character,
-        Structure   // Including hulls etc. Evaluated as anything but a character.
+        Any = 0,
+        /// <summary>
+        /// Characters only
+        /// </summary>
+        Character = 1,
+        /// <summary>
+        /// Structures and hulls, but also items (for backwards support)!
+        /// </summary>
+        Structure = 2,
+        /// <summary>
+        /// Items only
+        /// </summary>
+        Item = 4
     }
 
     public enum AIBehaviorAfterAttack
@@ -36,7 +49,9 @@ namespace Barotrauma
         FallBackUntilCanAttack,
         PursueIfCanAttack,
         Pursue,
+        Eat,
         FollowThrough,
+        FollowThroughWithoutObstacleAvoidance,
         FollowThroughUntilCanAttack,
         IdleUntilCanAttack,
         Reverse,
@@ -103,6 +118,13 @@ namespace Barotrauma
         [Serialize(0f, IsPropertySaveable.Yes, description: "A delay before reacting after performing an attack."), Editable]
         public float AfterAttackDelay { get; set; }
 
+        [Serialize(AIBehaviorAfterAttack.FallBack, IsPropertySaveable.Yes, 
+            description: "Secondary AI behavior after the attack. The character first executes the AfterAttack behavior, then after AfterAttackSecondaryDelay passes, switches to this one. Ignored if AfterAttackSecondaryDelay is 0 or less."), Editable]
+        public AIBehaviorAfterAttack AfterAttackSecondary { get; set; }
+
+        [Serialize(0.0f, IsPropertySaveable.Yes, description: "How long the character executes the AfterAttack before switching to AfterAttackSecondary. The secondary behavior is ignored if this value is 0 or less."), Editable]
+        public float AfterAttackSecondaryDelay { get; set; }
+
         [Serialize(false, IsPropertySaveable.Yes, description: "Should the AI try to turn around when aiming with this attack?"), Editable]
         public bool Reverse { get; private set; }
 
@@ -134,10 +156,11 @@ namespace Barotrauma
         [Serialize(0.25f, IsPropertySaveable.Yes, description: "An approximation of the attack duration. Effectively defines the time window in which the hit can be registered. If set to too low value, it's possible that the attack won't hit the target in time."), Editable(MinValueFloat = 0.0f, MaxValueFloat = 10.0f, DecimalCount = 2)]
         public float Duration { get; private set; }
 
-        [Serialize(5f, IsPropertySaveable.Yes, description: "How long the AI waits between the attacks."), Editable(MinValueFloat = 0.0f, MaxValueFloat = 100.0f, DecimalCount = 2)]
+        [Serialize(5f, IsPropertySaveable.Yes, description: "How long the AI must wait before it can use this attack again."), Editable(MinValueFloat = 0.0f, MaxValueFloat = 100.0f, DecimalCount = 2)]
         public float CoolDown { get; set; } = 5;
 
-        [Serialize(0f, IsPropertySaveable.Yes, description: "Used as the attack cooldown between different kind of attacks. Does not have effect, if set to 0."), Editable(MinValueFloat = 0.0f, MaxValueFloat = 100.0f, DecimalCount = 2)]
+
+        [Serialize(0f, IsPropertySaveable.Yes, description: "When the attack cooldown is running and when there are other valid attacks possible for the character to use, the secondary cooldown is used instead of the regular cooldown. Does not have an effect, if set to 0 or less than the regular cooldown value."), Editable(MinValueFloat = 0.0f, MaxValueFloat = 100.0f, DecimalCount = 2)]
         public float SecondaryCoolDown { get; set; } = 0;
 
         [Serialize(0f, IsPropertySaveable.Yes, description: "A random factor applied to all cooldowns. Example: 0.1 -> adds a random value between -10% and 10% of the cooldown. Min 0 (default), Max 1 (could disable or double the cooldown in extreme cases)."), Editable(MinValueFloat = 0, MaxValueFloat = 1, DecimalCount = 2)]
@@ -153,6 +176,9 @@ namespace Barotrauma
             get => _structureDamage * DamageMultiplier;
             set => _structureDamage = value;
         }
+
+        [Serialize(false, IsPropertySaveable.Yes, description: "If the attack causes an explosion of wall damage shrapnel, should some of the shrapnel be launched as projectiles that can go through walls?"), Editable]
+        public bool CreateWallDamageProjectiles { get; private set; }
 
         [Serialize(true, IsPropertySaveable.Yes, description: "Whether or not damaging structures with the attack causes damage particles to emit."), Editable]
         public bool EmitStructureDamageParticles { get; private set; }
@@ -171,7 +197,22 @@ namespace Barotrauma
         /// <summary>
         /// Used for multiplying all the damage.
         /// </summary>
-        public float DamageMultiplier { get; set; } = 1;
+        public float DamageMultiplier
+        {
+            get => _damageMultiplier ?? initialDamageMultiplier;
+            set
+            {
+                if (!_damageMultiplier.HasValue)
+                {
+                    SetInitialDamageMultiplier(value);
+                }
+                _damageMultiplier = value;
+            }
+        }
+        private float? _damageMultiplier;
+        private float initialDamageMultiplier = 1.0f;
+        public void ResetDamageMultiplier() => _damageMultiplier = initialDamageMultiplier;
+        public void SetInitialDamageMultiplier(float value) => initialDamageMultiplier = value;
 
         /// <summary>
         /// Used for multiplying all the ranges.
@@ -184,7 +225,12 @@ namespace Barotrauma
         public float ImpactMultiplier { get; set; } = 1;
 
         [Serialize(0.0f, IsPropertySaveable.Yes, description: "How much damage the attack does to level walls."), Editable(MinValueFloat = 0.0f, MaxValueFloat = 1000.0f)]
-        public float LevelWallDamage { get; set; }
+        public float LevelWallDamage
+        {
+            get => _levelWallDamage * DamageMultiplier;
+            set => _levelWallDamage = value;
+        }
+        private float _levelWallDamage;
 
         [Serialize(false, IsPropertySaveable.Yes, description: "Sets whether or not the attack is ranged or not."), Editable]
         public bool Ranged { get; set; }
@@ -248,6 +294,8 @@ namespace Barotrauma
 
         [Serialize("0.0, 0.0", IsPropertySaveable.Yes, description: "Applied to the main limb. In world space coordinates(i.e. 0, 1 pushes the character upwards a bit). The attacker's facing direction is taken into account."), Editable]
         public Vector2 RootForceWorldEnd { get; private set; }
+
+        public bool HasRootForce => RootForceWorldStart != Vector2.Zero || RootForceWorldMiddle != Vector2.Zero || RootForceWorldEnd != Vector2.Zero;
 
         [Serialize(TransitionMode.Linear, IsPropertySaveable.Yes, description:"Applied to the main limb. The transition smoothing of the applied force."), Editable]
         public TransitionMode RootTransitionEasing { get; private set; }
@@ -391,14 +439,14 @@ namespace Barotrauma
                 element.GetAttribute("burndamage") != null ||
                 element.GetAttribute("bleedingdamage") != null)
             {
-                DebugConsole.ThrowError("Error in Attack (" + parentDebugName + ") - Define damage as afflictions instead of using the damage attribute (e.g. <Affliction identifier=\"internaldamage\" strength=\"10\" />).");
+                DebugConsole.ThrowError("Error in Attack (" + parentDebugName + ") - Define damage as afflictions instead of using the damage attribute (e.g. <Affliction identifier=\"internaldamage\" strength=\"10\" />).",
+                    contentPackage: element.ContentPackage);
             }
 
             //if level wall damage is not defined, default to the structure damage
-            if (element.GetAttribute("LevelWallDamage") == null && 
-                element.GetAttribute("levelwalldamage") == null)
+            if (element.GetAttribute("LevelWallDamage") == null)
             {
-                LevelWallDamage = StructureDamage;
+                LevelWallDamage = _structureDamage;
             }
 
             InitProjSpecific(element);
@@ -414,12 +462,14 @@ namespace Barotrauma
                         AfflictionPrefab afflictionPrefab;
                         if (subElement.GetAttribute("name") != null)
                         {
-                            DebugConsole.ThrowError("Error in Attack (" + parentDebugName + ") - define afflictions using identifiers instead of names.");
+                            DebugConsole.ThrowError("Error in Attack (" + parentDebugName + ") - define afflictions using identifiers instead of names.",
+                                    contentPackage: element.ContentPackage);
                             string afflictionName = subElement.GetAttributeString("name", "").ToLowerInvariant();
                             afflictionPrefab = AfflictionPrefab.List.FirstOrDefault(ap => ap.Name.Equals(afflictionName, System.StringComparison.OrdinalIgnoreCase));
                             if (afflictionPrefab == null)
                             {
-                                DebugConsole.ThrowError("Error in Attack (" + parentDebugName + ") - Affliction prefab \"" + afflictionName + "\" not found.");
+                                DebugConsole.ThrowError("Error in Attack (" + parentDebugName + ") - Affliction prefab \"" + afflictionName + "\" not found.",
+                                    contentPackage: element.ContentPackage);
                                 continue;
                             }
                         }
@@ -428,7 +478,8 @@ namespace Barotrauma
                             Identifier afflictionIdentifier = subElement.GetAttributeIdentifier("identifier", "");
                             if (!AfflictionPrefab.Prefabs.TryGet(afflictionIdentifier, out afflictionPrefab))
                             {
-                                DebugConsole.ThrowError("Error in Attack (" + parentDebugName + ") - Affliction prefab \"" + afflictionIdentifier + "\" not found.");
+                                DebugConsole.ThrowError("Error in Attack (" + parentDebugName + ") - Affliction prefab \"" + afflictionIdentifier + "\" not found.",
+                                    contentPackage: element.ContentPackage);
                                 continue;
                             }
                         }
@@ -438,10 +489,16 @@ namespace Barotrauma
                         break;
                 }
             }
+
+            if (SecondaryCoolDown > CoolDown)
+            {
+                DebugConsole.AddWarning($"Potentially misconfigured attack in {parentDebugName}. Secondary cooldown should not be longer than the primary cooldown.",
+                    contentPackage: element.ContentPackage);
+            }
         }
         partial void InitProjSpecific(ContentXElement element);
 
-        public void ReloadAfflictions(XElement element, string parentDebugName)
+        public void ReloadAfflictions(ContentXElement element, string parentDebugName)
         {
             Afflictions.Clear();
             foreach (var subElement in element.GetChildElements("affliction"))
@@ -450,22 +507,18 @@ namespace Barotrauma
                 Identifier afflictionIdentifier = subElement.GetAttributeIdentifier("identifier", "");
                 if (!AfflictionPrefab.Prefabs.TryGet(afflictionIdentifier, out AfflictionPrefab afflictionPrefab))
                 {
-                    DebugConsole.ThrowError($"Error in an Attack defined in \"{parentDebugName}\" - could not find an affliction with the identifier \"{afflictionIdentifier}\".");
+                    DebugConsole.ThrowError($"Error in an Attack defined in \"{parentDebugName}\" - could not find an affliction with the identifier \"{afflictionIdentifier}\".",
+                        contentPackage: element.ContentPackage);
                     continue;
                 }
                 affliction = afflictionPrefab.Instantiate(0.0f);
                 affliction.Deserialize(subElement);
-                //backwards compatibility
-                if (subElement.Attribute("amount") != null && subElement.Attribute("strength") == null)
-                {
-                    affliction.Strength = subElement.GetAttributeFloat("amount", 0.0f);
-                }
                 // add the affliction anyway, so that it can be shown in the editor.
                 Afflictions.Add(affliction, subElement);
             }
         }
 
-        public void Serialize(XElement element)
+        public void Serialize(ContentXElement element)
         {
             SerializableProperty.SerializeProperties(this, element, true);
             foreach (var affliction in Afflictions)
@@ -477,7 +530,7 @@ namespace Barotrauma
             }
         }
 
-        public void Deserialize(XElement element, string parentDebugName)
+        public void Deserialize(ContentXElement element, string parentDebugName)
         {
             SerializableProperties = SerializableProperty.DeserializeProperties(this, element);
             ReloadAfflictions(element, parentDebugName);
@@ -497,8 +550,9 @@ namespace Barotrauma
             SetUser(attacker);
 
             DamageParticles(deltaTime, worldPosition);
-            
-            var attackResult = target?.AddDamage(attacker, worldPosition, this, deltaTime, playSound) ?? new AttackResult();
+
+            Vector2 impulseDirection = GetImpulseDirection(target as ISpatialEntity, worldPosition, SourceItem);
+            var attackResult = target?.AddDamage(attacker, worldPosition, this, impulseDirection, deltaTime, playSound) ?? new AttackResult();
             var conditionalEffectType = attackResult.Damage > 0.0f ? ActionType.OnSuccess : ActionType.OnFailure;
             var additionalEffectType = ActionType.OnUse;
             if (targetCharacter != null && targetCharacter.IsDead)
@@ -606,7 +660,7 @@ namespace Barotrauma
             float penetration = Penetration;
 
             RangedWeapon weapon = 
-                SourceItem?.GetComponent<RangedWeapon>() ?? 
+                SourceItem?.GetComponent<RangedWeapon>() ??
                 SourceItem?.GetComponent<Projectile>()?.Launcher?.GetComponent<RangedWeapon>();
             float? penetrationValue = weapon?.Penetration;
             if (penetrationValue.HasValue)
@@ -614,7 +668,8 @@ namespace Barotrauma
                 penetration += penetrationValue.Value;
             }
 
-            var attackResult = targetLimb.character.ApplyAttack(attacker, worldPosition, this, deltaTime, playSound, targetLimb, penetration);
+            Vector2 impulseDirection = GetImpulseDirection(targetLimb, worldPosition, SourceItem);
+            var attackResult = targetLimb.character.ApplyAttack(attacker, worldPosition, this, deltaTime, impulseDirection, playSound, targetLimb, penetration);
             var conditionalEffectType = attackResult.Damage > 0.0f ? ActionType.OnSuccess : ActionType.OnFailure;
 
             foreach (StatusEffect effect in statusEffects)
@@ -666,11 +721,41 @@ namespace Barotrauma
             return attackResult;
         }
 
+        private Vector2 GetImpulseDirection(ISpatialEntity target, Vector2 sourceWorldPosition, Item sourceItem)
+        {
+            Vector2 impulseDirection = Vector2.Zero;
+            if (target != null)
+            {
+                impulseDirection = target.WorldPosition - sourceWorldPosition;
+            }
+
+            if (sourceItem?.body != null && sourceItem.body.Enabled && sourceItem.body.LinearVelocity.LengthSquared() > 0.0f)
+            {
+                impulseDirection = sourceItem.body.LinearVelocity;
+            }
+            else
+            {
+                var projectileComponent = sourceItem?.GetComponent<Projectile>();
+                if (projectileComponent != null)
+                {
+                    impulseDirection = new Vector2(MathF.Cos(SourceItem.Rotation), MathF.Sin(SourceItem.Rotation));
+                }
+            }
+
+            if (impulseDirection.LengthSquared() > 0.0001f)
+            {
+                impulseDirection = Vector2.Normalize(impulseDirection);
+            }
+            return impulseDirection;
+        }
+
         public float AttackTimer { get; private set; }
         public float CoolDownTimer { get; set; }
         public float CurrentRandomCoolDown { get; private set; }
         public float SecondaryCoolDownTimer { get; set; }
         public bool IsRunning { get; private set; }
+
+        public float AfterAttackTimer { get; set; }
 
         public void UpdateCoolDown(float deltaTime)
         {
@@ -693,6 +778,7 @@ namespace Barotrauma
 
         public void ResetAttackTimer()
         {
+            AfterAttackTimer = 0;
             AttackTimer = 0;
             IsRunning = false;
         }
@@ -763,15 +849,28 @@ namespace Barotrauma
             return true;
         }
 
-        public bool IsValidTarget(AttackTarget targetType) => TargetType == AttackTarget.Any || TargetType == targetType;
+        public bool IsValidTarget(AttackTarget targetType) => TargetType == AttackTarget.Any || TargetType.HasAnyFlag(targetType);
 
         public bool IsValidTarget(Entity target)
         {
             return TargetType switch
             {
                 AttackTarget.Character => target is Character,
-                AttackTarget.Structure => !(target is Character),
-                _ => true,
+                AttackTarget.Structure => target is Structure or Hull or Item, // Items are intentionally included for backwards-support.
+                AttackTarget.Item => target is Item,
+                _ => IsValidTarget(GetAttackTargetTypeFromEntity(target))
+            };
+        }
+        
+        private static AttackTarget GetAttackTargetTypeFromEntity(Entity entity)
+        {
+            return entity switch
+            {
+                Character => AttackTarget.Character,
+                Item => AttackTarget.Item,
+                Structure => AttackTarget.Structure,
+                Hull => AttackTarget.Structure,
+                _ => AttackTarget.Any
             };
         }
 

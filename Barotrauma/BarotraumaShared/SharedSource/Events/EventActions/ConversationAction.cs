@@ -1,4 +1,4 @@
-using Barotrauma.Extensions;
+﻿using Barotrauma.Extensions;
 using Barotrauma.Networking;
 using Microsoft.Xna.Framework;
 using System;
@@ -8,6 +8,10 @@ using System.Xml.Linq;
 
 namespace Barotrauma
 {
+
+    /// <summary>
+    /// Triggers a "conversation popup" with text and support for different branching options.
+    /// </summary>
     partial class ConversationAction : EventAction
     {
 
@@ -26,43 +30,40 @@ namespace Barotrauma
         /// </summary>
         const float BlockOtherConversationsDuration = 5.0f;
 
-        [Serialize("", IsPropertySaveable.Yes)]
+        [Serialize("", IsPropertySaveable.Yes, description: "The text to display in the prompt. Can be the text as-is, or a tag referring to a line in a text file.")]
         public string Text { get; set; }
 
-        [Serialize(0, IsPropertySaveable.Yes)]
-        public int DefaultOption { get; set; }
-
-        [Serialize("", IsPropertySaveable.Yes)]
+        [Serialize("", IsPropertySaveable.Yes, description: "Tag of the character who's speaking. Makes a speech bubble icon appear above the character to indicate you can speak with them, and stops the character in place when the conversation triggers. Also allows the conversation to be interrupted if the speaker dies or becomes incapacitated mid-conversation.")]
         public Identifier SpeakerTag { get; set; }
 
-        [Serialize("", IsPropertySaveable.Yes)]
+        [Serialize("", IsPropertySaveable.Yes, description: "Tag of the player the conversation is shown to. If empty, the conversation is shown to everyone. If SpeakerTag is defined, the conversation is always only shown to the player who interacts with the speaker.")]
         public Identifier TargetTag { get; set; }
 
-        [Serialize(true, IsPropertySaveable.Yes)]
+        [Serialize(true, IsPropertySaveable.Yes, "Should someone interact with the speaker for the conversation to trigger?")]
         public bool WaitForInteraction { get; set; }
 
-        [Serialize("", IsPropertySaveable.Yes, "Tag to assign to whoever invokes the conversation")]
+        [Serialize("", IsPropertySaveable.Yes, "Tag to assign to whoever invokes the conversation.")]
         public Identifier InvokerTag { get; set; }
 
-        [Serialize(false, IsPropertySaveable.Yes)]
+        [Serialize(false, IsPropertySaveable.Yes, description: "Should the screen fade to black when the conversation is active?")]
         public bool FadeToBlack { get; set; }
 
         [Serialize(true, IsPropertySaveable.Yes, "Should the event end if the conversations is interrupted (e.g. if the speaker dies or falls unconscious mid-conversation). Defaults to true.")]
         public bool EndEventIfInterrupted { get; set; }
 
-        [Serialize("", IsPropertySaveable.Yes)]
+        [Serialize("", IsPropertySaveable.Yes, description: "Identifier of an event sprite to display in the corner of the conversation prompt.")]
         public string EventSprite { get; set; }
         
-        [Serialize(DialogTypes.Regular, IsPropertySaveable.Yes)]
+        [Serialize(DialogTypes.Regular, IsPropertySaveable.Yes, description: "Type of the dialog prompt.")]
         public DialogTypes DialogType { get; set; }
 
-        [Serialize(false, IsPropertySaveable.Yes)]
+        [Serialize(false, IsPropertySaveable.Yes, description: "Does this conversation continue after this ConversationAction? If you have multiple successive ConversationActions, perhaps with some actions happening in between, you can enable this to prevent the dialog prompt from closing between the actions. Not necessary if the ConversationActions are nested inside each other: those are always considered parts of the same conversation, and shown in the same prompt.")]
         public bool ContinueConversation { get; set; }
 
         [Serialize(false, IsPropertySaveable.Yes, description: "If enabled, the event will not stop to wait for the conversation to be dismissed.")]
         public bool ContinueAutomatically { get; set; }
 
-        [Serialize(false, IsPropertySaveable.Yes)]
+        [Serialize(false, IsPropertySaveable.Yes, description: "If SpeakerTag is defined, the conversation is interrupted by default if the speaker and the target end up too far from each other. This can be used to disable that behavior, keeping the dialog prompt open regardless of the distance.")]
         public bool IgnoreInterruptDistance { get; set; }
 
         public Character Speaker
@@ -72,6 +73,7 @@ namespace Barotrauma
         }
 
         private AIObjective prevIdleObjective, prevGotoObjective;
+        private AIObjective npcWaitObjective;
 
         public List<SubactionGroup> Options { get; private set; }
 
@@ -81,6 +83,8 @@ namespace Barotrauma
 
         //an identifier the server uses to identify which ConversationAction a client is responding to
         public readonly UInt16 Identifier;
+
+        private float startDelay;
 
         private int selectedOption = -1;
         private bool dialogOpened = false;
@@ -111,12 +115,15 @@ namespace Barotrauma
                     Text = elem.GetAttributeString("tag", string.Empty);
                     textElement = elem;
                 }
-            }
-            if (element.GetChildElement("Replace") != null)
-            {
-                DebugConsole.ThrowError(
-                    $"Error in {nameof(EventObjectiveAction)} in the event \"{parentEvent.Prefab.Identifier}\"" +
-                    $" - unrecognized child element \"Replace\".");
+                else
+                {
+                    string thisName = nameof(ConversationAction);
+                    DebugConsole.ThrowError(
+                        $"Error in {thisName} in the event \"{parentEvent.Prefab.Identifier}\"" +
+                        $" - unrecognized child element \"{elem.Name}\". If it's an action intended to execute after the {thisName}, " +
+                        $"it should be after the {thisName}, not inside it.",
+                        contentPackage: element.ContentPackage);
+                }
             }
         }
 
@@ -131,6 +138,10 @@ namespace Barotrauma
             else
             {
                 text = TextManager.Get(Text).Fallback(Text);
+                if (text.Value.IsNullOrEmpty())
+                {
+                    text = text.Fallback(Text);
+                }
             }
             return ParentEvent.ReplaceVariablesInEventText(text);
         }
@@ -158,7 +169,11 @@ namespace Barotrauma
 #else
                     foreach (Client c in GameMain.Server.ConnectedClients)
                     {
-                        if (c.InGame && c.Character != null) { ServerWrite(Speaker, c, interrupt); }
+                        if (c.InGame && c.Character != null)
+                        {
+                            DebugConsole.Log($"Conversation {ParentEvent.Prefab.Identifier} finished, communicating to clients...");
+                            ServerWrite(Speaker, c, interrupt); 
+                        }
                     }
 #endif
                     ResetSpeaker();
@@ -202,6 +217,16 @@ namespace Barotrauma
             Speaker = null;
         }
 
+        /// <summary>
+        /// Retriggers the conversation after the specified delay.
+        /// </summary>
+        public void RetriggerAfter(float delay)
+        {
+            startDelay = delay;
+            dialogOpened = false;
+            selectedOption = -1;
+        }
+
         public override bool SetGoToTarget(string goTo)
         {
             selectedOption = -1;
@@ -231,20 +256,33 @@ namespace Barotrauma
             {
                 humanAI.ClearForcedOrder();
                 if (prevIdleObjective != null) { humanAI.ObjectiveManager.AddObjective(prevIdleObjective); }
-                if (prevGotoObjective != null) { humanAI.ObjectiveManager.AddObjective(prevGotoObjective); }
+                if (prevGotoObjective != null && !prevGotoObjective.Abandon) { humanAI.ObjectiveManager.AddObjective(prevGotoObjective); }
                 humanAI.ObjectiveManager.SortObjectives();
             }
         }
 
         public int[] GetEndingOptions()
         {
-            List<int> endings = Options.Where(group => !group.Actions.Any() || group.EndConversation).Select(group => Options.IndexOf(group)).ToList();
+            List<int> endings = Options
+                .Where(group =>  
+                    group.EndConversation || 
+                    //no actions = safe to assume this must end the conversation
+                    !group.Actions.Any() ||
+                    //no follow-up conversation and a goto makes the event jump somewhere else
+                    //we cannot easily determine whether that goto will lead to a follow-up conversation,
+                    //so it's safest to close this conversation to prevent it from getting stuck (the potential follow-up will open a new one)
+                    (group.Actions.None(a => a is ConversationAction) && group.Actions.Any(a => a is GoTo { EndConversation: true })))
+                .Select(group => Options.IndexOf(group))
+                .ToList();
             if (!ContinueConversation) { endings.Add(-1); }
             return endings.ToArray();
         }
 
         public override void Update(float deltaTime)
         {
+            startDelay -= deltaTime;
+            if (startDelay > 0) { return; }
+
             if (interrupt)
             {
                 Interrupted?.Update(deltaTime);
@@ -274,6 +312,10 @@ namespace Barotrauma
 
                 if (!SpeakerTag.IsEmpty)
                 {
+                    if (npcWaitObjective != null)
+                    {
+                        npcWaitObjective.ForceHighestPriority = true;
+                    }
                     if (Speaker != null && !Speaker.Removed && Speaker.CampaignInteractionType == CampaignMode.InteractionType.Talk && Speaker.ActiveConversation?.ParentEvent != this.ParentEvent) { return; }
                     Speaker = ParentEvent.GetTargets(SpeakerTag).FirstOrDefault(e => e is Character) as Character;
                     if (Speaker == null || Speaker.Removed)
@@ -377,19 +419,32 @@ namespace Barotrauma
             {
                 targets = ParentEvent.GetTargets(TargetTag).Where(e => IsValidTarget(e));
                 if (!targets.Any() || IsBlockedByAnotherConversation(targets, BlockOtherConversationsDuration)) { return; }
+                //some specific character tried to start the convo, but not included in the targets for this conversation -> disallow
+                if (targetCharacter != null && !targets.Contains(targetCharacter)) { return; }
+            }
+            else 
+            {
+#if SERVER
+                if (GameMain.NetworkMember != null)
+                {
+                    //conversation targeted to everyone, but no-one present yet who could potentially hear it -> don't start yet
+                    UpdateIgnoredClients();
+                    if (GameMain.NetworkMember.ConnectedClients.None(c => CanClientReceive(c))) { return; }
+                }
+#endif
+                if (IsBlockedByAnotherConversation(targetCharacter?.ToEnumerable(), BlockOtherConversationsDuration)) { return; }
             }
 
-            if (targetCharacter != null && IsBlockedByAnotherConversation(targetCharacter.ToEnumerable(), 0.1f)) { return; }
 
             if (speaker?.AIController is HumanAIController humanAI)
             {
                 prevIdleObjective = humanAI.ObjectiveManager.GetObjective<AIObjectiveIdle>();
                 prevGotoObjective = humanAI.ObjectiveManager.GetObjective<AIObjectiveGoTo>();
-                humanAI.SetForcedOrder(
+                npcWaitObjective = humanAI.SetForcedOrder(
                     new Order(OrderPrefab.Prefabs["wait"], Barotrauma.Identifier.Empty, null, orderGiver: null));
-                if (targets.Any()) 
+                if (targets.Any() || targetCharacter != null) 
                 {
-                    Entity closestTarget = null;
+                    Entity closestTarget = targetCharacter;
                     float closestDist = float.MaxValue;
                     foreach (Entity entity in targets)
                     {

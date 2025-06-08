@@ -57,15 +57,14 @@ namespace Barotrauma
         };
         protected override IEnumerable<Identifier> NonActionChildElementNames => nonActionChildElementNames;
 
-        public TraitorEvent(TraitorEventPrefab prefab) : base(prefab)
+        public TraitorEvent(TraitorEventPrefab prefab, int seed) : base(prefab, seed)
         {
             this.prefab = prefab;
             codeWord = string.Empty;
         }
 
-        public override void Init(EventSet? parentSet = null)
+        protected override void InitEventSpecific(EventSet? parentSet = null)
         {
-            base.Init(parentSet);
             if (traitor == null)
             {
                 DebugConsole.ThrowError($"Error when initializing event \"{prefab.Identifier}\": traitor not set.\n" + Environment.StackTrace);
@@ -96,8 +95,8 @@ namespace Barotrauma
             traitor.Character.IsTraitor = true;
             AddTarget(Tags.Traitor, traitor.Character);
             AddTarget(Tags.AnyTraitor, traitor.Character);
-            AddTargetPredicate(Tags.NonTraitor, e => e is Character c && (c.IsPlayer || c.IsBot) && !c.IsTraitor && c.TeamID == traitor.TeamID && !c.IsIncapacitated);
-            AddTargetPredicate(Tags.NonTraitorPlayer, e => e is Character c && c.IsPlayer && !c.IsTraitor && c.IsOnPlayerTeam && !c.IsIncapacitated);
+            AddTargetPredicate(Tags.NonTraitor, TargetPredicate.EntityType.Character, e => e is Character c && (c.IsPlayer || c.IsBot) && !c.IsTraitor && c.TeamID == traitor.TeamID && !c.IsIncapacitated);
+            AddTargetPredicate(Tags.NonTraitorPlayer, TargetPredicate.EntityType.Character, e => e is Character c && c.IsPlayer && !c.IsTraitor && c.IsOnPlayerTeam && !c.IsIncapacitated);
         }
 
         public void SetSecondaryTraitors(IEnumerable<Client> traitors)
