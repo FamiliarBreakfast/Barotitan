@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Xml.Linq;
+using Barotrauma.Items.Components;
 using Barotrauma.MapCreatures.Behavior;
 using Barotrauma.Items.Components;
 using Barotrauma.Extensions;
@@ -115,7 +116,6 @@ namespace Barotrauma
     {
         public readonly static List<Hull> HullList = new List<Hull>();
         public readonly static List<EntityGrid> EntityGrids = new List<EntityGrid>();
-        public readonly static List<FluidVolume> FluidList = new List<FluidVolume>();
 
         public static bool ShowHulls = true;
 
@@ -142,7 +142,7 @@ namespace Barotrauma
         {
             get { return properties; }
         }
-
+        
         /// <summary>
         /// How fast the pressure in the hull builds up when there's a gap leading outside
         /// </summary>
@@ -153,8 +153,6 @@ namespace Barotrauma
         /// </summary>
         public const float PressureDropSpeed = 10.0f;
 
-        private float temperature;
-        
         private float lethalPressure;
 
         private float surface;
@@ -163,7 +161,7 @@ namespace Barotrauma
 
         private float oxygen;
         [NonSerialized()] //must be seperate variables else bt shits itself
-        private FluidVolume oxygenVolume;
+        internal FluidVolume oxygenVolume;
 
         private bool update;
 
@@ -324,15 +322,11 @@ namespace Barotrauma
         [Serialize(100000.0f, IsPropertySaveable.Yes)]
         public float Oxygen
         {
-            get
-            {
-                if (oxygenVolume != null) return oxygenVolume.GasVolume;
-                return 100000.0f;
-            }
+            get => (float)oxygenVolume.GasMoles;
             set
             {
-                if (!MathUtils.IsValid(value)) return;
-                if (oxygenVolume != null) oxygenVolume.GasVolume = MathHelper.Clamp(value, 0.0f, oxygenVolume.MaxVolume);
+                // if (!MathUtils.IsValid(value)) return;
+                // if (oxygenVolume != null) AddFluid(oxygenVolume, MathHelper.Max(value-Oxygen, 0.0f), 293);
             }
         }
 
@@ -379,12 +373,9 @@ namespace Barotrauma
 
         public float OxygenPercentage
         {
-            get
-            {
-                if (oxygenVolume != null) return Volume <= 0.0f ? 100.0f : Oxygen / Volume * 100.0f;
-                return 0.0f;
-            }
-            set { Oxygen = (value / 100.0f) * Volume; }
+            get => MathUtils.Percentage(Oxygen, Volume);
+            set { //Oxygen = (value / 100.0f) * Volume;
+                  }
         }
 
         public float Volume
@@ -394,8 +385,24 @@ namespace Barotrauma
 
         public float Pressure
         {
-            get { return pressure; }
-            set { pressure = value; }
+            //get { return pressure; }
+            get
+            {
+                double molarVolumeLiquid = 2.8e-5; // m³/mol for liquid O2
+                
+                double liquidVolume = oxygenVolume.LiquidMoles * molarVolumeLiquid;
+                double effectiveGasVolume = Volume - liquidVolume;
+                
+                if (effectiveGasVolume <= 0.0 || oxygenVolume.GasMoles <= 0.0)
+                {
+                    return (float)0.0; // no gas or no space for it → no pressure
+                }
+                
+                return (float)(FluidPrefab.StandardPressure * (oxygenVolume.GasMoles / effectiveGasVolume));
+                //return 100000;
+            }
+            set { //pressure = value;
+                  }
         }
 
         public float[] WaveY
@@ -466,6 +473,96 @@ namespace Barotrauma
         public int FireCount => FireSources?.Count ?? 0;
 
         public BallastFloraBehavior BallastFlora { get; set; }
+        
+        public double ThermalEnergy { get; set; }
+
+        public double CalculateTotalHeatCapacity()
+        {
+            double totalHeatCapacity = 0.0;
+
+            foreach (FluidVolume fluidVolume in FluidVolumes)
+            {
+                double molesOfFluid = fluidVolume.TotalMoles;
+                double specificHeatPerMole = fluidVolume.FluidPrefab.SpecificHeat;
+                totalHeatCapacity += molesOfFluid * specificHeatPerMole;
+            }
+
+            return totalHeatCapacity;
+        }
+        
+        /// <summary>
+        /// Computes the hull temperature by dividing the total thermal energy
+        /// by the combined heat capacity of all fluids in the hull.
+        /// </summary>
+        public double Temperature
+        {
+            get
+            {
+                double totalHeatCapacity = CalculateTotalHeatCapacity();
+                if (totalHeatCapacity <= 0.0) return 0.0;
+
+                return ThermalEnergy / totalHeatCapacity;
+            }
+            set
+            {
+                double totalHeatCapacity = CalculateTotalHeatCapacity();
+                if (totalHeatCapacity <= 0.0) return;
+
+                // Sets thermal energy such that resulting temperature is the target
+                ThermalEnergy = value * totalHeatCapacity;
+            }
+        }
+        
+        /// <summary>
+        /// Retrieves the FluidVolume for the given fluid prefab in this hull.
+        /// Returns null if it doesn't exist.
+        /// </summary>
+        public FluidVolume GetFluidVolume(FluidPrefab prefab)
+        {
+            return FluidVolumes.FirstOrDefault(fv => fv.FluidPrefab == prefab);
+        }
+        /// <summary>
+        /// Retrieves the FluidVolume in this hull that matches the given fluid identifier.
+        /// Returns null if no match is found.
+        /// </summary>
+        public FluidVolume GetFluidVolume(string fluidIdentifier)
+        {
+            return FluidVolumes.FirstOrDefault(fv =>
+                string.Equals(fv.FluidPrefab.Identifier.ToString(), fluidIdentifier, StringComparison.OrdinalIgnoreCase));
+        }
+        
+        /// <summary>
+        /// Adds a specific number of moles of fluid to a FluidVolume,
+        /// transferring energy based on the temperature difference.
+        /// </summary>
+        public void AddFluid(FluidVolume fluidVolume, double moles, double temperatureK)
+        {
+            if (moles <= 0.0 || fluidVolume == null) return;
+
+            Hull hull = fluidVolume.Hull;
+            if (hull == null) return;
+
+            double currentHullTemperature = hull.Temperature;
+            double specificHeat = fluidVolume.FluidPrefab.SpecificHeat;
+
+            // Adjust the hull's thermal energy to account for the new fluid's heat content
+            double energyDelta = moles * specificHeat * (temperatureK - currentHullTemperature);
+            hull.ThermalEnergy += energyDelta;
+
+            // Determine the boiling point at the current hull pressure
+            double hullPressure = hull.Pressure;
+            double boilingPointAtPressure = fluidVolume.FluidPrefab.CalculateBoilingPointAtPressure(hullPressure);
+
+            // Add as gas or liquid based on the actual temperature vs dynamic boiling point
+            if (temperatureK > boilingPointAtPressure)
+            {
+                fluidVolume.GasMoles += moles;
+            }
+            else
+            {
+                fluidVolume.LiquidMoles += moles;
+            }
+        }
 
         public Hull(Rectangle rectangle)
             : this (rectangle, Submarine.MainSub)
@@ -484,8 +581,6 @@ namespace Barotrauma
             rect = rectangle;
 
             if (BackgroundSections == null) { CreateBackgroundSections(); }
-            
-            OxygenPercentage = 100.0f;
 
             FireSources = new List<FireSource>();
             FakeFireSources = new List<DummyFireSource>();
@@ -524,11 +619,18 @@ namespace Barotrauma
             {
                 if (fluidPrefab.Identifier == "oxygen")
                 {
-                    oxygenVolume = new FluidVolume(this, fluidPrefab, Volume, Volume);
+                    oxygenVolume = new FluidVolume(this, fluidPrefab, Volume, 100);
+                    FluidVolumes.Add(oxygenVolume);
+                    DebugConsole.NewMessage("Created oxygen volume (" + fluidPrefab.Identifier + ") in hull (" + ID + ")");
+                    break;
                 }
-                FluidList.Add(new FluidVolume(this, fluidPrefab, 0, Volume));
+                FluidVolumes.Add(new FluidVolume(this, fluidPrefab, 0, 0));
                 DebugConsole.NewMessage("Created fluid volume (" + fluidPrefab.Identifier + ") in hull (" + ID + ")");
             }
+
+            Temperature = 293;
+            
+            OxygenPercentage = 100.0f;
             
             WaterVolume = 0.0f;
 
@@ -898,6 +1000,12 @@ namespace Barotrauma
             UpdateProjSpecific(deltaTime, cam);
 
             Oxygen -= OxygenDeteriorationSpeed * deltaTime;
+
+            oxygenVolume.Update(deltaTime);
+            foreach (FluidVolume volume in FluidVolumes)
+            {
+                volume.Update(deltaTime);
+            }
             
             if (FakeFireSources.Count > 0)
             {
@@ -907,6 +1015,7 @@ namespace Barotrauma
                     {
                         if (FakeFireSources[i].CausedByPsychosis)
                         {
+                            
                             FakeFireSources[i].Remove();
                         }
                     }

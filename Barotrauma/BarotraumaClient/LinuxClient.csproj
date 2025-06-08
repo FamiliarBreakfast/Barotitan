@@ -66,6 +66,15 @@
     <Content Remove="..\BarotraumaShared\**\*.props" />
     <Compile Include="..\BarotraumaShared\**\*.cs" />
     <Compile Remove="..\BarotraumaShared\Content\**\*.cs" />
+    <Compile Update="..\BarotraumaShared\SharedSource\Items\Components\Plumbing\FluidInput.cs">
+      <Link>SharedSource\Items\Components\Plumbing\FluidInput.cs</Link>
+    </Compile>
+    <Compile Update="..\BarotraumaShared\SharedSource\Items\Components\Plumbing\FluidOutput.cs">
+      <Link>SharedSource\Items\Components\Plumbing\FluidOutput.cs</Link>
+    </Compile>
+    <Compile Update="..\BarotraumaShared\SharedSource\Items\Components\Plumbing\Plumbed.cs">
+      <Link>SharedSource\Items\Components\Plumbing\Plumbed.cs</Link>
+    </Compile>
   </ItemGroup>
 
   <ItemGroup>

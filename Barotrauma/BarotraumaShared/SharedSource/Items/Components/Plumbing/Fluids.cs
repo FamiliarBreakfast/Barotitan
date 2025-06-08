@@ -6,172 +6,163 @@ namespace Barotrauma.Items.Components;
 
 internal class FluidPrefab : Prefab
 {
-    public static readonly PrefabCollection<FluidPrefab> Prefabs = new PrefabCollection<FluidPrefab>();
+    public static PrefabCollection<FluidPrefab> Prefabs { get; private set; } = new PrefabCollection<FluidPrefab>();
+    
+    public string Name;
 
-    public readonly float Density;
-    public readonly float MeltingPoint;
-    public readonly float BoilingPoint;
+    public const double GasConstant = 8.314;
+    public const double StandardPressure = 100000;
 
-    //Solid _solidPrefab;
-    private Color _color;
-    private readonly bool _sublimates;
+    public float BoilingPoint; // At standard pressure
+    public float MeltingPoint;
 
+    public float CriticalTemperature;
+    public float CriticalPressure;
+    public float TripleTemperature;
+    public float TriplePressure;
+
+    public float MolarMass;
+    public float SpecificHeat;
+    public float LatentHeat;
+
+    /// <summary>
+    /// Approximates the pressure-adjusted boiling point using Clausius–Clapeyron.
+    /// </summary>
+    public double CalculateBoilingPointAtPressure(double pressureInPascals)
+    {
+        if (pressureInPascals <= 0.0) return double.NegativeInfinity;
+
+        double inverseBoilingPoint = (1.0 / BoilingPoint) - (GasConstant / LatentHeat) * Math.Log(pressureInPascals / StandardPressure);
+
+        return 1.0 / inverseBoilingPoint;
+    }
+
+    /// <summary>
+    /// Approximates the pressure-adjusted melting point using a simple linear model.
+    /// </summary>
+    public double CalculateMeltingPointAtPressure(double pressureInPascals)
+    {
+        double pressureOffset = pressureInPascals - StandardPressure;
+        double meltingPointSlopePerPascal = 1e-5; // Tunable gameplay factor
+
+        return MeltingPoint + meltingPointSlopePerPascal * pressureOffset;
+    }
     public FluidPrefab(FluidsFile file, ContentXElement element) : base(file, element)
     {
-        Density = element.GetAttributeFloat("density", (float)1.0);
-        MeltingPoint = element.GetAttributeFloat("meltingPoint", (float)273.15);
-        BoilingPoint = element.GetAttributeFloat("boilingPoint", (float)373.15);
-        _color = element.GetAttributeColor("color", Color.TransparentBlack);
+        Name = element.GetAttributeString("name", Identifier.ToString());
         
-        _sublimates = MeltingPoint >= BoilingPoint;
+        MolarMass = element.GetAttributeFloat("molarMass", 18); //g/mol
+        SpecificHeat = element.GetAttributeFloat("specificHeat", (float)4.18); //J/(g*K)
+        LatentHeat = element.GetAttributeFloat("latentHeat", 2257); //Joules/gram
+        
+        BoilingPoint = element.GetAttributeFloat("boilingPoint", 373); //Kelvins
+        MeltingPoint = element.GetAttributeFloat("meltingPoint", 273); //Kelvins
+        CriticalTemperature = element.GetAttributeFloat("criticalTemperature", 647); //Kelvins
+        CriticalPressure = element.GetAttributeFloat("criticalPressure", 22064000); //Pascals
     }
-
     public override void Dispose() { }
 }
-
 internal class FluidVolume
 {
-    private readonly FluidPrefab _fluidPrefab;
+    public readonly FluidPrefab FluidPrefab;
+    public readonly Hull Hull;
+
+    public double LiquidMoles;
+    public double GasMoles;
     
-    public float LiquidVolume;
-    public float GasVolume;
-    public float PlasmaVolume;
+    //private List<Solid> _solids = new List<Solid>();
+    //private const int MaximumSolidCount = 5;
 
-    private List<Solid> _solids = new List<Solid>();
-    private const int MaximumSolidCount = 5;
+    // Combined total of liquid and gas moles
+    public double TotalMoles => LiquidMoles + GasMoles;
 
-    public readonly float MaxVolume;
-    
-    public float Temperature;
-    /*public float Pressure
-    {
-        get
-        {
-            if (GasVolume + LiquidVolume + PlasmaVolume < MaxVolume)
-            {
-                return 0;
-            }
-            else
-            {
-                return Math.Clamp((GasVolume + LiquidVolume + PlasmaVolume) - MaxVolume / 100f, 0f, 100f);
-            }
-        }
-    }*/
-    public float Volume => LiquidVolume + GasVolume + PlasmaVolume;
+    // Returns the effective temperature for this fluid, based on its hull
+    public double Temperature => Hull?.Temperature ?? FluidPrefab.MeltingPoint;
 
-    public const float PlasmaTemperature = 10000f;
+    public double _lastNetPhaseChangeRate = 0.0;
 
-    public FluidVolume(Hull hull, FluidPrefab fluidPrefab, float volume, float maxVolume = 10000f)
-    {
-        Temperature = 293.15f; //20 celsius
-        this._fluidPrefab = fluidPrefab;
-        this.MaxVolume = maxVolume;
-        if (Temperature < fluidPrefab.MeltingPoint)
-        {
-            //freeze()
-        }
-        else if (Temperature > fluidPrefab.MeltingPoint && Temperature < fluidPrefab.BoilingPoint)
-        {
-            LiquidVolume = volume;
-        }
-        else if (Temperature > fluidPrefab.BoilingPoint && Temperature < PlasmaTemperature)
-        {
-            GasVolume = volume;
-        }
-        else if (Temperature > PlasmaTemperature)
-        {
-            PlasmaVolume = volume;
-        }
-    }
-    
+    /// <summary>
+    /// Called every simulation tick to update phase behavior.
+    /// </summary>
     public void Update(float deltaTime)
     {
-        if (Temperature < _fluidPrefab.MeltingPoint)
+        double currentPressure = Hull?.Pressure ?? FluidPrefab.StandardPressure;
+
+        double dynamicBoilingPoint = FluidPrefab.CalculateBoilingPointAtPressure(currentPressure);
+        double dynamicMeltingPoint = FluidPrefab.CalculateMeltingPointAtPressure(currentPressure);
+        double latentHeat = FluidPrefab.LatentHeat;
+
+        // Reset last frame's phase change amount (for debug tracking)
+        _lastNetPhaseChangeRate = 0.0;
+
+        // --- Evaporation: Liquid -> Gas (limited by available thermal energy)
+        if (Temperature > dynamicBoilingPoint && LiquidMoles > 0.0)
         {
-            //freeze()
+            double totalHeatCapacity = Hull.CalculateTotalHeatCapacity();
+            double temperatureAboveBoiling = Temperature - dynamicBoilingPoint;
+            double excessEnergy = totalHeatCapacity * temperatureAboveBoiling;
+
+            // Only evaporate as much as energy allows
+            double molesEvaporatable = excessEnergy / latentHeat;
+            double molesEvaporated = Math.Min(LiquidMoles, molesEvaporatable);
+
+            LiquidMoles -= molesEvaporated;
+            GasMoles += molesEvaporated;
+
+            double heatUsed = molesEvaporated * latentHeat;
+            Hull.ThermalEnergy -= heatUsed;
+
+            _lastNetPhaseChangeRate = molesEvaporated / deltaTime;
         }
-        else if (Temperature > _fluidPrefab.MeltingPoint && Temperature < _fluidPrefab.BoilingPoint)
+
+        // --- Condensation: Gas -> Liquid (no limit)
+        else if (Temperature < dynamicBoilingPoint && GasMoles > 0.0)
         {
-            if (GasVolume > 0)
-            {
-                GasVolume -= deltaTime * _fluidPrefab.Density;
-                LiquidVolume += deltaTime * _fluidPrefab.Density;
-            }
-            if (PlasmaVolume > 0)
-            {
-                PlasmaVolume -= deltaTime * _fluidPrefab.Density;
-                LiquidVolume += deltaTime * _fluidPrefab.Density;
-            }
+            double totalHeatCapacity = Hull.CalculateTotalHeatCapacity();
+            double temperatureBelowBoiling = dynamicBoilingPoint - Temperature;
+            double energyNeeded = totalHeatCapacity * temperatureBelowBoiling;
+
+            double molesCondensable = energyNeeded / latentHeat;
+            double molesCondensed = Math.Min(GasMoles, molesCondensable);
+
+            GasMoles -= molesCondensed;
+            LiquidMoles += molesCondensed;
+
+            double heatReleased = molesCondensed * latentHeat;
+            Hull.ThermalEnergy += heatReleased;
+
+            _lastNetPhaseChangeRate = -molesCondensed / deltaTime;
         }
-        else if (Temperature > _fluidPrefab.BoilingPoint && Temperature < PlasmaTemperature)
-        {
-            if (LiquidVolume > 0)
-            {
-                LiquidVolume -= deltaTime * _fluidPrefab.Density;
-                GasVolume += deltaTime * _fluidPrefab.Density;
-                Temperature = _fluidPrefab.BoilingPoint;
-            }
-            if (PlasmaVolume > 0)
-            {
-                PlasmaVolume -= deltaTime * _fluidPrefab.Density;
-                GasVolume += deltaTime * _fluidPrefab.Density;
-            }
-        }
-        else if (Temperature > PlasmaTemperature)
-        {
-            if (LiquidVolume > 0)
-            {
-                LiquidVolume -= deltaTime * _fluidPrefab.Density;
-                PlasmaVolume += deltaTime * _fluidPrefab.Density;
-                Temperature = PlasmaTemperature;
-            }
-            if (GasVolume > 0)
-            {
-                GasVolume -= deltaTime * _fluidPrefab.Density;
-                PlasmaVolume += deltaTime * _fluidPrefab.Density;
-                Temperature = PlasmaTemperature;
-            }
-        }
+
+        // --- Freezing logic placeholder (no melting yet)
+        // if (Temperature < dynamicMeltingPoint && LiquidMoles > 0.0)
+        // {
+        //     // Future implementation here
+        // }
     }
+
+    public FluidVolume(Hull hull, FluidPrefab fluidPrefab, float moles, float gasPercentage = 100)
+    {
+        FluidPrefab = fluidPrefab;
+        
+        GasMoles = moles * gasPercentage / 100;
+        LiquidMoles = moles - GasMoles;
+        Hull = hull;
+    }
+    
 }
 
-internal class Solid : Decal
-{
-    public float Temperature;
-    public float Mass;
-    private readonly FluidVolume _fluidVolume;
-    private readonly FluidPrefab _fluidPrefab;
-    
-    private const float HeatTransferRate = 0.1f;
-    
-    public Solid(FluidVolume fluidVolume, FluidPrefab fluidPrefab, float mass, DecalPrefab prefab, float scale, Vector2 worldPosition, Hull hull, int? spriteIndex = null) : base(prefab, scale, worldPosition, hull, spriteIndex)
-    {
-        Temperature = fluidPrefab.MeltingPoint - 1f;
-        Mass = mass;
-        _fluidVolume = fluidVolume;
-        _fluidPrefab = fluidPrefab;
-    }
-    
-    public override void Update(float deltaTime)
-    {
-        Temperature += (_fluidVolume.Temperature - Temperature) * HeatTransferRate * _fluidPrefab.Density * deltaTime;
-        // ReSharper disable once InvertIf
-        if (Temperature > _fluidPrefab.MeltingPoint)
-        {  
-            var meltRate = deltaTime * _fluidPrefab.Density * (Temperature - _fluidPrefab.MeltingPoint); //melt rate is proportional to temperature difference
-            Mass -= meltRate;
-            if (Temperature > FluidVolume.PlasmaTemperature)
-            {  
-                _fluidVolume.PlasmaVolume += meltRate;
-            }
-            if (Temperature > _fluidPrefab.BoilingPoint) //sublimation
-            {
-                _fluidVolume.GasVolume += meltRate;
-            }
-            else
-            {
-                _fluidVolume.LiquidVolume += meltRate;
-            }
-        }
-    }
-}
+// internal class Solid : Decal
+// {
+//     public float Temperature;
+//     public float Mass;
+//     private readonly FluidPrefab _fluidPrefab;
+//     
+//     private const float HeatTransferRate = 0.1f;
+//     
+//     public Solid(FluidPrefab fluidPrefab, float mass, DecalPrefab prefab, float scale, Vector2 worldPosition, Hull hull, int? spriteIndex = null) : base(prefab, scale, worldPosition, hull, spriteIndex)
+//     { }
+//     
+//     public override void Update(float deltaTime)
+//     { }
+// }

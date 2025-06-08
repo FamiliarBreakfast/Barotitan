@@ -2741,6 +2741,166 @@ namespace Barotrauma
                 }
             );
 
+            void listFluids(Hull hull)
+            {
+                NewMessage($"Current Hull: {hull.ID.ToString()}, " +
+                           $"Hull Volume: {hull.Volume}, " +
+                           $"Hull Pressure: {hull.Pressure}, " +
+                           $"Hull Energy: {hull.ThermalEnergy}, " +
+                           $"Hull Temperature: {hull.Temperature}", Color.Yellow);
+                foreach (FluidVolume volume in hull.FluidVolumes) printFluidData(volume, hull);
+            }
+
+            void printFluidData(FluidVolume volume, Hull hull)
+            {
+                Color color = volume.FluidPrefab.Identifier == "oxygen" ? Color.Blue : Color.White;
+                NewMessage($"{volume.FluidPrefab.Name}({volume.FluidPrefab.Identifier})" +
+                           $"LiquidMoles: {volume.LiquidMoles}, " +
+                           $"GasMoles: {volume.GasMoles}, " +
+                           $"BoilingPoint: {volume.FluidPrefab.CalculateBoilingPointAtPressure(hull.Pressure)}, " +
+                           $"MeltingPoint: {volume.FluidPrefab.CalculateMeltingPointAtPressure(hull.Pressure)}, " +
+                           $"BoilingRate: {volume._lastNetPhaseChangeRate}",
+                    color);
+            }
+
+            commands.Add(new Command("fluids", "list create", (string[] args) =>
+            {
+                if (args.Length == 0)
+                {
+                    NewMessage("Missing arguments. Expected at least 1 but got 0 (list)", Color.Red);
+                    return;
+                }
+
+                if (args[0].Equals("list", StringComparison.OrdinalIgnoreCase))
+                {
+                    foreach (Hull hull in Hull.HullList)
+                    {
+                        listFluids(hull);
+                    }
+                }
+                else if (args[0].Equals("add", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (args.Length < 3)
+                    {
+                        NewMessage("Missing arguments. Expected 2 (fluid, amount)", Color.Red);
+                        return;
+                    }
+
+                    foreach (Hull hull in Hull.HullList)
+                    {
+                        foreach (FluidVolume volume in hull.FluidVolumes)
+                        {
+                            if (volume.FluidPrefab.Identifier == args[1])
+                            {
+                                if (float.TryParse(args[2], out float amount))
+                                {
+                                    hull.AddFluid(volume, amount, 293);
+                                    NewMessage($"Added {amount} moles of {volume.FluidPrefab.Name} to all hulls.",
+                                        Color.White);
+                                }
+                                else
+                                {
+                                    NewMessage($"{args[2]} is not a valid amount.", Color.Red);
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }));
+
+            AssignOnClientRequestExecute(
+                "fluids",
+                (senderClient, cursorWorldPos, args) =>
+            {
+                if (args.Length == 0)
+                {
+                    NewMessage("Missing arguments. Expected at least 1 but got 0 (list, add)", Color.Red);
+                    return;
+                }
+                if (args[0].Equals("list", StringComparison.OrdinalIgnoreCase))
+                {
+                        Hull hull = senderClient.Character.CurrentHull;
+                        listFluids(hull);
+                }
+                else if (args[0].Equals("add", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (args.Length < 2)
+                    {
+                        NewMessage("Missing arguments. Expected 2 (fluid, amount)", Color.Red);
+                        return;
+                    }
+
+                    foreach (FluidVolume volume in senderClient.Character.CurrentHull.FluidVolumes)
+                    {
+                        if (volume.FluidPrefab.Identifier == args[1])
+                        {
+                            if (float.TryParse(args[2], out float amount))
+                            {
+                                senderClient.Character.CurrentHull.AddFluid(volume, amount, 293);
+                                NewMessage($"Added {amount} moles of {volume.FluidPrefab.Name} to the hull.", Color.White);
+                            }
+                            else
+                            {
+                                NewMessage($"{args[2]} is not a valid amount.", Color.Red);
+                                return;
+                            }
+                        }
+                    }
+                }
+            });
+            
+            commands.Add(new Command("temperature", "", (string[] args) =>
+            {
+                if (args.Length == 0)
+                {
+                    foreach (Hull hull in Hull.HullList)
+                    {
+                        NewMessage($"Temperature: {hull.Temperature}", Color.Yellow);
+                    }
+                }
+                else if (args.Length == 1)
+                {
+                    if (float.TryParse(args[0], out float temperature))
+                    {
+                        foreach (Hull hull in Hull.HullList)
+                        {
+                            hull.Temperature = temperature;
+                        }
+                        NewMessage($"Set thermal energy to {temperature}", Color.White);
+                    }
+                    else
+                    {
+                        NewMessage($"{args[0]} is not a valid temperature.", Color.Red);
+                    }
+                }
+            }));
+            
+            AssignOnClientRequestExecute(
+                "temperature",
+                (senderClient, cursorWorldPos, args) =>
+                {
+                    if (args.Length == 0)
+                    {
+                        Hull hull = senderClient.Character.CurrentHull;
+                        NewMessage($"Temperature: {hull.Temperature}", Color.Yellow);
+                    }
+                    else if (args.Length == 1)
+                    {
+                        if (float.TryParse(args[0], out float temperature))
+                        {
+                            Hull hull = senderClient.Character.CurrentHull;
+                            hull.Temperature = temperature;
+                            NewMessage($"Set thermal energy to {temperature}", Color.White);
+                        }
+                        else
+                        {
+                            NewMessage($"{args[0]} is not a valid temperature.", Color.Red);
+                        }
+                    }
+                }
+            );
+
 #if DEBUG
             commands.Add(new Command("spamevents", "A debug command that creates a ton of entity events.", (string[] args) =>
             {
