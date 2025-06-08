@@ -388,18 +388,18 @@ namespace Barotrauma
             //get { return pressure; }
             get
             {
-                // double molarVolumeLiquid = 2.8e-5; // m³/mol for liquid O2
-                //
-                // double liquidVolume = oxygenVolume.LiquidMoles * molarVolumeLiquid;
-                // double effectiveGasVolume = Volume - liquidVolume;
-                //
-                // if (effectiveGasVolume <= 0.0 || oxygenVolume.GasMoles <= 0.0)
-                // {
-                //     return (float)0.0; // no gas or no space for it → no pressure
-                // }
-                //
-                // return (float)(FluidPrefab.StandardPressure * (oxygenVolume.GasMoles / effectiveGasVolume));
-                return 100000;
+                double molarVolumeLiquid = 2.8e-5; // m³/mol for liquid O2
+                
+                double liquidVolume = oxygenVolume.LiquidMoles * molarVolumeLiquid;
+                double effectiveGasVolume = Volume - liquidVolume;
+                
+                if (effectiveGasVolume <= 0.0 || oxygenVolume.GasMoles <= 0.0)
+                {
+                    return (float)0.0; // no gas or no space for it → no pressure
+                }
+                
+                return (float)(FluidPrefab.StandardPressure * (oxygenVolume.GasMoles / effectiveGasVolume));
+                //return 100000;
             }
             set { //pressure = value;
                   }

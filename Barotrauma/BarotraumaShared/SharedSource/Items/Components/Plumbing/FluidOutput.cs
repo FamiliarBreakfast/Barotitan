@@ -1,6 +1,6 @@
 ﻿namespace Barotrauma.Items.Components;
 
-public class Plumbed
+public class FluidOutput
 {
     
 }

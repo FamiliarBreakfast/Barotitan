@@ -26,7 +26,7 @@ namespace Barotrauma.Items.Components
             //todo: dont overpressure hull
             //todo longterm: oxygengen outputs a fixed pressure naturally fixing the issue
             //item.CurrentHull.Oxygen += oxygenFlow * deltaTime;
-            item.CurrentHull.AddFluid(item.CurrentHull.oxygenVolume, oxygenFlow, 293);
+            item.CurrentHull.AddFluid(item.CurrentHull.oxygenVolume, oxygenFlow/1000, 293);
             OxygenFlow -= deltaTime * 1000.0f;
         }
     }
