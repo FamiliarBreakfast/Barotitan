@@ -2426,7 +2426,8 @@ namespace Barotrauma.Networking
                 settingsBytes = outmsg.LengthBytes - settingsBytes;
 
                 int campaignBytes = outmsg.LengthBytes;
-                if (outmsg.LengthBytes < MsgConstants.MTU - 500 &&
+                bool hasSpaceForCampaignData = outmsg.LengthBytes < MsgConstants.MTU - 500;
+                if (hasSpaceForCampaignData &&
                     GameMain.GameSession?.GameMode is MultiPlayerCampaign campaign && campaign.Preset == GameMain.NetLobbyScreen.SelectedMode)
                 {
                     outmsg.WriteBoolean(true);
@@ -2437,6 +2438,10 @@ namespace Barotrauma.Networking
                 {
                     outmsg.WriteBoolean(false);
                     outmsg.WritePadBits();
+                    if (!hasSpaceForCampaignData)
+                    {
+                        DebugConsole.Log($"Not enough space to fit campaign data in the lobby update (length {outmsg.LengthBytes} bytes), omitting...");
+                    }
                 }
                 campaignBytes = outmsg.LengthBytes - campaignBytes;
 
@@ -2446,6 +2451,10 @@ namespace Barotrauma.Networking
                 if (outmsg.LengthBytes < MsgConstants.MTU - 500)
                 {
                     WriteClientList(segmentTable, c, outmsg);
+                }
+                else
+                {
+                    DebugConsole.Log($"Not enough space to fit client list in the lobby update (length {outmsg.LengthBytes} bytes), omitting...");
                 }
                 clientListBytes = outmsg.LengthBytes - clientListBytes;
 
@@ -4270,6 +4279,9 @@ namespace Barotrauma.Networking
         public void GiveAchievement(Client client, Identifier achievementIdentifier)
         {
             if (client.GivenAchievements.Contains(achievementIdentifier)) { return; }
+
+            DebugConsole.NewMessage($"Attempting to give the achievement {achievementIdentifier} to {client.Name}...");
+
             client.GivenAchievements.Add(achievementIdentifier);
 
             IWriteMessage msg = new WriteOnlyMessage();
@@ -4277,6 +4289,17 @@ namespace Barotrauma.Networking
             msg.WriteIdentifier(achievementIdentifier);
 
             serverPeer.Send(msg, client.Connection, DeliveryMethod.Reliable);
+        }
+
+        public void UnlockRecipe(Identifier identifier)
+        {
+            foreach (var client in connectedClients)
+            {
+                IWriteMessage msg = new WriteOnlyMessage();
+                msg.WriteByte((byte)ServerPacketHeader.UNLOCKRECIPE);
+                msg.WriteIdentifier(identifier);
+                serverPeer.Send(msg, client.Connection, DeliveryMethod.Reliable);
+            }
         }
 
         public void IncrementStat(Client client, AchievementStat stat, int amount)

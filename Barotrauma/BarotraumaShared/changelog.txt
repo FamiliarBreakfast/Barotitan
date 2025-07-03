@@ -1,5 +1,177 @@
 ﻿-------------------------------------------------------------------------------------------------------------------------------------------------
-v1.8.6.2
+v1.9.8.0
+-------------------------------------------------------------------------------------------------------------------------------------------------
+
+- Fixed RegEx components occasionally timing out for no apparent reason (even if the expression isn't particularly performance-intensive). Seemed to have been caused by RegEx changes in .NET 8.
+- Fixed the game sometimes freezing for a long time at a specific point during the loading screen. Only affected some players: the issue had to do with the game failing to connect to a server to check whether the player has given their consent collect gameplay analytics.
+- Fixed streamed sounds always starting from the beginning when they're re-played. Particularly noticeable in the night club modules, when the music always starts from the beginning if you step outside the range of the sounds. 
+- Fixed distance attenuation and positioning not working on the music played by jukeboxes and bar speakers (meaning they'd play at full volume regardless of your distance to the speakers).
+
+Modding:
+- Fixed oneshot delayed effects (which should only ever trigger once) still continuing to run some of the logic after the first trigger, causing an unnecessary performance hit. Did not seem to affect any vanilla items.
+
+-------------------------------------------------------------------------------------------------------------------------------------------------
+v1.9.7.0
+-------------------------------------------------------------------------------------------------------------------------------------------------
+
+Multiplayer:
+- Fixed anyone being allowed to modify turrets and the sub's upgrades. Now it requires campaign management permissions.
+
+Modding:
+- Fixed only the first OnInserted effect defined for an item being executed when the item is placed in a container.
+- Fixed conditional's TargetSelf property not working on melee weapons.
+
+-------------------------------------------------------------------------------------------------------------------------------------------------
+v1.9.6.0 (Summer Update 2025)
+-------------------------------------------------------------------------------------------------------------------------------------------------
+
+Changes and additions:
+- Added Power Distributor item. Includes 8 power outputs and sliders that can be used to control how much of the input power is distributed to each output. Can be used to, for example, build a circuit that redirects power from less vital systems to weapons or pumps in an emergency.
+- Added Rifle Scope.
+- Better Steam Timeline support: when recording gameplay using Steam, the game adds markers about notable events in the game.
+- Added scaling and rotation tools to the submarine editor. Enabled using buttons in the top-right corner of the editor.
+- Characters don't throw flares when also holding a ranged weapon (allows shooting with a flare in hand).
+- Improvements to pets (kudos to uberpendragon): improved ragdolls and animations, gave them head slots so they can wear hats, added damage modifiers to shells.
+- Mindwipe resets the extra talents gained via the assistant's Apprentice talent tree, preventing the use of Mindwipes as a way to make an assistant unlock the specialization trees of all classes.
+- Alien Blood is now less powerful, by curing less "Bloodloss" affliction and causing more psychosis. It is widely available and made saline and blood packs pretty redundant. It now also requires more medical skill.
+- Added option to filter by name and to change the sorting of the save files listed in the "load game" menu.
+- Made circuit boxes' external connections (the once that hook up to other items) use the same labels that have been set inside the circuit box.
+- Made the freecam console command a toggle: entering it again gives you back control of the character.
+- Added "loslightingfreecam" console command (convenient for testing, executes those 3 commands).
+- Upgraded to .NET 8. This should not cause any noticeable changes, aside from perhaps very minor performance improvements. Allows code mods to use C# 12 features.
+
+Multiplayer:
+- Fixed sending rapid reports of leaks, fires, enemies etc easily causing the spam filter to kick players with no warning. 
+- Added buttons for selecting or deselecting all mission types to the server lobby's mission type selection.
+- Fixed wall damage desyncing if you purchase wall repairs in an outpost, undock and then save and reload (the walls would appear repaired client-side, even though they're actually broken server-side).
+- Fixed the "nudge buttons" that appear next to the nav terminal's docking button not working in multiplayer.
+- Fixed oxygen and fuel tank explosions not appearing client-side in multiplayer, making it seem like you're taking burn damage out of nowhere when you happened to be near one an "infinite explosion loop" (described below in the fixes section).
+- Fixed players only getting a karma penalty for overheating the reactor if they stay at the reactor.
+- Fixed another networking issue that sometimes caused the biome and outpost selection dropdowns to break in the server lobby, causing the clients to constantly spam the server with requests to change the biome/outpost.
+
+Optimization:
+- Optimized memory usage of text files. Now only the text files for the language you have currently selected are kept in memory.
+- Optimized the memory usage of submarine files. Previously the XML of all the enabled submarines was kept in memory, causing excessive memory usage when you have a ton of custom submarines installed.
+
+Fixes:
+- Fixed oxygen tank shelves sometimes causing "infinite explosion loops", when tanks in the shelves exploded other tanks while the shelves were filling the tanks.
+- Fixed camera not following your character when ragdolled/unconscious.
+- Fixed "unsubscribe" option not showing up on the mod list on mods that have pending updates. 
+- Fixed NPCs spawned by events sometimes spawning inside jail cells in outposts.
+- Fixed clowns never turning psychotic in the clown escort missions (there should be a small chance of that happening as the mission progresses).
+- Fixed talent progress not being mentioned in the tooltip on "extra talents" (talents unlocked from outside the tree).
+- Fixed salt bulbs exploding immediately in water (as opposed to having a small delay like other water-reactant items).
+- Fixed hair and other attachment sprites still being misaligned in some UIs (character creation menu and outpost medic UI) if their origin doesn't match the head's origin.
+- Fixes to several outpost and ruin generation issues:
+    - Pre-built "fallback outposts" sometimes spawning instead of a proper outpost, and sometimes even instead of a ruin.
+    - PvP outposts still sometimes generating outside the PvP mode (particularly when using mods with new location/outpost types).
+- Fixed some consumables (e.g. energy drinks, beer, protein bars) getting consumed immediately if you hit E while drinking/eating.
+- Fixed lights rendering upside-down on planters that have been flipped horizontally.
+- Fixed inability to sit while using a surveillance center.
+- Fixed option to give an item to another character showing up when you drag a large item (an item that won't go in the inventory slots) over someone, even though these items can't be given by dragging and dropping.
+- Fixed ability to give characters multi-line names, which would break some UI elements.
+- Fixed spawncharacter console command spawning monsters in the player team if the team argument is not given.
+- Fixed R-29's bottom wall not leaking. Might've affected other submarines as well: there was a bug in the logic that prevents overlapping walls leaking faster than individual walls, which caused the game to sometimes interpret large gaps next to the wall as "overlapping walls".
+- Fixed fabricator no longer communicating in any way when an item can't be fabricated because it requires a recipe.
+- Fixed inability to focus on unconscious characters by clicking on the crew list.
+- Fixed parts of the Jove sculptures found in ruins being misaligned in mirrored levels (= when travelling through the level backwards).
+- Fixed the Multi-tool not functioning as a screwdriver for event checks.
+- Fixed "fake fires" you see when under psychosis sometimes turning into real fires in single player.
+- Fixed PvP mode weapon crates showing up in the sub editor.
+- Fixed undoing the removal of an item from a container sometimes causing a crash in the sub editor.
+- Fixed hulls extending below the floor in Kastrull's drone and the lowest deck, preventing them from draining fully.
+- Fixed endworm's jaws sometimes doing AOE damage to characters after the endworm has died.
+- Fixed rotated structures not appearing rotated on the sonar.
+- Fixed talent refund points getting lost on save and reload.
+- Fixed multi-part subs (subs consisting of multiple docked subs with other subs ducked to them) getting flipped incorrectly in PvP mode. 
+- Fixed "teleportsub endoutpost" crashing the game when a level is not loaded (e.g. in the sub editor's test mode).
+- Fixed selected outpost module sometimes not loading in the sub editor's test mode, and a random outpost generating instead.
+- Fixed pre-built "fallback outposts" failing to load in the sub editor (generating a full outpost instead).
+- Fixed ability to put items in locked containers (e.g. running deconstructors) by hitting the drop key.
+- Fixed wearing "mother's providence" and "mother's countenance" (special clown suits worn by the Jestmasters) not unlocking the "Praise the Honkmother" achievement.
+- Fixed "secondary explosion" 2 seconds after a gravity shell has exploded and disappeared. 
+- Yet another fix to contained items rendering incorrectly on flipped items: affected contained items that are set to draw at an angle of 90 degrees relative to the container (e.g. fuel rod in a rapid fissile accelerator), causing them to draw backwards.
+- Hid PvP weapon crates in the sub editor (because these require the PvP event and do nothing by themselves when placed in the editor).
+- Fixed inability to make motion sensors react to non-humans that are in the "human" group (e.g. some custom android type of character) - they were not considered either humans, pets or monsters. Now characters in the human group are treated as humans, except if they're pets (in that case the sensor only triggers if set to trigger on pets).
+- Fixed "firing blanks" traitor event requiring you to replace standard coilgun ammo boxes with fake ones, instead of accepting any type of coilgun ammo.
+- Fixed PvP variants of underwater scooters sometimes spawning in cabinets in the campaign.
+
+Modding:
+- Better support for configuring custom location types and configuring where they appear. Examples in the locationTypes.xml file.
+    - You can spawn a fixed number of a location type on the map (e.g. to have unique named locations).
+    - More control where specific location types spawn (e.g. near the beginning of a biome).
+    - Location types can be configured to "inherit" things such as event or outpost modules from another location type.
+- Escort mission fixes and improvements:
+    - Fixed ""terroristAnnounceDialogTag" being completely ignored, making the terrorists always say the default separatist lines regardless of what's configured in XML.
+    - Added support for spawning multiple items for the terrorist, or optionally choosing random ones using a "ChooseRandom" element. Previously only one random item was chosen.
+    - Added some documentation for the mission type.
+- Added support for making an item variant clear all elements of a certain type from the XML. Done by adding the element <ClearAll> to the item variant, and then defining the elements to clear as it's child elements (e.g. <Fabricate /> would clear all fabrication recipes).
+- Support for streaming any audio clip instead of loading them into memory (previously streaming was only supported for background music). Enabled by adding stream="true" to the sound element. Recommended for longer audio clips (such as music tracks played by items). Please note though that streaming audio comes with some CPU and IO overhead, so it's not recommended to blindly enable it on everything.
+- Fixed specific kinds of looping sounds sometimes not playing in multiplayer (specifically, long sounds that are triggered right at the start of the round by a status effect, but not in the player's hearing range, e.g. rave music in Dynamic Europa's pirate outposts).
+- Fixed NPCs made to hold an item using NPCOperateItemAction repeatedly equipping and unequipping it.
+- Fixed delayed effects executing at the position where the entity was when the effect was triggered, not where the entity is when the delay passes.
+- Fixed salvage missions causing a crash and the "interact" target type not working if the target item has no physics body.
+﻿- Fixed performance issue caused by <RequiredItem> element when using an invalid item identifier.
+- Fixed colored text not working in the options in conversation prompts.
+- Added CameraAimOffset property to Holdable component. Allows modifying how far the camera can be offset when aiming, making it possible to implement e.g. scopes.
+- Added AbandonOnReset property to CombatAction and NPCWaitAction.
+- Fixed some issues with PvP outpost selection that made it difficult to implement custom maps:
+    - If a mission was set to use a PvP outpost with some custom tag, the game might still not use it, because it chose the PvP level generation parameters, which would enforce an outpost with the vanilla "PvPOutpost" tag. Now the game tries to choose an outpost with the specified tag regardless of the level generation parameters.
+    - When "random" was selected on the outpost dropdown, the game would choose any random outpost without taking the selected mission into account.
+- Fixed sounds configured to loop while an item is worn not stopping when the item is unequipped. Did not affect any vanilla items.
+- Option to force a specific type of location as the campaign's start location by adding ForceAsStartOutpost="true" to the location type config. Ignored when the tutorial is enabled.
+- Option to disallow attaching items over specific kinds of other items (e.g. DisallowAttachingOverTags="container,wallattachment").
+- Fixed inability to make motion sensors react to non-humans that are in the "human" group (e.g. some custom android type of character) - they were not considered either humans, pets or monsters. Now characters in the human group are treated as humans, except if they're pets (in that case the sensor only triggers if set to trigger on pets).
+- Fixed OnInserted status effects triggering when loading a submarine/container which already contains items. Now the effects only trigger when the item is placed in the container.
+- Fixed ability to equip/unequip noninteractable items using the "quick use" button above the slot. Only affects modded content (non-interactable items that are forced into a player inventory).
+- Fixed Items' HasBeenInstantiatedOnce property not being saved, making it basically unusable.
+- Fabrication recipes can be unlocked using StatusEffects (e.g. unlockrecipe="autoinjectorheadset").
+- Fixed SpawnRotationType.This not doing anything if the item executing the effect doesn't have a physics body, or if it's attached to a wall (which makes the item "temporarily" not have a body).
+- Hidden missions (ShowInMenus="false") don't show up on the campaign map nor the mission selection panel. In the vanilla game, all hidden mission were triggered when the round starts so they wouldn't be visible there anyway, but that may not be the case with modded missions.
+- Added CauseOfDeathType property to Character. Not used by the vanilla game, but can be used by mods to check the cause of death of the character using conditionals (e.g. if some OnDeath effects should or should not be triggered by certain causes of death).
+- Support for animated affliction overlays (works the same as the animated HUD overlays on items such as the surveillance cameras).
+- More options for configuring how Holdable items can be attached to the sub: AttachesToFloor (when enabled, the item can only be attached to a position where it touches the floor), AllowAttachInsideDoors (enabled by default), DisallowAttachingOverTags (tags of items the item cannot attach over).
+
+-------------------------------------------------------------------------------------------------------------------------------------------------
+v1.8.8.1
+-------------------------------------------------------------------------------------------------------------------------------------------------
+
+- Fixed client list often appearing empty in the server lobby when joining mid-round while a campaign was active.
+- Fixed job variant selection panel rendering below the job selection panel, often making it unusable.
+- Fixed job variant selection only working in the server lobby, not in the tab menu mid-round.
+- Fixed inability to preview loadouts if there's only one variant of a job available (e.g. assistants).
+- Fixed fires no longer spreading from room to room.
+- Fixed a pathfinding issue that sometimes caused both to get stuck running back and forth towards the target they're trying to reach (one common place where this occurred was Barsuk's engine room).
+- Fixed non-hitscan projectiles such as harpoons launching with an incorrect rotation when fired to the left.
+- Fixed Herja not having any assistant or non-job-specific spawnpoints, causing assistants and custom classes to spawn at other classes' spawnpoints, potentially giving them ID card tags they shouldn't have.
+- Autoinjectors no longer inject meds on dead characters (even though they are technically below the health threshold at which the autoinjection should trigger).
+- Fixed team argument not working on the "spawncharacter" console command when spawning non-humans.
+- Fixed some edge chunk objects in hydrothermal wastes and the great sea spawning in front of the level walls.
+- Fixed missing gap in one of the new crew modules, which prevented water and oxygen from flowing through the module properly.
+
+Modding:
+- Fixed transferring afflictions to a newly spawned character using status effects causing a crash if the original character had already been removed. Didn't affect any vanilla content.
+>>>>>>> master
+
+-------------------------------------------------------------------------------------------------------------------------------------------------
+v1.8.7.0
+-------------------------------------------------------------------------------------------------------------------------------------------------
+
+- Fixed an AI bug that made bots scared of water, making them seek safety from flooded rooms even when they were wearing diving suits.
+- Fixed non-hitscan projectiles registering hits with characters that are behind the weapon, even if the barrel is in front of the character.
+- Fixed submarine maintaining an incorrect position (= starting to steer somewhere completely off) when you enable "maintain position" and then enter a new level.
+- Fixed autopilot failing to navigate to a destination if it's already on at the start of the round.
+- Fixed dedicated server descriptions still sometimes getting truncated.
+- Fixed lights shining out from items inside character inventories.
+- Fixed inability to access the inventories of other players when they're manually ragdolling.
+- Fixed "firing blanks" traitor event requiring you to replace standard coilgun ammo boxes with fake ones, instead of accepting any type of coilgun ammo.
+- Fixed switches flipping around when you attach them while facing left.
+- Fixed grenade "cooking" hint not showing the correct keybinding (just saying [usekey] instead of the actual keybinding).
+- Fixed main menu notifications (changelog, unstable info) staying open if you don't manually close them and e.g. start a new game or go to the sub editor.
+- Fixed normal outpost events triggering in outpost that have been abandoned because of Jovian Radiation.
+
+-------------------------------------------------------------------------------------------------------------------------------------------------
+v1.8.6.2 (Calm Before the Storm)
 -------------------------------------------------------------------------------------------------------------------------------------------------
 
 - Fixed some icons still scaling incorrectly (e.g. location icons on the campaign map, device icons on the status monitor).
@@ -419,7 +591,7 @@ Modding:
 - Fixed outpost generation parameters that reference non-existent NPC prefabs causing a crash during outpost generation.
 
 -------------------------------------------------------------------------------------------------------------------------------------------------
-v1.6.17.0
+v1.6.17.0 (Unto the Breach)
 -------------------------------------------------------------------------------------------------------------------------------------------------
 
 - Fixed water currents stopping subs entirely (regardless of the size of the sub or the current).
@@ -926,7 +1098,7 @@ v1.4.5.0
 - Fixed combat diving suit being slower than intended when using an underwater scooter.
 
 -------------------------------------------------------------------------------------------------------------------------------------------------
-v1.4.4.1
+v1.4.4.1 (Blood in the Water)
 -------------------------------------------------------------------------------------------------------------------------------------------------
 
 - Fixed welding objective completing automatically in the basic tutorial due to the reduced flooding rates.
@@ -1385,7 +1557,7 @@ v1.1.18.1
 - Fixed opening the "load game" menu crashing the game if you have any corrupted/unloadable saves in the save folder. In multiplayer, this would just prevent opening the campaign setup menu without any error messages.
 
 -------------------------------------------------------------------------------------------------------------------------------------------------
-v1.1.18.0
+v1.1.18.0 (Treacherous Tides)
 -------------------------------------------------------------------------------------------------------------------------------------------------
 
 - Updated translations.
@@ -2087,7 +2259,7 @@ v1.0.8.0
 - Fixed healing your crewmates causing your karma to decrease.
 
 ---------------------------------------------------------------------------------------------------------
-v1.0.7.0
+v1.0.7.0 
 ---------------------------------------------------------------------------------------------------------
 
 - Fixed mechanic tutorial getting stuck at the point where you need to weld a leak.
@@ -2170,7 +2342,7 @@ v1.0.1.0
 - Fixed ready checks not working.
 
 ---------------------------------------------------------------------------------------------------------
-v1.0.0.0
+v1.0.0.0 (Full Release)
 ---------------------------------------------------------------------------------------------------------
 
 Faction overhaul:
@@ -2310,7 +2482,6 @@ v0.21.6.0
 
 - Minor localization fixes.
 - Fixed some occasional crashes in the character editor.
-
 
 ---------------------------------------------------------------------------------------------------------
 v0.21.5.0
@@ -2798,7 +2969,7 @@ v0.19.8.0
 - Fixed "completed initialization before receiving content package order" error when trying to reconnect to a SteamP2P server.
 
 ---------------------------------------------------------------------------------------------------------
-v0.19.7.0
+v0.19.7.0 (Hoist the Sails)
 ---------------------------------------------------------------------------------------------------------
 
 Changes and additions: 
@@ -3179,7 +3350,7 @@ v0.18.9.0
 - Backwards compatibility: readded some mission events we'd removed since the previous update.
 
 ---------------------------------------------------------------------------------------------------------
-v0.18.8.0
+v0.18.8.0 (3rd Anniversary Update)
 ---------------------------------------------------------------------------------------------------------
 
 Balancing:
@@ -3469,7 +3640,7 @@ Fixes:
 - Fixed occasional mission mismatch errors in multiplayer when there's a hunting grounds or beacon mission in the level.
 
 ---------------------------------------------------------------------------------------------------------
-v0.17.10.0
+v0.17.10.0 (Urban Expanses)
 ---------------------------------------------------------------------------------------------------------
 
 Changes and additions:
@@ -3713,7 +3884,7 @@ v0.16.6.1
 - Fixed some of Spineling's spikes getting hidden for 30 seconds instead of 15.
 
 ---------------------------------------------------------------------------------------------------------
-v0.16.6.0
+v0.16.6.0 (Rising Tide)
 ---------------------------------------------------------------------------------------------------------
 
 Changes and additions:
@@ -4363,7 +4534,7 @@ v0.15.10.0
 - Fixed harpoon rope sometimes being drawn when it's already snapped.
 
 ---------------------------------------------------------------------------------------------------------
-v0.15.9.0
+v0.15.9.0 (Among the Ancients)
 ---------------------------------------------------------------------------------------------------------
 
 Alien ruin overhaul:
@@ -4695,7 +4866,7 @@ Modding:
 - Fixed crashing when trying to create a thalamus when there's no wreck AI configs available in the selected content packages.
 
 ---------------------------------------------------------------------------------------------------------
-v0.14.4.0
+v0.14.4.0 (Thunder Under the Ice)
 ---------------------------------------------------------------------------------------------------------
 
 Changes:
@@ -4885,7 +5056,7 @@ Modding:
 - Fixed crashing if a mod's version number is incorrectly formatted in filelist.xml.
 
 ---------------------------------------------------------------------------------------------------------
-v0.13.0.11
+v0.13.0.11 (Embrace the Abyss)
 ---------------------------------------------------------------------------------------------------------
 
 Campaign changes:
@@ -5174,7 +5345,7 @@ v0.12.0.1
 - Fixed ancient weapon being sometimes unable to damage ruin walls.
 
 ---------------------------------------------------------------------------------------------------------
-v0.12.0.0
+v0.12.0.0 (Cave Update)
 ---------------------------------------------------------------------------------------------------------
 
 Cave improvements:
@@ -5440,7 +5611,7 @@ v0.11.0.8
 - Fixed dancing coilguns.
 
 ---------------------------------------------------------------------------------------------------------
-v0.11.0.7
+v0.11.0.7 (Uncharted Depths)
 ---------------------------------------------------------------------------------------------------------
 
 Environment overhaul:
@@ -5648,7 +5819,7 @@ v0.10.6.1
 - Test changing the assignment logic for maintenance/operate orders: if the player doesn't specify the target character, use the bot who already is following the same order. The intention is to make it easier to change the target item of the order. The draw back is that ordering multiple bots to man the turrets now requires an extra step: specify the target character.
 
 ---------------------------------------------------------------------------------------------------------
-v0.10.6.0
+v0.10.6.0 (Halloween 2020: Creepy Creature Feature)
 ---------------------------------------------------------------------------------------------------------
 
 Changes and additions:
@@ -6140,7 +6311,7 @@ v0.10.1.0
 - Fixed initial campaign cinematic being shown to clients who join mid-campaign.
 
 ---------------------------------------------------------------------------------------------------------
-v0.10.0.0
+v0.10.0.0 (New Frontiers)
 ---------------------------------------------------------------------------------------------------------
 
 Improved campaign mode:
@@ -6209,7 +6380,7 @@ Bugfixes:
 - Fixed a bug where a waypoint lost all the references when it was selected and the user pressed over an UI element, like the save button.
 
 ---------------------------------------------------------------------------------------------------------
-v0.9.10.0
+v0.9.10.0 (Moloch-sized Update)
 ---------------------------------------------------------------------------------------------------------
 
 Additions and changes:

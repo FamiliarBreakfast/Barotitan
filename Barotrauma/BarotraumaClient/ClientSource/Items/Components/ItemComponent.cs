@@ -236,7 +236,11 @@ namespace Barotrauma.Items.Components
 
         public ItemComponent GetReplacementOrThis()
         {
-            return ReplacedBy?.GetReplacementOrThis() ?? this;
+            if (ReplacedBy != null && ReplacedBy != this)
+            {
+                return ReplacedBy.GetReplacementOrThis();
+            }
+            return this;
         }
 
         public bool NeedsSoundUpdate()
@@ -261,6 +265,7 @@ namespace Barotrauma.Items.Components
                 float gainDiff = targetGain - loopingSoundChannel.Gain;
                 loopingSoundChannel.Gain += Math.Abs(gainDiff) < 0.1f ? gainDiff : Math.Sign(gainDiff) * 0.1f;
                 loopingSoundChannel.Position = new Vector3(item.WorldPosition, 0.0f);
+                loopingSound.RoundSound.LastStreamSeekPos = loopingSoundChannel.StreamSeekPos;
             }
             for (int i = 0; i < playingOneshotSoundChannels.Count; i++)
             {
@@ -405,6 +410,10 @@ namespace Barotrauma.Items.Components
                         loopingSoundChannel.Near = loopingSound.Range * 0.4f;
                         loopingSoundChannel.Far = loopingSound.Range;
                     }
+                    if (loopingSound.RoundSound.Stream)
+                    {
+                        loopingSoundChannel.StreamSeekPos = loopingSound.RoundSound.LastStreamSeekPos;
+                    }
                 }
             }
             else
@@ -511,7 +520,7 @@ namespace Barotrauma.Items.Components
                 if (HUDOverlay is SpriteSheet spriteSheet)
                 {
                     spriteSheet.Draw(spriteBatch,
-                        spriteIndex: (int)(Math.Floor(Timing.TotalTimeUnpaused * HUDOverlayAnimSpeed) % spriteSheet.FrameCount),
+                        spriteIndex: spriteSheet.GetAnimatedSpriteIndex(HUDOverlayAnimSpeed),
                         pos: screenSize / 2, color: Color.White, origin: HUDOverlay.Origin, rotate: 0, scale: screenSize / spriteSheet.FrameSize.ToVector2());
                 }
                 else
