@@ -1,42 +1,36 @@
-# Barotitan Overhaul
+## Thermotrauma/Barotitan
+_name pending_
 
-A total overhaul for Barotrauma set on Saturn's moon Titan.
+### A total overhaul for Barotrauma set on Saturn's moon Titan, featuring thermodynamics, fluid dynamics, and more to come.
+Because Barotrauma wasn't difficult enough. Really, it wasn't.  
+A reasonably skilled and serious crew can easily blitz through 90% of the campaign. That's no fun. _Chaos_ is fun.
 
-### This project uses a fork of Moonsharp: https://github.com/evilfactory/moonsharp
+**Current Goals: (in order of priority)**
+* Fluid dynamics and thermodynamics (underway)
+* * Real phase transition (done)
+* * Ideal gas and fluid simulation (underway)
+* * * Custom fluid rendering (underway)
+* * Solids
+* * Plumbing
+* Item dynamics
+* * Factorio-like automation
+* * Pneumatic tubes
+* Electricity overhaul
+* * Unification of electricity and signal system
+* * * Wifi replaced with general rf system
+* * Voltage system following Ohms law
+* Realistic Radiation
+* * Realistic nuclear fission/fusion pathways
+* Symptom based medical system
+* Biome overhaul
+* Boss overhaul
+* Surface, air, and space areas
+* * Flying machines
+* * Aero/Hydrodynamics
+* 
 
+
+This project uses a fork of Moonsharp: https://github.com/evilfactory/moonsharp  
 For LuaCs documentation, see [evilfactory/LuaCsForBarotrauma](https://github.com/evilfactory/LuaCsForBarotrauma)
 
-# Barotrauma
-
-Copyright © FakeFish Ltd 2017-2024
-
-Before downloading the source code, please read the [EULA](EULA.txt).
-
-If you have a question or an issue to report, please check our [Contribution Guideline](https://github.com/Regalis11/Barotrauma/blob/master/CONTRIBUTING.md).
-
-If you're interested in working on the code, either to develop mods or to contribute something to the repository, you will also find instructions in the [Contribution Guideline](https://github.com/Regalis11/Barotrauma/blob/master/CONTRIBUTING.md).
-
-## Links:
-
-**Official Website:** www.barotraumagame.com
-
-**Steam Forums:** https://steamcommunity.com/app/602960/discussions/
-
-**Discord:** https://discordapp.com/invite/undertow
-
-**Wiki:** https://barotraumagame.com/wiki/Main_Page
-
-## Compiling
-
-### Windows
-
-Install [Visual Studio](https://www.visualstudio.com/vs/community/) with C# 10 support (VS 2022 or later recommended)  
-Run `DeployAll.bat` located `/Deploy`
-### macOS
-
-Install [Visual Studio 2022 for Mac](https://visualstudio.microsoft.com/vs/mac/)  
-Run `DeployAll.sh` located `/Deploy`
-### Linux
-
-Install and configure [.NET 6 SDK](https://docs.microsoft.com/en-us/dotnet/core/install/linux)  
-Run `DeployAll.sh` located `/Deploy`
+_Barotrauma Game is Copyright © FakeFish Ltd 2017-2024_
