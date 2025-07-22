@@ -1,8 +1,131 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.Xna.Framework;
 
 namespace Barotrauma.Items.Components;
+
+public static class FluidNetworking
+{
+    public static string HullData;
+    static List<MemoryComponent> DataComponents = new List<MemoryComponent>();
+    private static ItemPrefab prefab = ItemPrefab.GetItemPrefab("MemoryComponent");
+
+    private static Dictionary<int, string> debugDecodeComponents = new();
+    
+    static bool initialized = false;
+    static void FluidNetworkingInitialize(int mems)
+    {
+        if (!initialized)
+        {
+            initialized = true;
+            for (int i = 0; i < mems; i++)
+            {
+                Entity.Spawner.AddItemToSpawnQueue(prefab, Vector2.Zero,
+                    onSpawned: item =>
+                    {
+                        item.Tags = "FluidNetworkingData";
+                        DataComponents.Add(item.GetComponent<MemoryComponent>());
+                    });
+            }
+        }
+    }
+
+    public static void FluidNetworkingUpdate()
+    {
+        FluidNetworkingInitialize(50);
+        HullData = "";
+        foreach (Hull hull in Hull.HullList)
+        {
+            HullData += Serialize(hull);
+        }
+        
+        DebugConsole.NewMessage(HullData+"    "+Base64Encode(HullData)+"    "+Base64Encode(HullData).Length+"\n");
+        //do memorycomponent stuffs
+        string[] chunks = SplitEvery(HullData, 120);
+        
+        if (chunks.Length > DataComponents.Count)
+        {
+            DebugConsole.NewMessage("Too few memory components", Color.Red);
+            return;
+        }
+        for (int i = 0; i < chunks.Length; i++)
+        {
+            MemoryComponent mem = DataComponents[i];
+            mem.Value = i.ToString();
+            mem.Value += "~";
+            mem.Value += chunks[i];
+        }
+        
+        DebugDecode();
+    }
+
+    static void DebugDecode()
+    { //sort logic may not be needed
+        debugDecodeComponents.Clear();
+        foreach (Item item in Item.ItemList)
+        {
+            if (item.HasTag("FluidNetworkingData"))
+            {
+                MemoryComponent mem = item.GetComponent<MemoryComponent>();
+                if (mem.Value != "")
+                {
+                    string[] chunks = mem.Value.Split('~');
+                    debugDecodeComponents[int.Parse(chunks[0])] = chunks[1];
+                }
+            }
+        }
+
+        string data = "";
+        for (int i = 0; i < debugDecodeComponents.Count; i++)
+        {
+            data += debugDecodeComponents[i];
+        }
+        DebugConsole.NewMessage(data, Color.Cyan);
+    }
+
+    static string Serialize(Hull hull)
+    {
+        string result = "";
+        result += hull.ID;
+        result += ":";
+        result += hull.FluidVolumes.Count;
+        foreach (FluidVolume fluidVolume in hull.FluidVolumes)
+        {
+            result += ";";
+            result += fluidVolume.FluidPrefab.Name;
+            result += ":";
+            // result += fluidVolume.FluidPrefab.Color;
+            // result += ":";
+            result += fluidVolume.GasMoles;
+            result += ":";
+            result += fluidVolume.LiquidMoles;
+        }
+        result += "@";
+        return result;
+    }
+    
+    public static string Base64Encode(string plainText) 
+    {
+        var plainTextBytes = System.Text.Encoding.UTF8.GetBytes(plainText);
+        return System.Convert.ToBase64String(plainTextBytes);
+    }
+    public static string Base64Decode(string base64EncodedData) 
+    {
+        var base64EncodedBytes = System.Convert.FromBase64String(base64EncodedData);
+        return System.Text.Encoding.UTF8.GetString(base64EncodedBytes);
+    }
+    
+    public static string[] SplitEvery(string input, int chunkSize)
+    {
+        if (chunkSize <= 0)
+            throw new ArgumentException("Chunk size must be greater than 0.", nameof(chunkSize));
+
+        return Enumerable.Range(0, (input.Length + chunkSize - 1) / chunkSize)
+            .Select(i => input.Substring(i * chunkSize, Math.Min(chunkSize, input.Length - i * chunkSize)))
+            .ToArray();
+    }
+}
 
 internal class FluidPrefab : Prefab
 {

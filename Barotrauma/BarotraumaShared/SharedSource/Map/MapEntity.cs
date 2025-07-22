@@ -727,6 +727,9 @@ namespace Barotrauma
 
                 Spawner?.Update();
             }
+
+            //temporary??
+            FluidNetworking.FluidNetworkingUpdate();
         }
 
         static partial void UpdateAllProjSpecific(float deltaTime);

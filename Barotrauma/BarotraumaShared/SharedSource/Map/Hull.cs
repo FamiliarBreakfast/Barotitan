@@ -580,6 +580,24 @@ namespace Barotrauma
         public Hull(Rectangle rectangle, Submarine submarine, ushort id = Entity.NullEntityID)
             : base (CoreEntityPrefab.HullPrefab, submarine, id)
         {
+            foreach (FluidPrefab fluidPrefab in FluidPrefab.Prefabs)
+            {
+                if (fluidPrefab.Identifier == "oxygen")
+                {
+                    oxygenVolume = new FluidVolume(this, fluidPrefab, Volume, 100);
+                    FluidVolumes.Add(oxygenVolume);
+                    DebugConsole.NewMessage("Created oxygen volume (" + fluidPrefab.Identifier + ") in hull (" + ID + ")");
+                    break;
+                }
+                FluidVolumes.Add(new FluidVolume(this, fluidPrefab, 0, 0));
+                DebugConsole.NewMessage("Created fluid volume (" + fluidPrefab.Identifier + ") in hull (" + ID + ")");
+            }
+
+            if (oxygenVolume == null)
+            {
+                DebugConsole.ThrowError("Failed to create oxygen volume.");
+            }
+            
             rect = rectangle;
 
             if (BackgroundSections == null) { CreateBackgroundSections(); }
@@ -616,19 +634,6 @@ namespace Barotrauma
             }
 
             CreateBackgroundSections();
-
-            foreach (FluidPrefab fluidPrefab in FluidPrefab.Prefabs)
-            {
-                if (fluidPrefab.Identifier == "oxygen")
-                {
-                    oxygenVolume = new FluidVolume(this, fluidPrefab, Volume, 100);
-                    FluidVolumes.Add(oxygenVolume);
-                    DebugConsole.NewMessage("Created oxygen volume (" + fluidPrefab.Identifier + ") in hull (" + ID + ")");
-                    break;
-                }
-                FluidVolumes.Add(new FluidVolume(this, fluidPrefab, 0, 0));
-                DebugConsole.NewMessage("Created fluid volume (" + fluidPrefab.Identifier + ") in hull (" + ID + ")");
-            }
 
             Temperature = 293;
             
