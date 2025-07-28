@@ -27,7 +27,6 @@ A reasonably skilled and serious crew can easily blitz through 90% of the campai
 * Surface, air, and space areas
 * * Flying machines
 * * Aero/Hydrodynamics
-* 
 
 
 This project uses a fork of Moonsharp: https://github.com/evilfactory/moonsharp  

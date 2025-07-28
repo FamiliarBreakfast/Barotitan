@@ -40,7 +40,7 @@ public static class FluidNetworking
             HullData += Serialize(hull);
         }
         
-        DebugConsole.NewMessage(HullData+"    "+Base64Encode(HullData)+"    "+Base64Encode(HullData).Length+"\n");
+        //DebugConsole.NewMessage(HullData+"    "+Base64Encode(HullData)+"    "+Base64Encode(HullData).Length+"\n");
         //do memorycomponent stuffs
         string[] chunks = SplitEvery(HullData, 120);
         
@@ -55,9 +55,10 @@ public static class FluidNetworking
             mem.Value = i.ToString();
             mem.Value += "~";
             mem.Value += chunks[i];
+            mem.Item.CreateServerEvent(mem);
         }
         
-        DebugDecode();
+        //DebugDecode();
     }
 
     static void DebugDecode()

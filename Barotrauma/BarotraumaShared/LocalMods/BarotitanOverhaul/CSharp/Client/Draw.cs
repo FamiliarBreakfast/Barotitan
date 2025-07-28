@@ -13,7 +13,43 @@ namespace BaroTITAN {
     static class HullData
     {
         public static Dictionary<Hull, List<FluidVolume>> HullVolumes = new();
+		private static Dictionary<int, string> DecodeComponents = new();
+
+		private static void UpdateOrAddVolume(int HullID, FluidVolume data) {}
+
+		//private static FluidVolume VolumeFromPackedData(string data) {}
+
+		public static string Base64Decode(string base64EncodedData) 
+	    {
+	        var base64EncodedBytes = System.Convert.FromBase64String(base64EncodedData);
+	        return System.Text.Encoding.UTF8.GetString(base64EncodedBytes);
+	    }
+
+		public static void DecodeData(){
+			DecodeComponents.Clear();
+			foreach (Item item in Item.ItemList) //todo: optimize
+	        {
+	            if (item.HasTag("FluidNetworkingData"))
+	            {
+	                Barotrauma.Items.Components.MemoryComponent mem = item.GetComponent<Barotrauma.Items.Components.MemoryComponent>();
+	                if (mem.Value != "")
+	                {
+	                    string[] chunks = mem.Value.Split('~');
+	                    DecodeComponents[int.Parse(chunks[0])] = chunks[1];
+	                }
+	            }
+	        }
+	
+	        string data = "";
+	        for (int i = 0; i < DecodeComponents.Count; i++)
+	        {
+	            data += DecodeComponents[i];
+	        }
+			LuaCsLogger.Log(data);
+			//deconstruct data here and create/update fluid volumes
+		}
     }
+
     class FluidVolume
     {
         public string Name;
@@ -52,9 +88,18 @@ namespace BaroTITAN {
         {
             harmony.UnpatchSelf();
             harmony = null;
-            LuaCsLogger.Log("ExampleMod disposed!");
+            LuaCsLogger.Log("BaroTITAN unloaded.");
         }
     }
+
+	[HarmonyPatch(typeof(Barotrauma.GameScreen), nameof(Barotrauma.GameScreen.DrawMap))]
+	class Update
+	{
+		static void Postfix(GraphicsDevice graphics, SpriteBatch spriteBatch, double deltaTime) {
+			//LuaCsLogger.Log("BaroTITAN unloaded.");
+			HullData.DecodeData();
+		}
+	}
 
     [HarmonyPatch(typeof(Barotrauma.Hull), nameof(Barotrauma.Hull.Draw))]
     class WaterDraw
@@ -66,10 +111,10 @@ namespace BaroTITAN {
             Barotrauma.GUI.DrawRectangle(spriteBatch, new Vector2(drawRect.X, -drawRect.Y),
                 new Vector2(__instance.Rect.Width, __instance.Rect.Height), Color.Red, true, (__instance.ID % 255) * 0.000001f, 20.0f);
             //todo get from HullData.HullVolumes
-            foreach (FluidVolume volume in HullData.HullVolumes[__instance])
-            {
+            //foreach (FluidVolume volume in HullData.HullVolumes[__instance])
+            //{
                 //do something
-            }
+            //}
         }
     }
 
@@ -82,6 +127,5 @@ namespace BaroTITAN {
             __result = true;
             return false;
         }
-    }
     }
 }
