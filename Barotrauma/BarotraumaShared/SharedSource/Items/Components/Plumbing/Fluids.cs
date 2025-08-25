@@ -8,6 +8,7 @@ namespace Barotrauma.Items.Components;
 public static class FluidNetworking
 {
     public static string HullData;
+    //todo clear on round end/level change
     static List<MemoryComponent> DataComponents = new List<MemoryComponent>();
     private static ItemPrefab prefab = ItemPrefab.GetItemPrefab("MemoryComponent");
 
@@ -33,7 +34,7 @@ public static class FluidNetworking
 
     public static void FluidNetworkingUpdate()
     {
-        FluidNetworkingInitialize(50);
+        FluidNetworkingInitialize(100);
         HullData = "";
         foreach (Hull hull in Hull.HullList)
         {
@@ -46,7 +47,7 @@ public static class FluidNetworking
         
         if (chunks.Length > DataComponents.Count)
         {
-            DebugConsole.NewMessage("Too few memory components", Color.Red);
+            DebugConsole.NewMessage("Too few memory components, need "+chunks.Length+", have "+DataComponents.Count, Color.Red);
             return;
         }
         for (int i = 0; i < chunks.Length; i++)
@@ -55,7 +56,7 @@ public static class FluidNetworking
             mem.Value = i.ToString();
             mem.Value += "~";
             mem.Value += chunks[i];
-            mem.Item.CreateServerEvent(mem);
+            mem.Item.CreateServerEvent(mem); //resharper is wrong, it does exist
         }
         
         //DebugDecode();

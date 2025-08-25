@@ -4,6 +4,7 @@ using Barotrauma;
 using HarmonyLib;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using System.Text.RegularExpressions;
  
 // This is required so that the .NET runtime doesn't complain about you trying to access internal Types and Members
 // [assembly: IgnoreAccessChecksTo("Barotrauma")]
@@ -12,10 +13,32 @@ using Microsoft.Xna.Framework.Graphics;
 namespace BaroTITAN {
     static class HullData
     {
-        public static Dictionary<Hull, List<FluidVolume>> HullVolumes = new();
+        public static Dictionary<int, List<FluidVolume>> HullVolumes = new();
 		private static Dictionary<int, string> DecodeComponents = new();
 
-		private static void UpdateOrAddVolume(int HullID, FluidVolume data) {}
+        private static void UpdateOrAddVolume(int HullID, FluidVolume data)
+        {
+            if (!HullVolumes.TryGetValue(HullID, out var volumes))
+            {
+                // No entry yet, create a new one
+                volumes = new List<FluidVolume>();
+                HullVolumes[HullID] = volumes;
+            }
+
+            // Look for existing volume with the same name
+            var existing = volumes.FindIndex(v => v.Name == data.Name);
+
+            if (existing >= 0)
+            {
+                // Replace the old volume
+                volumes[existing] = data;
+            }
+            else
+            {
+                // Add new unique volume
+                volumes.Add(data);
+            }   
+        }
 
 		//private static FluidVolume VolumeFromPackedData(string data) {}
 
@@ -45,9 +68,63 @@ namespace BaroTITAN {
 	        {
 	            data += DecodeComponents[i];
 	        }
-			LuaCsLogger.Log(data);
-			//deconstruct data here and create/update fluid volumes
-		}
+			//LuaCsLogger.Log(data);
+            if (data != "")
+            {
+                try
+                {
+                    Deserialize(data);
+                }
+                catch (Exception ex)
+                {
+                    //LuaCsLogger.Log("Shit gone to fuck!");
+                    //LuaCsLogger.Log(ex.Message);
+                }
+            }
+        }
+
+        public static void Deserialize(string data)
+        {
+            string[] hulls = data.Split('@');
+            foreach (string hull in hulls)
+            {
+                var regex = new Regex(
+                    @"^\d+:\d+;(?:[A-Za-z ]+:\d+(?:\.\d+)?:\d+(?:\.\d+)?)(?:;[A-Za-z ]+:\d+(?:\.\d+)?:\d+(?:\.\d+)?)*$");
+                // if (hull == "" || hull == "0") //idk why either. maybe im just bad at serializing
+                // {
+                //     continue;
+                // }
+                if (regex.IsMatch(hull)) {
+                    //LuaCsLogger.Log(hull);
+                    string[] hunks = hull.Split(';');
+                    string[] header = hunks[0].Split(':');
+                    //LuaCsLogger.Log("id" + header[0]);
+                    int id = Int32.Parse(header[0]);
+                    //LuaCsLogger.Log(header[1]);
+                    int count = Int32.Parse(header[1]);
+
+                    string name;
+                    float gasmoles;
+                    float liquidmoles;
+
+                    for (int i = 1; i <= count; i++)
+                    {
+                        string[] fluid = hunks[i].Split(':');
+                        name = fluid[0];
+                        gasmoles = Single.Parse(fluid[1]);
+                        liquidmoles = Single.Parse(fluid[2]);
+
+                        //LuaCsLogger.Log(name+gasmoles+liquidmoles);
+
+                        FluidVolume Volume = new(name, gasmoles, liquidmoles);
+                        UpdateOrAddVolume(id, Volume);
+                    }
+                } else
+                {
+                    //LuaCsLogger.Log("Error when parsing data string: "+hull);
+                }
+            }
+        }
     }
 
     class FluidVolume
@@ -57,6 +134,13 @@ namespace BaroTITAN {
         public double LiquidMoles;
         public double GasMoles;
         public double TotalMoles => LiquidMoles + GasMoles;
+
+        public FluidVolume(string name, float liquidmoles, float gasmoles)
+        {
+            Name = name;
+            LiquidMoles = liquidmoles;
+            GasMoles = gasmoles;
+        }
     }
     
     partial class ClientMain : IAssemblyPlugin {
@@ -106,15 +190,25 @@ namespace BaroTITAN {
     {
         static void Prefix(SpriteBatch spriteBatch, bool editing, bool back, ref Barotrauma.Hull __instance)
         {
-            Rectangle drawRect = new Rectangle((int)(__instance.Submarine.DrawPosition.X + __instance.Rect.X), (int)(__instance.Submarine.DrawPosition.Y + __instance.Rect.Y), __instance.Rect.Width, __instance.Rect.Height);
+            if (HullData.HullVolumes.ContainsKey(__instance.ID))
+            {
+                double fill = 0;
+                List<FluidVolume> volumes = HullData.HullVolumes[__instance.ID];
+                foreach (FluidVolume volume in volumes)
+                {
+                    fill += volume.LiquidMoles;
+                }
 
-            Barotrauma.GUI.DrawRectangle(spriteBatch, new Vector2(drawRect.X, -drawRect.Y),
-                new Vector2(__instance.Rect.Width, __instance.Rect.Height), Color.Red, true, (__instance.ID % 255) * 0.000001f, 20.0f);
-            //todo get from HullData.HullVolumes
-            //foreach (FluidVolume volume in HullData.HullVolumes[__instance])
-            //{
-                //do something
-            //}
+                double fillp = __instance.Rect.Width * __instance.Rect.Height / fill;
+
+                Rectangle drawRect = new Rectangle((int)(__instance.Submarine.DrawPosition.X + __instance.Rect.X),
+                    (int)(__instance.Submarine.DrawPosition.Y + __instance.Rect.Y), __instance.Rect.Width,
+                    __instance.Rect.Height);
+
+                Barotrauma.GUI.DrawRectangle(spriteBatch, new Vector2(drawRect.X, -drawRect.Y+(float)fillp),
+                    new Vector2(__instance.Rect.Width, __instance.Rect.Height-(float)fillp), Color.Red, true, (__instance.ID % 255) * 0.000001f,
+                    20.0f);
+            }
         }
     }
 
