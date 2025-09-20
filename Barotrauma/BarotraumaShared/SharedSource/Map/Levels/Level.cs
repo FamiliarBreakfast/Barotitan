@@ -4293,6 +4293,11 @@ namespace Barotrauma
                     {
                         placeableWrecks.RemoveAt(i);
                     }
+                    // Exclude wrecks that have mission tags, those can't show up randomly
+                    else if (wreckInfo.MissionTags.Count != 0)
+                    {
+                        placeableWrecks.RemoveAt(i);
+                    }
                 }
                 if (placeableWrecks.None())
                 {
@@ -4744,6 +4749,11 @@ namespace Barotrauma
                         {
                             beaconStationFiles.RemoveAt(i);
                         }
+                        // Exclude beacons that have mission tags, those can't show up randomly
+                        else if (beaconInfo.MissionTags.Count != 0)
+                        {
+                            beaconStationFiles.RemoveAt(i);
+                        }
                     }
                 }
                 if (beaconStationFiles.None())
@@ -4928,17 +4938,17 @@ namespace Barotrauma
             {
                 int corpseCount = Rand.Range(Loaded.GenerationParams.MinCorpseCount, Loaded.GenerationParams.MaxCorpseCount + 1);
                 var allSpawnPoints = WayPoint.WayPointList.FindAll(wp => wp.Submarine == wreck && wp.CurrentHull != null);
-                var pathPoints = allSpawnPoints.FindAll(wp => wp.SpawnType == SpawnType.Path);
+                var humanSpawnPoints = allSpawnPoints.FindAll(wp => wp.SpawnType == SpawnType.Human);
                 var corpsePoints = allSpawnPoints.FindAll(wp => wp.SpawnType == SpawnType.Corpse);
-                if (!corpsePoints.Any() && !pathPoints.Any()) { continue; }
-                pathPoints.Shuffle(Rand.RandSync.ServerAndClient);
+                if (corpsePoints.None() && humanSpawnPoints.None()) { continue; }
+                humanSpawnPoints.Shuffle(Rand.RandSync.ServerAndClient);
                 // Sort by job so that we first spawn those with a predefined job (might have special id cards)
                 corpsePoints = corpsePoints.OrderBy(p => p.AssignedJob == null).ThenBy(p => Rand.Value()).ToList();
                 var usedJobs = new HashSet<JobPrefab>();
                 int spawnCounter = 0;
                 for (int j = 0; j < corpseCount; j++)
                 {
-                    WayPoint sp = corpsePoints.FirstOrDefault() ?? pathPoints.FirstOrDefault();
+                    WayPoint sp = corpsePoints.FirstOrDefault() ?? humanSpawnPoints.FirstOrDefault();
                     JobPrefab job = sp?.AssignedJob;
                     CorpsePrefab selectedPrefab;
                     if (job == null)
@@ -4951,8 +4961,8 @@ namespace Barotrauma
                         if (selectedPrefab == null)
                         {
                             corpsePoints.Remove(sp);
-                            pathPoints.Remove(sp);
-                            sp = corpsePoints.FirstOrDefault(sp => sp.AssignedJob == null) ?? pathPoints.FirstOrDefault(sp => sp.AssignedJob == null);
+                            humanSpawnPoints.Remove(sp);
+                            sp = corpsePoints.FirstOrDefault(sp => sp.AssignedJob == null) ?? humanSpawnPoints.FirstOrDefault(sp => sp.AssignedJob == null);
                             // Deduce the job from the selected prefab
                             selectedPrefab = GetCorpsePrefab(usedJobs);
                             if (selectedPrefab != null)
@@ -4974,7 +4984,7 @@ namespace Barotrauma
                     {
                         worldPos = sp.WorldPosition;
                         corpsePoints.Remove(sp);
-                        pathPoints.Remove(sp);
+                        humanSpawnPoints.Remove(sp);
                     }
 
                     job ??= selectedPrefab.GetJobPrefab(predicate: p => !usedJobs.Contains(p));
