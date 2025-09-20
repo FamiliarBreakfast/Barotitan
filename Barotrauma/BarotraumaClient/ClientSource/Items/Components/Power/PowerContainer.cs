@@ -41,7 +41,7 @@ namespace Barotrauma.Items.Components
             var rechargeText = new GUITextBlock(new RectTransform(new Vector2(0.6f, 1), rechargeRateContainer.RectTransform, Anchor.CenterRight),
                 "", textColor: GUIStyle.TextColorNormal, font: GUIStyle.Font, textAlignment: Alignment.CenterRight)
             {
-                TextGetter = () => $"{(int)MathF.Round(currPowerConsumption)} {kW} ({(int)MathF.Round(RechargeRatio * 100)} %)"
+                TextGetter = () => $"{(int)MathF.Round(Current)} {kW} ({(int)MathF.Round(RechargeRatio * 100)} %)"
             };
             if (rechargeText.TextSize.X > rechargeText.Rect.Width) { rechargeText.Font = GUIStyle.SmallFont; }
 

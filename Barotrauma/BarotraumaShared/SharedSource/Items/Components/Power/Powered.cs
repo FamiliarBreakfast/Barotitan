@@ -73,26 +73,33 @@ namespace Barotrauma.Items.Components
         public static readonly HashSet<Connection> ChangedConnections = new HashSet<Connection>();
 
         public readonly static Dictionary<int, GridInfo> Grids = new Dictionary<int, GridInfo>();
+        
+        public readonly List<SmallVolume> SmallVolumes = new List<SmallVolume>();
 
         /// <summary>
-        /// The amount of power currently consumed by the item. Negative values mean that the item is providing power to connected items
+        /// The rate at which voltage/pressure equalizes
+        /// </summary>
+        public static float dischargeCoefficient = 0.6f;
+        
+        /// <summary>
+        /// The amount of power being consumed in Watts
         /// </summary>
         protected float currPowerConsumption;
 
         /// <summary>
-        /// Current voltage of the item (load / power)
+        /// Current voltage/pressure of the item, in Volts
         /// </summary>
         private float voltage;
 
         /// <summary>
-        /// The minimum voltage required for the item to work
+        /// The minimum flow required for the item to work, in Amperes
         /// </summary>
-        private float minVoltage;
+        private float minCurrent;
 
         /// <summary>
-        /// The maximum amount of power the item can draw from connected items
+        /// The resistance, which affects how much current is drawn at a given voltage, in Ohms
         /// </summary>
-        protected float powerConsumption;
+        protected float resistance;
 
         protected Connection powerIn;
         protected List<Connection> powerOuts = new List<Connection>();
@@ -124,15 +131,15 @@ namespace Barotrauma.Items.Components
             "with a power consumption of 1000 kW would need at least 500 kW of power to work if the minimum voltage is set to 0.5.")]
         public float MinVoltage
         {
-            get { return powerConsumption <= 0.0f ? 0.0f : minVoltage; }
-            set { minVoltage = value; }
+            get { return resistance <= 0.0f ? 0.0f : minCurrent; }
+            set { minCurrent = value; }
         }
 
         [Editable, Serialize(0.0f, IsPropertySaveable.Yes, description: "How much power the device draws (or attempts to draw) from the electrical grid when active.")]
         public float PowerConsumption
         {
-            get { return powerConsumption; }
-            set { powerConsumption = value; }
+            get { return resistance; }
+            set { resistance = value; }
         }
         
         [Serialize(false, IsPropertySaveable.Yes, description: "Is the device currently active. Inactive devices don't consume power.")]
@@ -157,7 +164,7 @@ namespace Barotrauma.Items.Components
         }
 
         [Serialize(0.0f, IsPropertySaveable.Yes, description: "The current voltage of the item (calculated as power consumption / available power). Intended to be used by StatusEffect conditionals (setting the value from XML is not recommended).")]
-        public float Voltage
+        public float Voltage //todo
         {
             get
             {
@@ -193,7 +200,7 @@ namespace Barotrauma.Items.Components
         /// Essentially Voltage / MinVoltage (= how much of the minimum required voltage has been satisfied), clamped between 0 and 1. 
         /// Can be used by status effects or sounds to check if the item has enough power to run
         /// </summary>
-        public float RelativeVoltage => minVoltage <= 0.0f ? 1.0f : MathHelper.Clamp(Voltage / minVoltage, 0.0f, 1.0f);
+        public float RelativeVoltage => minCurrent <= 0.0f ? 1.0f : MathHelper.Clamp(Voltage / minCurrent, 0.0f, 1.0f);
         
         public virtual bool HasPower => Voltage >= MinVoltage;
 
@@ -209,6 +216,12 @@ namespace Barotrauma.Items.Components
         public Powered(Item item, ContentXElement element)
             : base(item, element)
         {
+            foreach (FluidPrefab fluidPrefab in FluidPrefab.Prefabs)
+            {
+                SmallVolumes.Add(new SmallVolume(Item, fluidPrefab, 0, 0));
+                DebugConsole.NewMessage("Created fluid volume (" + fluidPrefab.Identifier + ") in item (" + Item.ID + ") " + Item.Name);
+            }
+
             poweredList.Add(this);
             InitProjectSpecific(element);
         }
@@ -225,24 +238,24 @@ namespace Barotrauma.Items.Components
                 return;
             }
 
-            if (Voltage > minVoltage)
+            if (Voltage > minCurrent)
             {
                 ApplyStatusEffects(ActionType.OnActive, deltaTime);
             }
-#if CLIENT
-            if (Voltage > minVoltage)
-            {
-                if (!powerOnSoundPlayed && powerOnSound != null)
-                {
-                    SoundPlayer.PlaySound(powerOnSound, item.WorldPosition, hullGuess: item.CurrentHull);                    
-                    powerOnSoundPlayed = true;
-                }
-            }
-            else if (Voltage < 0.1f)
-            {
-                powerOnSoundPlayed = false;
-            }
-#endif
+// #if CLIENT
+//             if (Voltage > minVoltage)
+//             {
+//                 if (!powerOnSoundPlayed && powerOnSound != null)
+//                 {
+//                     SoundPlayer.PlaySound(powerOnSound, item.WorldPosition, hullGuess: item.CurrentHull);                    
+//                     powerOnSoundPlayed = true;
+//                 }
+//             }
+//             else if (Voltage < 0.1f)
+//             {
+//                 powerOnSoundPlayed = false;
+//             }
+// #endif
         }
 
         public override void Update(float deltaTime, Camera cam)

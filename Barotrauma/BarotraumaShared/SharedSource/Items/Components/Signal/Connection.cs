@@ -8,6 +8,18 @@ namespace Barotrauma.Items.Components
 {
     partial class Connection
     {
+        //list of all connected pairs of wires
+        private static List<(Connection, Connection)> _connectedPairs = new();
+
+        /// <summary>
+        /// List of all unique pairs of connected connections
+        /// </summary>
+        public static List<(Connection, Connection)> ConnectedPairs
+        {
+            get { return _connectedPairs; } //todo: remove duplicates on get
+                                            //todo: validate connections on get
+        }
+
         //how many wires can be linked to connectors by default
         private const int DefaultMaxWires = 5;
 

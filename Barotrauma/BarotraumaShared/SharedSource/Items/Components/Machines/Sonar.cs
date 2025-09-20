@@ -283,7 +283,7 @@ namespace Barotrauma.Items.Components
                 return 0;
             }
 
-            return (currentMode == Mode.Active) ? powerConsumption : powerConsumption * PassivePowerConsumption;
+            return (currentMode == Mode.Active) ? resistance : resistance * PassivePowerConsumption;
         }
 
         public override bool Use(float deltaTime, Character character = null)

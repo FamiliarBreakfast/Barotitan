@@ -193,7 +193,7 @@ namespace Barotrauma.Items.Components
                 return 0;
             }
             
-            currPowerConsumption = powerConsumption * Math.Abs(flowPercentage / 100.0f);
+            currPowerConsumption = resistance * Math.Abs(flowPercentage / 100.0f);
             //pumps consume more power when in a bad condition
             item.GetComponent<Repairable>()?.AdjustPowerConsumption(ref currPowerConsumption);
 

@@ -446,7 +446,7 @@ namespace Barotrauma.Items.Components
                 ToolTip = TextManager.Get("ReactorTipPower")
             };
             LocalizedString outputStr = TextManager.Get("ReactorOutput");
-            outputText.TextGetter += () => $"{outputStr.Replace("[kw]", ((int)-currPowerConsumption).ToString())} {kW}";
+            outputText.TextGetter += () => $"{outputStr.Replace("[kw]", ((int)-Current).ToString())} {kW}";
 
             InitInventoryUI();
 
@@ -556,7 +556,7 @@ namespace Barotrauma.Items.Components
 
             if (graphTimer > updateGraphInterval)
             {
-                UpdateGraph(outputGraph, -currPowerConsumption);
+                UpdateGraph(outputGraph, -Current);
                 UpdateGraph(loadGraph, Load);
 
                 graphTimer = 0.0f;
@@ -620,12 +620,12 @@ namespace Barotrauma.Items.Components
 
             criticalHeatWarning.Selected = temperature > allowedTemperature.Y && lightOn;
             lowTemperatureWarning.Selected = temperature < allowedTemperature.X && lightOn;
-            criticalOutputWarning.Selected = -currPowerConsumption > Load * 1.5f && lightOn;
+            criticalOutputWarning.Selected = -Current > Load * 1.5f && lightOn;
 
             warningButtons["ReactorWarningOverheating"].Selected = temperature > optimalTemperature.Y && lightOn;
-            warningButtons["ReactorWarningHighOutput"].Selected = -currPowerConsumption > Load * 1.1f && lightOn;
+            warningButtons["ReactorWarningHighOutput"].Selected = -Current > Load * 1.1f && lightOn;
             warningButtons["ReactorWarningLowTemp"].Selected = temperature < optimalTemperature.X && lightOn;
-            warningButtons["ReactorWarningLowOutput"].Selected = -currPowerConsumption < Load * 0.9f && lightOn;
+            warningButtons["ReactorWarningLowOutput"].Selected = -Current < Load * 0.9f && lightOn;
             warningButtons["ReactorWarningFuelOut"].Selected = prevAvailableFuel < fissionRate * 0.01f && lightOn;
             warningButtons["ReactorWarningLowFuel"].Selected = prevAvailableFuel < fissionRate && lightOn;
             warningButtons["ReactorWarningMeltdown"].Selected = meltDownTimer > MeltdownDelay * 0.5f || item.Condition == 0.0f && lightOn;

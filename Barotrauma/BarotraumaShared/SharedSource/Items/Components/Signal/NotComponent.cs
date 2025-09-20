@@ -32,7 +32,7 @@
             if (connection.Name != "signal_in") { return; }
 
             signal.value = signal.value == "0" || string.IsNullOrEmpty(signal.value) ? "1" : "0";
-            signal.power = 0.0f;
+            signal.voltage = 0.0f;
             item.SendSignal(signal, "signal_out");
             signalReceived = true;
         }

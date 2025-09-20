@@ -10,15 +10,19 @@ A reasonably skilled and serious crew can easily blitz through 90% of the campai
 * * Real phase transition (done)
 * * Ideal gas and fluid simulation (underway)
 * * * Custom fluid rendering (underway)
+* * Plumbing and electrical unification (underway)
+* * * Voltage-Current/Pressure-Flow system following Ohms law (underway)
+* * * * New *Electrum* fluid, which acts like electricity in a plumbing model (done)
+* * * * * Electrum in the world
+* * * * Pressure in a pipe = Voltage
+* * * * Flow of *Electrum* = Current
+* * * Unification of electricity/plumbing and signal system
+* * * * Realistic signals based on voltage/pressure waves
+* * * * Wifi replaced with general RF system?
 * * Solids
-* * Plumbing
 * Item dynamics
 * * Factorio-like automation
 * * Pneumatic tubes
-* Electricity overhaul
-* * Unification of electricity and signal system
-* * * Wifi replaced with general rf system
-* * Voltage system following Ohms law
 * Realistic Radiation
 * * Realistic nuclear fission/fusion pathways
 * Symptom based medical system
@@ -28,8 +32,7 @@ A reasonably skilled and serious crew can easily blitz through 90% of the campai
 * * Flying machines
 * * Aero/Hydrodynamics
 
-
 This project uses a fork of Moonsharp: https://github.com/evilfactory/moonsharp  
 For LuaCs documentation, see [evilfactory/LuaCsForBarotrauma](https://github.com/evilfactory/LuaCsForBarotrauma)
 
-_Barotrauma Game is Copyright © FakeFish Ltd 2017-2024_
+_Barotrauma Game is Copyright © FakeFish Ltd 2017-2025_

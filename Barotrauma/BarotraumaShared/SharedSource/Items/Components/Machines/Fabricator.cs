@@ -345,7 +345,7 @@ namespace Barotrauma.Items.Components
 
             float fabricationSpeedIncrease = 1f + tinkeringStrength * TinkeringSpeedIncrease;
 
-            timeUntilReady -= deltaTime * fabricationSpeedIncrease * Math.Min(powerConsumption <= 0 ? 1 : Voltage, MaxOverVoltageFactor);
+            timeUntilReady -= deltaTime * fabricationSpeedIncrease * Math.Min(resistance <= 0 ? 1 : Voltage, MaxOverVoltageFactor);
 
             UpdateRequiredTimeProjSpecific();
 

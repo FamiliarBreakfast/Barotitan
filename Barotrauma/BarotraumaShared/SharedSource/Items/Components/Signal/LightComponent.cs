@@ -307,7 +307,7 @@ namespace Barotrauma.Items.Components
             }
 
             if ((item.body == null || !item.body.Enabled) && 
-                powerConsumption <= 0.0f && Parent == null && turret == null &&
+                resistance <= 0.0f && Parent == null && turret == null &&
                 (statusEffectLists == null || !statusEffectLists.ContainsKey(ActionType.OnActive)) &&
                 (IsActiveConditionals == null || IsActiveConditionals.Count == 0))
             {
@@ -403,7 +403,7 @@ namespace Barotrauma.Items.Components
             }
             else
             {
-                lightBrightness = MathHelper.Lerp(lightBrightness, powerConsumption <= 0.0f ? 1.0f : Math.Min(Voltage, 1.0f), 0.1f);
+                lightBrightness = MathHelper.Lerp(lightBrightness, resistance <= 0.0f ? 1.0f : Math.Min(Voltage, 1.0f), 0.1f);
             }
 
             SetLightSourceState(true, lightBrightness);

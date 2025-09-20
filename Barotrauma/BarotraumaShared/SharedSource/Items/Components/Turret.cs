@@ -635,7 +635,7 @@ namespace Barotrauma.Items.Components
 
         public float GetPowerRequiredToShoot()
         {
-            float powerCost = powerConsumption;
+            float powerCost = resistance;
             if (user != null)
             {
                 powerCost /= (1 + user.GetStatValue(StatTypes.TurretPowerCostReduction));

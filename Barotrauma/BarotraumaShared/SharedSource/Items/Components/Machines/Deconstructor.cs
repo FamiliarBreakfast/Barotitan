@@ -97,7 +97,7 @@ namespace Barotrauma.Items.Components
 
             ApplyStatusEffects(ActionType.OnActive, deltaTime);
 
-            progressTimer += deltaTime * Math.Min(powerConsumption <= 0.0f ? 1 : Voltage, MaxOverVoltageFactor);
+            progressTimer += deltaTime * Math.Min(resistance <= 0.0f ? 1 : Voltage, MaxOverVoltageFactor);
 
             float tinkeringStrength = 0f;
             if (repairable.IsTinkering)

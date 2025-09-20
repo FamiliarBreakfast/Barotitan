@@ -119,7 +119,7 @@ namespace Barotrauma.Items.Components
 
             controlLockTimer -= deltaTime;
 
-            if (powerConsumption == 0.0f)
+            if (resistance == 0.0f)
             {
                 prevVoltage = 1;
                 hasPower = true;
@@ -187,7 +187,7 @@ namespace Barotrauma.Items.Components
                 return 0;
             }
 
-            currPowerConsumption = MathF.Pow(Math.Abs(targetForce) / 100.0f, ForceToPowerExponent) * powerConsumption;
+            currPowerConsumption = MathF.Pow(Math.Abs(targetForce) / 100.0f, ForceToPowerExponent) * resistance;
             //engines consume more power when in a bad condition
             item.GetComponent<Repairable>()?.AdjustPowerConsumption(ref currPowerConsumption);
             return currPowerConsumption;

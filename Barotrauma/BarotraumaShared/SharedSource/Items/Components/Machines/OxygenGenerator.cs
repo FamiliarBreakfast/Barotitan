@@ -71,7 +71,7 @@ namespace Barotrauma.Items.Components
                 return 0;
             }
 
-            float consumption = powerConsumption;
+            float consumption = resistance;
 
             //consume more power when in a bad condition
             item.GetComponent<Repairable>()?.AdjustPowerConsumption(ref consumption);

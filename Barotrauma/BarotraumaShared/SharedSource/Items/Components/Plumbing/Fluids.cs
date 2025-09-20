@@ -187,6 +187,48 @@ internal class FluidPrefab : Prefab
     }
     public override void Dispose() { }
 }
+
+internal class SmallVolume
+{
+    public readonly FluidPrefab FluidPrefab;
+    public readonly Item Item;
+
+    public double Size;
+    
+    public double LiquidMoles;
+    public double GasMoles;
+
+    public double TotalMoles => LiquidMoles + GasMoles;
+    
+    /// <summary>
+    /// Current temperature from the items current hull temperature
+    /// </summary>
+    public double Temperature => Item.CurrentHull.Temperature;
+    
+    /// <summary>
+    /// Current pressure according to the ideal gas law
+    /// </summary>
+    public double Pressure => (GasMoles * FluidPrefab.GasConstant * Temperature) / (Size - (LiquidMoles * FluidPrefab.MolarMass));
+    
+    /// <summary>
+    /// Non-updating, non-networked fluid volume for items
+    /// </summary>
+    /// <param name="item">The item this volume belongs to</param>
+    /// <param name="fluidPrefab">The fluid defining this volume</param>
+    /// <param name="moles">The amount of fluid in the volume</param>
+    /// <param name="gasPercentage">The percentage of fluid that is gas</param>
+    /// <param name="size">How much fluid the volume can hold</param>
+    public SmallVolume(Item item, FluidPrefab fluidPrefab, float moles, float gasPercentage = 100, float size = 100)
+    {
+        FluidPrefab = fluidPrefab;
+        Item = item;
+        Size = size;
+        
+        GasMoles = moles * gasPercentage / 100;
+        LiquidMoles = moles - GasMoles;
+    }
+}
+
 internal class FluidVolume
 {
     public readonly FluidPrefab FluidPrefab;
@@ -266,6 +308,13 @@ internal class FluidVolume
         // }
     }
 
+    /// <summary>
+    /// Fluid volume with phase change simulation for hulls
+    /// </summary>
+    /// <param name="hull">The hull this volume belongs to</param>
+    /// <param name="fluidPrefab">The fluid defining this volume</param>
+    /// <param name="moles">The amount of fluid in the volume</param>
+    /// <param name="gasPercentage">The percentage of fluid that is gas</param>
     public FluidVolume(Hull hull, FluidPrefab fluidPrefab, float moles, float gasPercentage = 100)
     {
         FluidPrefab = fluidPrefab;
