@@ -1223,6 +1223,7 @@ namespace Barotrauma
                 if (otherCharacter.SelectedCharacter == null || 
                     !otherCharacter.SelectedCharacter.IsDead ||
                     otherCharacter.SelectedCharacter.TeamID != Character.TeamID ||
+                    otherCharacter.IsPet ||
                     otherCharacter.IsInstigator)
                 {
                     continue;
@@ -1379,7 +1380,7 @@ namespace Barotrauma
                 }
                 else
                 {
-                    isAttackerInfected = attacker.CharacterHealth.GetAfflictionStrengthByType(AfflictionPrefab.AlienInfectedType) > 0;
+                    isAttackerInfected = attacker.CharacterHealth.GetAfflictionStrengthByType(AfflictionPrefab.AlienInfectionType) > 0;
                     // Inform other NPCs
                     if (isAttackerInfected || cumulativeDamage > minorDamageThreshold || totalDamage > minorDamageThreshold)
                     {

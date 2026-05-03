@@ -1,20 +1,23 @@
-﻿using Barotrauma.Items.Components;
+﻿using Barotrauma.Abilities;
+using Barotrauma.Extensions;
+using Barotrauma.Items.Components;
+using Barotrauma.LuaCs.Events;
+using Barotrauma.MapCreatures.Behavior;
 using Barotrauma.Networking;
 using FarseerPhysics;
 using FarseerPhysics.Dynamics;
 using FarseerPhysics.Dynamics.Contacts;
 using Microsoft.Xna.Framework;
+using MoonSharp.Interpreter;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Linq;
 using System.Xml.Linq;
-using Barotrauma.Extensions;
-using Barotrauma.MapCreatures.Behavior;
-using MoonSharp.Interpreter;
-using System.Collections.Immutable;
-using Barotrauma.Abilities;
+using static Barotrauma.CharacterHealth;
+using static Barotrauma.MedicalClinic;
 
 #if CLIENT
 using Microsoft.Xna.Framework.Graphics;
@@ -263,6 +266,8 @@ namespace Barotrauma
         /// </summary>
         public Character Equipper;
 
+        public Inventory PreviousParentInventory { get; set; }
+
         //the inventory in which the item is contained in
         public Inventory ParentInventory
         {
@@ -278,9 +283,7 @@ namespace Barotrauma
                     Container = parentInventory.Owner as Item;
                     RemoveFromDroppedStack(allowClientExecute: false);
                 }
-#if SERVER
                 PreviousParentInventory = value;
-#endif
             }
         }
 
@@ -462,10 +465,25 @@ namespace Barotrauma
             }
         }
 
-        public float ImpactTolerance => Prefab.ImpactTolerance;
+        private float impactTolerance;
+        [Serialize(0.0f, IsPropertySaveable.Yes), ConditionallyEditable(ConditionallyEditable.ConditionType.ReceivesSubmarineImpacts, MinValueFloat = 0, MaxValueFloat = 100)]
+        public float ImpactTolerance
+        {
+            get { return impactTolerance; }
+            set { impactTolerance = Math.Max(value, 0.0f); }
+        }
 
-        public float ImpactDamage => Prefab.ImpactDamage;
-        public float ImpactDamageProbability => Prefab.ImpactDamageProbability;
+        [Serialize(0.0f, IsPropertySaveable.Yes, description: "The amount of damage the item takes from impacts. Acts as a multiplier on the strength of the impact. Note that ImpactTolerance must be set for impacts to register."), 
+            ConditionallyEditable(ConditionallyEditable.ConditionType.ReceivesSubmarineImpacts, MinValueFloat = 0, MaxValueFloat = 100)]
+        public float ImpactDamage { get; set; }
+
+        [Serialize(1.0f, IsPropertySaveable.Yes, description: "Probability for impacts to register. Defaults to 1. Note that ImpactTolerance must also be set for impacts to register."), 
+            ConditionallyEditable(ConditionallyEditable.ConditionType.ReceivesSubmarineImpacts, MinValueFloat = 0, MaxValueFloat = 1)]
+        public float ImpactDamageProbability { get; set; }
+
+        public const float SubmarineImpactCooldown = 0.1f;
+
+        public double LastSubmarineImpactTime;
 
         public float InteractDistance => Prefab.InteractDistance;        
 
@@ -545,6 +563,8 @@ namespace Barotrauma
             get;
             set;
         } = float.PositiveInfinity;
+
+        public Sprite OverrideInventorySprite { get; set; }
 
         protected Color spriteColor;
         [Editable, Serialize("1.0,1.0,1.0,1.0", IsPropertySaveable.Yes)]
@@ -1088,7 +1108,7 @@ namespace Barotrauma
 
         public override string ToString()
         {
-            return Name + " (ID: " + ID + ")";
+            return (Name.IsNullOrEmpty() ? Prefab.Identifier : Name) + " (ID: " + ID + ")";
         }
 
         private readonly List<ISerializableEntity> allPropertyObjects = new List<ISerializableEntity>();
@@ -1396,8 +1416,6 @@ namespace Barotrauma
             if (Components.Any(ic => ic is Wire) && Components.All(ic => ic is Wire || ic is Holdable)) { isWire = true; }
             if (HasTag(Barotrauma.Tags.LogicItem)) { isLogic = true; }
 
-            GameMain.LuaCs.Hook.Call("item.created", this);
-
             ApplyStatusEffects(ActionType.OnSpawn, 1.0f);
 
             // Set max condition multipliers from campaign settings for RecalculateConditionValues()
@@ -1559,7 +1577,7 @@ namespace Barotrauma
                     if (!updateableComponents.Contains(component)) 
                     { 
                         updateableComponents.Add(component);
-                        this.isActive = true;
+                        this.IsActive = true;
                     }
                 }
             };
@@ -1650,7 +1668,19 @@ namespace Barotrauma
             contained.Container = null;
         }
 
-        public void SetTransform(Vector2 simPosition, float rotation, bool findNewHull = true, bool setPrevTransform = true)
+        /// <summary>
+        /// Sets the position and rotation of the item, and its physics body if it has one.
+        /// </summary>
+        /// <param name="simPosition">Position in simulation units.</param>
+        /// <param name="rotation">Rotation in radians</param>
+        /// <param name="findNewHull">Should the hull the item is inside be immediately updated? Generally only useful to set to false
+        /// for performance reasons when finding the hull is unnecessary (e.g. if it's being forced to something after setting the transform).</param>
+        /// <param name="setPrevTransform">Should the previous transform of the item be immediately set to the new one? 
+        /// The previous transform is used to interpolate draw positions/rotations, and you should generally only set this to false if 
+        /// you're trying to simulate movement instead of simply teleporting the item somewhere.</param>
+        /// <param name="forceSubmarine">If you know the position is in a specific sub's coordinate space and want to ensure the item 
+        /// is still considered to be in that sub even if the transform ended up outside hulls.</param>
+        public void SetTransform(Vector2 simPosition, float rotation, bool findNewHull = true, bool setPrevTransform = true, Submarine forceSubmarine = null)
         {
             if (!MathUtils.IsValid(simPosition))
             {
@@ -1688,6 +1718,7 @@ namespace Barotrauma
             rect.Y = (int)MathF.Round(displayPos.Y + rect.Height / 2.0f);
 
             if (findNewHull) { FindHull(); }
+            if (forceSubmarine != null) { Submarine = forceSubmarine; }
         }
 
         /// <summary>
@@ -1765,7 +1796,8 @@ namespace Barotrauma
                 ic.Move(amount, ignoreContacts);
             }
 
-            if (body != null && (Submarine == null || !Submarine.Loading) || Screen.Selected is { IsEditor: true }) { FindHull(); }
+            // Refresh items without a body in editors so vents (or other static items that do something with hulls) know which hull they are in after being moved
+            if ((body != null || Screen.Selected is { IsEditor: true }) && Submarine is not { Loading: true }) { FindHull(); }
         }
 
         public Rectangle TransformTrigger(Rectangle trigger, bool world = false)
@@ -1859,7 +1891,7 @@ namespace Barotrauma
             if (newRootContainer != RootContainer)
             {
                 RootContainer = newRootContainer;
-                isActive = true;
+                IsActive = true;
                 foreach (Item containedItem in ContainedItems)
                 {
                     containedItem.RefreshRootContainer();
@@ -2043,6 +2075,12 @@ namespace Barotrauma
                 }
                 static bool MatchesComponent(ItemComponent comp, PropertyConditional cond) => comp.Name == cond.TargetItemComponent;
             }
+        }
+
+        public IEnumerable<StatusEffect> GetStatusEffectsOfType(ActionType type)
+        {
+            if (!hasStatusEffectsOfType[(int)type]) { return Enumerable.Empty<StatusEffect>(); }
+            return statusEffectLists[type];
         }
 
         /// <summary>
@@ -2374,12 +2412,16 @@ namespace Barotrauma
             }
         }
 
-        private bool isActive = true;
+        /// <summary>
+        /// Inactive items are not updated. Note that actions such as dropping can reactivate the item, and that the item can go inactive by itself if it no longer needs updating;
+        /// </summary>
+        public bool IsActive = true;
+
         public bool IsInRemoveQueue;
 
         public override void Update(float deltaTime, Camera cam)
         {
-            if (!isActive || IsLayerHidden || IsInRemoveQueue) { return; }
+            if (!IsActive || IsLayerHidden || IsInRemoveQueue) { return; }
 
             if (impactQueue != null)
             {
@@ -2545,7 +2587,7 @@ namespace Barotrauma
 #if CLIENT
                 positionBuffer.Clear();
 #endif
-                isActive = false;
+                IsActive = false;
             }
             
         }
@@ -2706,7 +2748,7 @@ namespace Barotrauma
                 impactQueue.Enqueue(impact);
             }
 
-            isActive = true;
+            IsActive = true;
 
             return true;
         }
@@ -3226,7 +3268,9 @@ namespace Barotrauma
                 bool showUiMsg = false;
 #if CLIENT
                 if (!ic.HasRequiredSkills(user, out Skill tempRequiredSkill)) { hasRequiredSkills = false; skillMultiplier = ic.GetSkillMultiplier(); }
-                showUiMsg = user == Character.Controlled && Screen.Selected != GameMain.SubEditorScreen;
+                showUiMsg = user == Character.Controlled && Screen.Selected != GameMain.SubEditorScreen &&
+                    // Only show the UI message of the component that we actually want to interact with
+                    (pickHit && ic.CanBePicked || selectHit && ic.CanBeSelected);
 #endif
                 if (!ignoreRequiredItems && !ic.HasRequiredItems(user, showUiMsg)) { continue; }
                 if ((ic.CanBePicked && pickHit && ic.Pick(user)) ||
@@ -3332,10 +3376,6 @@ namespace Barotrauma
             }
 
             if (condition <= 0.0f) { return; }
-
-            var should = GameMain.LuaCs.Hook.Call<bool?>("item.use", new object[] { this, user, targetLimb, useTarget });
-
-            if (should != null && should.Value) { return; }
         
             bool remove = false;
 
@@ -3367,11 +3407,6 @@ namespace Barotrauma
         public void SecondaryUse(float deltaTime, Character character = null)
         {
             if (condition <= 0.0f) { return; }
-
-            var should = GameMain.LuaCs.Hook.Call<bool?>("item.secondaryUse", this, character);
-
-            if (should != null && should.Value)
-                return;
 
             bool remove = false;
 
@@ -3496,7 +3531,7 @@ namespace Barotrauma
 
             if (body != null)
             {
-                isActive = true;
+                IsActive = true;
                 body.Enabled = true;
                 body.PhysEnabled = true;
                 body.ResetDynamics();
@@ -3636,7 +3671,7 @@ namespace Barotrauma
                     item.body.Enabled = item.body.PhysEnabled = isFirst;
                     if (isFirst)
                     {
-                        item.isActive = true;
+                        item.IsActive = true;
                         item.body.ResetDynamics();
                     }
                 }
@@ -3870,9 +3905,9 @@ namespace Barotrauma
                 }
             }
 
-            var result = GameMain.LuaCs.Hook.Call<bool?>("item.readPropertyChange", this, property, parentObject, allowEditing, sender);
-            if (result != null && result.Value)
-                return;
+            bool? should = null;
+            LuaCsSetup.Instance.EventService.PublishEvent<IEventItemReadPropertyChange>(x => should = x.OnItemReadPropertyChange(this, property, parentObject, allowEditing, sender) ?? should);
+            if (should != null && should.Value) { return; }
 
             Type type = property.PropertyType;
             string logValue = "";
@@ -4338,6 +4373,9 @@ namespace Barotrauma
                 Rotation = Rotation
             };
 
+            if (FlippedX) { newItem.FlipX(relativeToSub: false); }
+            if (FlippedY) { newItem.FlipY(relativeToSub: false); }
+
             float scaleRelativeToPrefab = Scale / Prefab.Scale;
             newItem.Scale *= scaleRelativeToPrefab;
 
@@ -4401,13 +4439,18 @@ namespace Barotrauma
             {
                 foreach (var connection in thisConnectionPanel.Connections)
                 {
-                    var newConnection = newConnectionPanel.Connections.FirstOrDefault(c => c.Name == connection.Name);
-                    if (newConnection == null) { continue; }
                     foreach (var wire in connection.Wires)
                     {
-                        int connectionIndex = wire.Connections.IndexOf(connection);
+                        int wireConnectionIndex = wire.Connections.IndexOf(connection);
                         wire.RemoveConnection(this);
-                        wire.Connect(newConnection, connectionIndex, addNode: false);
+                        int thisConnectionIndex = connection.ConnectionPanel.Connections.IndexOf(connection);
+                        if (thisConnectionIndex < 0 || thisConnectionIndex >= newConnectionPanel.Connections.Count)
+                        {
+                            DebugConsole.AddWarning($"Failed to move a wire from the connection {connection.Name} when swapping the item {Name} with {newItem.Name}. The new item probably does not have the same number of connections as the previous one.");
+                            continue;
+                        }
+                        Connection newConnection = newConnectionPanel.Connections[thisConnectionIndex];
+                        wire.Connect(newConnection, wireConnectionIndex, addNode: false);
                         newConnection.ConnectWire(wire);
                     }
                 }
@@ -4584,8 +4627,6 @@ namespace Barotrauma
                 body.Remove();
                 body = null;
             }
-
-            GameMain.LuaCs.Hook.Call("item.removed", this);
         }
 
         public override void Remove()
@@ -4670,8 +4711,6 @@ namespace Barotrauma
             }
 
             RemoveProjSpecific();
-
-            GameMain.LuaCs.Hook.Call("item.removed", this);
         }
 
         private void RemoveFromLists()

@@ -53,7 +53,7 @@ namespace Barotrauma
         {
             if (!Enabled) { return 1000.0f; }
 
-            Vector2 comparePosition = recipient.SpectatePos == null ? recipient.Character.WorldPosition : recipient.SpectatePos.Value;
+            Vector2 comparePosition = recipient.SpectatePos ?? recipient.Character.WorldPosition;
 
             float distance = Vector2.Distance(comparePosition, WorldPosition);
             if (recipient.Character?.ViewTarget != null)
@@ -199,7 +199,9 @@ namespace Barotrauma
             UInt16 networkUpdateID = msg.ReadUInt16();
             byte inputCount = msg.ReadByte();
 
-            if (AllowInput) { Enabled = true; }
+            // Doesn't seem to work consistently (at least with simulated long loading time 120), because sometimes there's some stun on the character. Anyway, can't see why we'd have to check AllowInput here.
+            //if (AllowInput) { Enabled = true; }
+            Enabled = true;
 
             for (int i = 0; i < inputCount; i++)
             {
@@ -318,11 +320,7 @@ namespace Barotrauma
 
                         if (TalentTree.IsViableTalentForCharacter(this, prefab.Identifier, talentSelection))
                         {
-                            bool? should = GameMain.LuaCs.Hook.Call<bool?>("character.updateTalent", this, prefab, c);
-                            if (should == null)
-                            {
-                                GiveTalent(prefab.Identifier);
-                            }
+                            GiveTalent(prefab.Identifier);
                             talentSelection.Add(prefab.Identifier);
                         }
                     }
@@ -802,9 +800,7 @@ namespace Barotrauma
 
             if (msg.LengthBytes - initialMsgLength >= 255 && restrictMessageSize)
             {
-                string errorMsg = $"Error when writing character spawn data for  \"{Name}\": data exceeded 255 bytes (info: {infoLength}, orders: {ordersLength}, total: {msg.LengthBytes - initialMsgLength})";
-                DebugConsole.ThrowError(errorMsg);
-                GameAnalyticsManager.AddErrorEventOnce("Character.WriteSpawnData:TooMuchData", GameAnalyticsManager.ErrorSeverity.Error, errorMsg);
+                DebugConsole.AddWarning($"Character spawn data for \"{Name}\" exceeded 255 bytes (info: {infoLength}, orders: {ordersLength}, total: {msg.LengthBytes - initialMsgLength})");
             }
 
             TryWriteStatus(msg);
@@ -815,14 +811,12 @@ namespace Barotrauma
 
                 var tempBuffer = new ReadWriteMessage();
                 WriteStatus(tempBuffer, forceAfflictionData: true);
-                if (msgLengthBeforeStatus + tempBuffer.LengthBytes >= 255 && restrictMessageSize && GameMain.LuaCs.Networking.RestrictMessageSize)
+                if (msgLengthBeforeStatus + tempBuffer.LengthBytes >= 255 && restrictMessageSize)
                 { 
                     msg.WriteBoolean(false);
                     if (msgLengthBeforeStatus < 255)
                     {
-                        string errorMsg = $"Error when writing character spawn data for \"{Name}\": status data caused the length of the message to exceed 255 bytes ({msgLengthBeforeStatus} + {tempBuffer.LengthBytes})";
-                        DebugConsole.ThrowError(errorMsg);
-                        GameAnalyticsManager.AddErrorEventOnce("Character.WriteSpawnData:TooMuchDataForStatus", GameAnalyticsManager.ErrorSeverity.Error, errorMsg);
+                        DebugConsole.ThrowError($"Character spawn data for \"{Name}\" caused the length of the message to exceed 255 bytes ({msgLengthBeforeStatus} + {tempBuffer.LengthBytes})");
                     }
                 }
                 else

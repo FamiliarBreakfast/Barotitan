@@ -30,10 +30,22 @@ namespace Barotrauma
             : base(preset)
         {
             Location[] locations = { GameMain.GameSession.StartLocation, GameMain.GameSession.EndLocation };
-            var mission = Mission.LoadRandom(locations, seed, requireCorrectLocationType: false, missionTypes, difficultyLevel: GameMain.NetworkMember.ServerSettings.SelectedLevelDifficulty);
+            float difficulty = GameMain.NetworkMember.ServerSettings.SelectedLevelDifficulty;
+            var mission = Mission.LoadRandom(locations, seed, requireCorrectLocationType: false, missionTypes, difficultyLevel: difficulty);
+            if (mission == null)
+            {
+                DebugConsole.AddWarning(
+                    $"Could not find any missions matching the mission types {string.Join(", ", missionTypes.Select(m => m.Value))} " +
+                    $"and the difficulty {difficulty}. Ignoring the difficulty requirement...");
+                mission = Mission.LoadRandom(locations, seed, requireCorrectLocationType: false, missionTypes);
+            }
             if (mission != null)
             {
                 missions.Add(mission);
+            }
+            else
+            {
+                DebugConsole.AddWarning($"Could not find any missions matching the mission types {string.Join(", ", missionTypes.Select(m => m.Value))}.");
             }
         }
 
@@ -41,6 +53,7 @@ namespace Barotrauma
         {
             foreach (MissionPrefab missionPrefab in missionPrefabs)
             {
+                if (missionPrefab.CampaignOnly) { continue; }
                 if (!missionClasses.ContainsValue(missionPrefab.MissionClass))
                 {
                     throw new InvalidOperationException($"Cannot start gamemode with a {missionPrefab.MissionClass} mission.");
@@ -56,7 +69,7 @@ namespace Barotrauma
         {
             return missionTypes.Where(type => 
                 MissionPrefab.Prefabs.OrderBy(missionPrefab => missionPrefab.UintIdentifier)
-                    .Any(missionPrefab => missionPrefab.Type == type && missionClasses.ContainsValue(missionPrefab.MissionClass)));
+                    .Any(missionPrefab => missionPrefab.Type == type && !missionPrefab.CampaignOnly && missionClasses.ContainsValue(missionPrefab.MissionClass)));
         }
     }
 }

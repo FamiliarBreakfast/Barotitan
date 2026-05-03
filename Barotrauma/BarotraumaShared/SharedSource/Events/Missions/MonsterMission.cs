@@ -64,6 +64,8 @@ namespace Barotrauma
 
             foreach (var monsterElement in prefab.ConfigElement.GetChildElements("monster"))
             {
+                if (GameMain.NetworkMember == null && monsterElement.GetAttributeBool("multiplayeronly", false)) { continue; }
+
                 speciesName = monsterElement.GetAttributeIdentifier("character", Identifier.Empty);
                 int defaultCount = monsterElement.GetAttributeInt("count", -1);
                 if (defaultCount < 0)
@@ -240,7 +242,7 @@ namespace Barotrauma
             }
         }
 
-        protected override bool DetermineCompleted()
+        protected override bool DetermineCompleted(CampaignMode.TransitionType transitionType)
         {
             return state > 0;
         }

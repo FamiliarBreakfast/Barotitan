@@ -1,13 +1,15 @@
 ﻿using Barotrauma.Extensions;
 using Barotrauma.Items.Components;
+using Barotrauma.LuaCs.Events;
+using Barotrauma.Networking;
 using FarseerPhysics;
 using FarseerPhysics.Dynamics;
 using Microsoft.Xna.Framework;
+using MoonSharp.Interpreter;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Xml.Linq;
-using MoonSharp.Interpreter;
 
 namespace Barotrauma
 {
@@ -59,6 +61,8 @@ namespace Barotrauma
 
         private float higherSurface;
         private float lowerSurface;
+
+        private float waterFlowThisFrame;
 
         private Vector2 lerpedFlowForce;
 
@@ -504,6 +508,7 @@ namespace Barotrauma
                         delta = Math.Min(delta, hull1.Volume * Hull.MaxCompress - hull1.WaterVolume);
                         hull1.WaterVolume += delta;
                         hull2.WaterVolume -= delta;
+                        waterFlowThisFrame += delta;
                         if (hull1.WaterVolume > hull1.Volume)
                         {
                             hull1.Pressure = Math.Max(hull1.Pressure, (hull1.Pressure + hull2.Pressure+subOffset.Y) / 2);
@@ -530,7 +535,7 @@ namespace Barotrauma
                         {
                             hull2.Pressure = Math.Max(hull2.Pressure, ((hull1.Pressure-subOffset.Y) + hull2.Pressure) / 2);
                         }
-
+                        waterFlowThisFrame += delta;
                         flowForce = new Vector2(delta * (float)(Timing.Step / deltaTime), 0.0f);
                     }
 
@@ -570,6 +575,7 @@ namespace Barotrauma
                     delta = Math.Max(delta, 0.0f);
                     hull1.WaterVolume += delta;
                     hull2.WaterVolume -= delta;
+                    waterFlowThisFrame += delta;
 
                     flowForce = new Vector2(
                         0.0f,
@@ -598,6 +604,7 @@ namespace Barotrauma
                     }
                     hull1.WaterVolume -= delta;
                     hull2.WaterVolume += delta;
+                    waterFlowThisFrame += delta;
 
                     flowForce = new Vector2(
                         hull1.WaveY[hull1.GetWaveIndex(rect.X)] - hull1.WaveY[hull1.GetWaveIndex(rect.Right)],
@@ -735,6 +742,11 @@ namespace Barotrauma
             return (linkedTo[0] == hull1 ? linkedTo[1] : linkedTo[0]) as Hull;
         }
 
+        public void ResetWaterFlowThisFrame()
+        {
+            waterFlowThisFrame = 0.0f;
+        }
+
         private static readonly HashSet<Hull> checkedHulls = new HashSet<Hull>();
 
         /// <summary>
@@ -759,9 +771,23 @@ namespace Barotrauma
             const float decay = 0.95f;
 
             maxFlow = Math.Min(maxFlow, gap.GetWaterFlowFromOutside(targetHull, deltaTime, ignoreCurrentWater: true)) * decay;
+
+            //if the hulls are not linked (i.e. not parts of the same room), limit the flow a bit
+            var sourceHull = gap.GetOtherLinkedHull(targetHull);
+            if (sourceHull != null && !sourceHull.linkedTo.Contains(targetHull))
+            {
+                maxFlow *= 0.5f;
+            }
+
+            //take the amount of water that has already passed through this gap into account
+            //(if there's multiple leaks to the outside recursively passing water through the same gap, the flow should not go above the maximum flow through this gap)
+            maxFlow -= gap.waterFlowThisFrame;
+
             if (maxFlow <= 0.001f) { return; }
 
             checkedHulls.Add(targetHull);
+
+            gap.waterFlowThisFrame += maxFlow;
 
             //don't multiply by deltatime here, we already did that in GetWaterFlowFromOutside
             targetHull.WaterVolume += maxFlow;
@@ -859,8 +885,8 @@ namespace Barotrauma
                 if (Math.Max(hull1.WorldSurface + hull1.WaveY[hull1.WaveY.Length - 1], hull2.WorldSurface + hull2.WaveY[0]) > WorldRect.Y) { return; }
             }
 
-            var should = GameMain.LuaCs.Hook.Call<bool?>("gapOxygenUpdate", this, hull1, hull2);
-
+            bool? should = null;
+            LuaCsSetup.Instance.EventService.PublishEvent<IEventGapOxygenUpdate>(x => should = x.OnGapOxygenUpdate(this, hull1, hull2) ?? should);
             if (should != null && should.Value) return;
 
             float totalOxygen = hull1.Oxygen + hull2.Oxygen;

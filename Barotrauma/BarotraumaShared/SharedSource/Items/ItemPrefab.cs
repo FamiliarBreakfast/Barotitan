@@ -548,6 +548,8 @@ namespace Barotrauma
 
         public float DeconstructTime { get; private set; }
 
+        public float DeconstructTimeInOutposts { get; private set; }
+
         public bool AllowDeconstruct { get; private set; }
 
         //Containers (by identifiers or tags) that this item should be placed in. These are preferences, which are not enforced.
@@ -813,20 +815,6 @@ namespace Barotrauma
         [Serialize(false, IsPropertySaveable.No)]
         public bool DamagedByMonsters { get; private set; }
 
-        private float impactTolerance;
-        [Serialize(0.0f, IsPropertySaveable.No)]
-        public float ImpactTolerance
-        {
-            get { return impactTolerance; }
-            set { impactTolerance = Math.Max(value, 0.0f); }
-        }
-
-        [Serialize(0.0f, IsPropertySaveable.No, description: "The amount of damage the item takes from impacts. Acts as a multiplier on the strength of the impact. Note that ImpactTolerance must be set for impacts to register.")]
-        public float ImpactDamage { get; set; }
-
-        [Serialize(1.0f, IsPropertySaveable.No, description: "Probability for impacts to register. Defaults to 1. Note that ImpactTolerance must also be set for impacts to register.")]
-        public float ImpactDamageProbability { get; set; }
-
         [Serialize(false, IsPropertySaveable.No, "If true, submarine impacts will trigger OnImpact effects. Only applies to items with a null or non-dynamic physics body - items with dynamic bodies always react to impacts.")]
         public bool ReceiveSubmarineImpacts { get; set; }
 
@@ -1088,6 +1076,7 @@ namespace Barotrauma
             var storePrices = new Dictionary<Identifier, PriceInfo>();
             var preferredContainers = new List<PreferredContainer>();
             DeconstructTime = 1.0f;
+            DeconstructTimeInOutposts = DeconstructTime;
 
             if (ConfigElement.GetAttribute("allowasextracargo") != null)
             {
@@ -1188,6 +1177,7 @@ namespace Barotrauma
                         break;
                     case "deconstruct":
                         DeconstructTime = subElement.GetAttributeFloat("time", 1.0f);
+                        DeconstructTimeInOutposts = subElement.GetAttributeFloat("timeinoutposts", DeconstructTime);
                         AllowDeconstruct = true;
                         RandomDeconstructionOutput = subElement.GetAttributeBool("chooserandom", false);
                         RandomDeconstructionOutputAmount = subElement.GetAttributeInt("amount", 1);

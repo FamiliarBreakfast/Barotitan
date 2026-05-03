@@ -16,15 +16,17 @@ namespace Barotrauma
         {
             public readonly UInt32 DecalId;
             public readonly int SpriteIndex;
-            public Vector2 NormalizedPos;
+            public readonly Vector2 NormalizedPos;
             public readonly float Scale;
+            public readonly float DecalAlpha;
 
-            public RemoteDecal(UInt32 decalId, int spriteIndex, Vector2 normalizedPos, float scale)
+            public RemoteDecal(UInt32 decalId, int spriteIndex, Vector2 normalizedPos, float scale, float decalAlpha)
             {
                 DecalId = decalId;
                 SpriteIndex = spriteIndex;
                 NormalizedPos = normalizedPos;
                 Scale = scale;
+                DecalAlpha = decalAlpha;
             }
         }
 
@@ -183,7 +185,7 @@ namespace Barotrauma
                     networkUpdateTimer += deltaTime;
                     if (networkUpdateTimer > 0.2f)
                     {
-                        if (!pendingSectionUpdates.Any() && !pendingDecalUpdates.Any())
+                        if (!pendingSectorUpdates.Any() && !pendingDecalUpdates.Any())
                         {
                             //these are used to modify the amount water/fire in the hull with console commands
                             //they should be usable even when not controlling a character
@@ -194,11 +196,11 @@ namespace Barotrauma
                             GameMain.Client?.CreateEntityEvent(this, new DecalEventData(decal));
                         }
                         pendingDecalUpdates.Clear();
-                        foreach (int pendingSectionUpdate in pendingSectionUpdates)
+                        foreach (int pendingSectorUpdate in pendingSectorUpdates)
                         {
-                            GameMain.Client?.CreateEntityEvent(this, new BackgroundSectionsEventData(pendingSectionUpdate));
+                            GameMain.Client?.CreateEntityEvent(this, new BackgroundSectionsEventData(pendingSectorUpdate));
                         }
-                        pendingSectionUpdates.Clear();
+                        pendingSectorUpdates.Clear();
                         networkUpdatePending = false;
                         networkUpdateTimer = 0.0f;
                     }
@@ -230,7 +232,12 @@ namespace Barotrauma
             if (!primaryMouseButtonHeld && !secondaryMouseButtonHeld && !doubleClicked && !secondaryDoubleClicked) { return; }
 
             Vector2 position = cam.ScreenToWorld(PlayerInput.MousePosition);
-            Hull hull = FindHull(position);
+            Hull hull =
+                Screen.Selected is { IsEditor: true } ?
+                //use the unoptimized version in the editor to make sure newly placed hulls are found
+                //(FindHull uses the "EntityGrid" which is generated after loading the sub)
+                FindHullUnoptimized(position) :
+                FindHull(position);
 
             if (hull == null || hull.IdFreed) { return; }
             if (EditWater)
@@ -361,7 +368,7 @@ namespace Barotrauma
                 new Rectangle(drawRect.X, -drawRect.Y, rect.Width, rect.Height),
                 GUIStyle.Red * ((100.0f - OxygenPercentage) / 400.0f) * alpha, true, 0, (int)Math.Max(MathF.Ceiling(1.5f / Screen.Selected.Cam.Zoom), 1.0f));
 
-            if (GameMain.DebugDraw)
+            if (GameMain.DebugDraw && Screen.Selected?.Cam is { Zoom: > 0.5f })
             {
                 GUIStyle.SmallFont.DrawString(spriteBatch, "Pressure: " + ((int)pressure - rect.Y).ToString() +
                     " - Oxygen: " + ((int)OxygenPercentage), new Vector2(drawRect.X + 5, -drawRect.Y + 5), Color.White);
@@ -691,7 +698,7 @@ namespace Barotrauma
                     var decal = decalEventData.Decal;
                     int decalIndex = decals.IndexOf(decal);
                     msg.WriteByte((byte)(decalIndex < 0 ? 255 : decalIndex));
-                    msg.WriteRangedSingle(decal.BaseAlpha, 0.0f, 1.0f, 8);
+                    msg.WriteRangedSingle(decal.BaseAlpha, 0f, 1f, 8);
                     break;
                 default:
                     throw new Exception($"Malformed hull event: did not expect {eventData.GetType().Name}");
@@ -747,7 +754,9 @@ namespace Barotrauma
                         float normalizedXPos = msg.ReadRangedSingle(0.0f, 1.0f, 8);
                         float normalizedYPos = msg.ReadRangedSingle(0.0f, 1.0f, 8);
                         float decalScale = msg.ReadRangedSingle(0.0f, 2.0f, 12);
-                        remoteDecals.Add(new RemoteDecal(decalId, spriteIndex, new Vector2(normalizedXPos, normalizedYPos), decalScale));
+                        float decalAlpha = msg.ReadRangedSingle(0f, 1f, 8);
+
+                        remoteDecals.Add(new RemoteDecal(decalId, spriteIndex, new Vector2(normalizedXPos, normalizedYPos), decalScale, decalAlpha));
                     }
                     break;
                 case EventType.BallastFlora:
@@ -799,7 +808,8 @@ namespace Barotrauma
                         decalPosX += Submarine.Position.X;
                         decalPosY += Submarine.Position.Y;
                     }
-                    AddDecal(remoteDecal.DecalId, new Vector2(decalPosX, decalPosY), remoteDecal.Scale, isNetworkEvent: true, spriteIndex: remoteDecal.SpriteIndex);
+                    Decal decal = AddDecal(remoteDecal.DecalId, new Vector2(decalPosX, decalPosY), remoteDecal.Scale, isNetworkEvent: true, spriteIndex: remoteDecal.SpriteIndex);
+                    decal.BaseAlpha = remoteDecal.DecalAlpha;
                 }
                 remoteDecals.Clear();
             }

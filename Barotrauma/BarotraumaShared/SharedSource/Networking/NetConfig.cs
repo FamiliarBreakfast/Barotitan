@@ -40,24 +40,10 @@ namespace Barotrauma.Networking
         public static int MaxEventPacketsPerUpdate = 4;
 
         /// <summary>
-        /// How long the server waits for the clients to get in sync after the round has started before kicking them
+        /// When enabled, uses more lenient Lidgren handshake timeouts (longer connection timeout, more retry attempts).
+        /// Useful for local testing when running multiple instances on the same machine under heavy load.
         /// </summary>
-        public static float RoundStartSyncDuration = 60.0f;
-
-        /// <summary>
-        /// How long the server keeps events that everyone currently synced has received
-        /// </summary>
-        public static float EventRemovalTime = 15.0f;
-
-        /// <summary>
-        /// If a client hasn't received an event that has been succesfully sent to someone within this time, they get kicked
-        /// </summary>
-        public static float OldReceivedEventKickTime = 10.0f;
-
-        /// <summary>
-        /// If a client hasn't received an event after this time, they get kicked
-        /// </summary>
-        public static float OldEventKickTime = 30.0f;
+        public static bool UseLenientHandshake;
 
         /// <summary>
         /// Interpolates the positional error of a physics body towards zero.

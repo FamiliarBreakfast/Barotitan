@@ -664,6 +664,10 @@ namespace Barotrauma
                 }
             }
 
+            foreach (Gap gap in Gap.GapList)
+            {
+                gap.ResetWaterFlowThisFrame();
+            }
             //update gaps in random order, because otherwise in rooms with multiple gaps
             //the water/air will always tend to flow through the first gap in the list,
             //which may lead to weird behavior like water draining down only through
@@ -693,7 +697,7 @@ namespace Barotrauma
                 {
                     foreach (Item item in Item.ItemList)
                     {
-                        if (GameMain.LuaCs.Game.UpdatePriorityItems.Contains(item)) { continue; }
+                        if (LuaCsSetup.Instance.Game.UpdatePriorityItems.Contains(item)) { continue; }
                         lastUpdatedItem = item;
                         item.Update(deltaTime * MapEntityUpdateInterval, cam);
                     }
@@ -708,7 +712,7 @@ namespace Barotrauma
                 }
             }
 
-            foreach (var item in GameMain.LuaCs.Game.UpdatePriorityItems)
+            foreach (var item in LuaCsSetup.Instance.Game.UpdatePriorityItems)
             {
                 if (item.Removed) continue;
 
@@ -822,6 +826,7 @@ namespace Barotrauma
                         ItemPrefab itemPrefab = ItemPrefab.Find(name, identifier);
                         if (itemPrefab != null)
                         {
+                            DebugConsole.AddWarning($"Could not find a structure with the identifier {identifier}, but there's a matching item with the identifier. Converting to an item.");
                             t = typeof(Item);
                         }
                     }

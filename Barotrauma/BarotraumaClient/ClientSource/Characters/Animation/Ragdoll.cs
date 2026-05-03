@@ -35,11 +35,7 @@ namespace Barotrauma
                     CharacterStateInfo serverPos = character.MemState.Last();
                     if (!character.isSynced)
                     {
-                        SetPosition(serverPos.Position, lerp: false);
-                        Collider.LinearVelocity = Vector2.Zero;
-                        character.MemLocalState.Clear();
-                        character.LastNetworkUpdateID = serverPos.ID;
-                        character.isSynced = true;
+                        SyncPosition(serverPos);
                         return;
                     }
 
@@ -198,11 +194,7 @@ namespace Barotrauma
 
                 if (!character.isSynced)
                 {
-                    SetPosition(serverPos.Position, lerp: false);
-                    Collider.LinearVelocity = Vector2.Zero;
-                    character.MemLocalState.Clear();
-                    character.LastNetworkUpdateID = serverPos.ID;
-                    character.isSynced = true;
+                    SyncPosition(serverPos);
                     return;
                 }
 
@@ -318,6 +310,15 @@ namespace Barotrauma
 
                 if (character.MemLocalState.Count > 120) { character.MemLocalState.RemoveRange(0, character.MemLocalState.Count - 120); }
                 character.MemState.Clear();
+            }
+            
+            void SyncPosition(CharacterStateInfo serverPos)
+            {
+                SetPosition(serverPos.Position, lerp: false);
+                Collider.LinearVelocity = Vector2.Zero;
+                character.MemLocalState.Clear();
+                character.LastNetworkUpdateID = serverPos.ID;
+                character.isSynced = true;
             }
         }
 
@@ -546,7 +547,7 @@ namespace Barotrauma
             }
         }
 
-        public void Draw(SpriteBatch spriteBatch, Camera cam)
+        public void Draw(SpriteBatch spriteBatch, Camera cam, bool onlyDrawSeveredLimbs)
         {
             if (simplePhysicsEnabled) { return; }
 
@@ -572,8 +573,12 @@ namespace Barotrauma
             {
                 foreach (Limb limb in limbs) { limb.ActiveSprite.Depth += depthOffset; }
             }
-            for (int i = 0; i < limbs.Length; i++)
+            for (int i = 0; i < inversedLimbDrawOrder.Length; i++)
             {
+                if (onlyDrawSeveredLimbs && !inversedLimbDrawOrder[i].IsSevered) 
+                {
+                    continue; 
+                }
                 inversedLimbDrawOrder[i].Draw(spriteBatch, cam, color);
             }
             if (!MathUtils.NearlyEqual(depthOffset, 0.0f))
@@ -657,7 +662,7 @@ namespace Barotrauma
 
         public void DebugDraw(SpriteBatch spriteBatch)
         {
-            if (!GameMain.DebugDraw || !character.Enabled) { return; }
+            if (!GameMain.DebugDraw || !character.Enabled || Screen.Selected?.Cam is { Zoom: < 0.2f }) { return; }
             if (simplePhysicsEnabled) { return; }
 
             foreach (Limb limb in Limbs)

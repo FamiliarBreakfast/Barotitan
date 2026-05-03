@@ -779,7 +779,10 @@ namespace Barotrauma
         /// </summary>
         private readonly HashSet<(Identifier affliction, float strength)> requiredAfflictions;
 
-        public float AfflictionMultiplier = 1.0f;
+        /// <summary>
+        /// Multiplier used on afflictions caused by the status effect, except ones that <see cref="AfflictionPrefab.AffectedByAttackMultipliers">have been configured to not be affected by attack multipliers.
+        /// </summary>
+        public float AttackMultiplier = 1.0f;
 
         public List<Affliction> Afflictions
         {
@@ -800,6 +803,12 @@ namespace Barotrauma
         }
 
         public readonly List<(Identifier AfflictionIdentifier, float ReduceAmount)> ReduceAffliction = new List<(Identifier affliction, float amount)>();
+
+        /// <summary>
+        /// Normally using a StatusEffect to heal someone's afflictions gives an amount of medical skill relative to the amount of health the target regained.
+        /// This can be used to disable that behavior, in case there are items that "heal" someone without being considered medical items or something that should give medical skill.
+        /// </summary>
+        public readonly bool CanGiveMedicalSkill;
 
         private readonly List<Identifier> talentTriggers;
         private readonly List<int> giveExperiences;
@@ -833,6 +842,12 @@ namespace Barotrauma
         /// for example emitting particles or explosions, spawning something or playing sounds.
         /// </summary>
         public Vector2 Offset { get; private set; }
+
+        /// <summary>
+        /// Should <see cref="Offset"/> be rotated, flipped and scaled based on the entity that this effect is executed by?
+        /// Currently only supports status effects in items.
+        /// </summary>
+        public bool OffsetCopiesEntityTransform { get; private set; }
 
         /// <summary>
         /// An random offset (in a random direction) added to the position of the effect is executed at. Only relevant if the effect does something where position matters,
@@ -894,6 +909,7 @@ namespace Barotrauma
 
             Range = element.GetAttributeFloat("range", 0.0f);
             Offset = element.GetAttributeVector2("offset", Vector2.Zero);
+            OffsetCopiesEntityTransform = element.GetAttributeBool(nameof(OffsetCopiesEntityTransform), false);
             RandomOffset = element.GetAttributeFloat("randomoffset", 0.0f);
             string[] targetLimbNames = element.GetAttributeStringArray("targetlimb", null) ?? element.GetAttributeStringArray("targetlimbs", null);
             if (targetLimbNames != null)
@@ -905,6 +921,8 @@ namespace Barotrauma
                 }
                 if (targetLimbs.Count > 0) { this.targetLimbs = targetLimbs.ToArray(); }
             }
+
+            CanGiveMedicalSkill = element.GetAttributeBool(nameof(CanGiveMedicalSkill), true);
 
             SeverLimbsProbability = MathHelper.Clamp(element.GetAttributeFloat(0.0f, "severlimbs", "severlimbsprobability"), 0.0f, 1.0f);
             randomCondition = element.GetAttributeVector2("randomcondition", Vector2.Zero);
@@ -1720,6 +1738,7 @@ namespace Barotrauma
         protected Vector2 GetPosition(Entity entity, IReadOnlyList<ISerializableEntity> targets, Vector2? worldPosition = null)
         {
             Vector2 position = worldPosition ?? (entity == null || entity.Removed ? Vector2.Zero : entity.WorldPosition);
+
             if (worldPosition == null)
             {
                 if (entity is Character character && !character.Removed && targetLimbs != null)
@@ -1756,9 +1775,22 @@ namespace Barotrauma
                         }
                     }
                 }
-
             }
-            position += Offset;
+
+            Vector2 offset = Offset;
+
+            if (OffsetCopiesEntityTransform)
+            {
+                if (entity is Item item)
+                {
+                    offset *= item.Scale;
+                    if (item.FlippedX) { offset.X *= -1; }
+                    if (item.FlippedY) { offset.Y *= -1; }
+                    offset = Vector2.Transform(offset, Matrix.CreateRotationZ(-item.RotationRad));
+                }
+            }
+
+            position += offset;
             position += Rand.Vector(Rand.Range(0.0f, RandomOffset));
             return position;
         }
@@ -1776,14 +1808,14 @@ namespace Barotrauma
             {
                 if (entity is Item item)
                 {
-                    var result = GameMain.LuaCs.Hook.Call<bool?>("statusEffect.apply." + item.Prefab.Identifier, this, deltaTime, entity, targets, worldPosition);
+                    var result = LuaCsSetup.Instance.Hook.Call<bool?>("statusEffect.apply." + item.Prefab.Identifier, this, deltaTime, entity, targets, worldPosition);
 
                     if (result != null && result.Value) { return; }
                 }
 
                 if (entity is Character character)
                 {
-                    var result = GameMain.LuaCs.Hook.Call<bool?>("statusEffect.apply." + character.SpeciesName, this, deltaTime, entity, targets, worldPosition);
+                    var result = LuaCsSetup.Instance.Hook.Call<bool?>("statusEffect.apply." + character.SpeciesName, this, deltaTime, entity, targets, worldPosition);
 
                     if (result != null && result.Value) { return; }
                 }
@@ -1793,7 +1825,7 @@ namespace Barotrauma
             {
                 foreach ((string hookName, ContentXElement element) in luaHook)
                 {
-                    var result = GameMain.LuaCs.Hook.Call<bool?>(hookName, this, deltaTime, entity, targets, worldPosition, element);
+                    var result = LuaCsSetup.Instance.Hook.Call<bool?>(hookName, this, deltaTime, entity, targets, worldPosition, element);
 
                     if (result != null && result.Value) { return; }
                 }
@@ -2018,7 +2050,7 @@ namespace Barotrauma
                         {
                             float healthChange = targetCharacter.Vitality - prevVitality;
                             targetCharacter.AIController?.OnHealed(healer: user, healthChange);
-                            if (user != null)
+                            if (user != null && CanGiveMedicalSkill)
                             {
                                 targetCharacter.TryAdjustHealerSkill(user, healthChange);
 #if SERVER
@@ -2082,24 +2114,9 @@ namespace Barotrauma
                 {
                     LocalizedString messageToSay = TextManager.Get(forceSayIdentifier).Fallback(forceSayIdentifier.Value);
 
-                    if (!messageToSay.IsNullOrEmpty() && target is Character targetCharacter && targetCharacter.SpeechImpediment < 100.0f && !targetCharacter.IsDead)
+                    if (!messageToSay.IsNullOrEmpty() && target is Character targetCharacter)
                     {
-                        ChatMessageType messageType = ChatMessageType.Default;
-                        bool canUseRadio = ChatMessage.CanUseRadio(targetCharacter, out WifiComponent radio);
-                        if (canUseRadio && forceSayInRadio)
-                        {
-                            messageType = ChatMessageType.Radio;
-                        }
-#if SERVER
-                        GameMain.Server?.SendChatMessage(messageToSay.Value, messageType, senderClient: null, targetCharacter);
-#elif CLIENT
-                        //no need to create the message when playing as a client, the server will send it to us
-                        if (isNotClient)
-                        {                            
-                            AIChatMessage message = new AIChatMessage(messageToSay.Value, messageType);
-                            targetCharacter.SendSinglePlayerMessage(message, canUseRadio, radio);
-                        }
-#endif
+                        targetCharacter.ForceSay(messageToSay, forceSayInRadio);
                     }
                 }
 
@@ -2251,7 +2268,10 @@ namespace Barotrauma
                             inheritedTeam = entity switch
                             {
                                 Character c => c.TeamID,
-                                Item it => it.GetRootInventoryOwner() is Character owner ? owner.TeamID : GetTeamFromSubmarine(it),
+                                Item it => 
+                                    (it.GetRootInventoryOwner() as Character ?? it.PreviousParentInventory?.Owner as Character) is { } owner ? 
+                                        owner.TeamID : 
+                                        GetTeamFromSubmarine(it),
                                 MapEntity e => GetTeamFromSubmarine(e),
                                 _ => null
                                 // Default to Team1, when we can't deduce the team (for example when spawning outside the sub AND character inventory).
@@ -2689,16 +2709,6 @@ namespace Barotrauma
                         {
                             Entity.Spawner.AddItemToSpawnQueue(chosenItemSpawnInfo.ItemPrefab, inventory, spawnIfInventoryFull: chosenItemSpawnInfo.SpawnIfInventoryFull, onSpawned: item =>
                             {
-                                if (chosenItemSpawnInfo.Equip && entity is Character character && character.Inventory != null)
-                                {
-                                    //if the item is both pickable and wearable, try to wear it instead of picking it up
-                                    List<InvSlotType> allowedSlots =
-                                       item.GetComponents<Pickable>().Count() > 1 ?
-                                       new List<InvSlotType>(item.GetComponent<Wearable>()?.AllowedSlots ?? item.GetComponent<Pickable>().AllowedSlots) :
-                                       new List<InvSlotType>(item.AllowedSlots);
-                                    allowedSlots.Remove(InvSlotType.Any);
-                                    character.Inventory.TryPutItem(item, null, allowedSlots);
-                                }
                                 OnItemSpawned(item, chosenItemSpawnInfo);
                             });
                         }
@@ -2767,6 +2777,17 @@ namespace Barotrauma
             }
             void OnItemSpawned(Item newItem, ItemSpawnInfo itemSpawnInfo)
             {
+                if (itemSpawnInfo.Equip && newItem.ParentInventory is CharacterInventory characterInventory && characterInventory.Owner is Character character)
+                {
+                    //if the item is both pickable and wearable, try to wear it instead of picking it up
+                    List<InvSlotType> allowedSlots =
+                       newItem.GetComponents<Pickable>().Count() > 1 ?
+                       new List<InvSlotType>(newItem.GetComponent<Wearable>()?.AllowedSlots ?? newItem.GetComponent<Pickable>().AllowedSlots) :
+                       new List<InvSlotType>(newItem.AllowedSlots);
+                    allowedSlots.Remove(InvSlotType.Any);
+                    character.Inventory.TryPutItem(newItem, null, allowedSlots);
+                }
+
                 newItem.Condition = newItem.MaxCondition * itemSpawnInfo.Condition;
                 if (itemSpawnInfo.InheritEventTags)
                 {
@@ -2922,7 +2943,10 @@ namespace Barotrauma
                                 targetCharacter.AIController?.OnHealed(healer: element.User, healthChange);
                                 if (element.User != null)
                                 {
-                                    targetCharacter.TryAdjustHealerSkill(element.User, healthChange);
+                                    if (element.Parent.CanGiveMedicalSkill)
+                                    {
+                                        targetCharacter.TryAdjustHealerSkill(element.User, healthChange);
+                                    }
 #if SERVER
                                     GameMain.Server.KarmaManager.OnCharacterHealthChanged(targetCharacter, element.User, -healthChange, 0.0f);
 #endif
@@ -2966,12 +2990,16 @@ namespace Barotrauma
                     afflictionMultiplier *= 1 + user.GetStatValue(StatTypes.PoisonMultiplier);
                 }
             }
-            return afflictionMultiplier * AfflictionMultiplier;
+            return afflictionMultiplier;
         }
 
         private Affliction GetMultipliedAffliction(Affliction affliction, Entity entity, Character targetCharacter, float deltaTime, bool multiplyByMaxVitality)
         {
             float afflictionMultiplier = GetAfflictionMultiplier(entity, targetCharacter, deltaTime);
+            if (affliction.AffectedByAttackMultipliers)
+            {
+                afflictionMultiplier *= AttackMultiplier;
+            }
             if (multiplyByMaxVitality)
             {
                 afflictionMultiplier *= targetCharacter.MaxVitality / 100f;
@@ -3003,6 +3031,10 @@ namespace Barotrauma
             return affliction;
         }
 
+        /// <summary>
+        /// Register results of the afflictions that the status effect applied on the target (e.g. buffs), giving the user medical skill and indicating the treatment in the UI.
+        /// The effects of reducing afflictions are handled when going through the <see cref="ReduceAffliction">ReduceAffliction list</see>.
+        /// </summary>
         private void RegisterTreatmentResults(Character user, Item item, Limb limb, Affliction affliction, AttackResult result)
         {
             if (item == null) { return; }
@@ -3019,12 +3051,13 @@ namespace Barotrauma
                     if (type == ActionType.OnUse || type == ActionType.OnSuccess)
                     {
                         limbAffliction.AppliedAsSuccessfulTreatmentTime = Timing.TotalTime;
-                        limb.character.TryAdjustHealerSkill(user, affliction: resultAffliction);
+                        if (CanGiveMedicalSkill) { limb.character.TryAdjustHealerSkill(user, affliction: resultAffliction); }
+                       
                     }
                     else if (type == ActionType.OnFailure)
                     {
                         limbAffliction.AppliedAsFailedTreatmentTime = Timing.TotalTime;
-                        limb.character.TryAdjustHealerSkill(user, affliction: resultAffliction);
+                        if (CanGiveMedicalSkill) { limb.character.TryAdjustHealerSkill(user, affliction: resultAffliction); }                       
                     }
                 }
             }

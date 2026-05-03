@@ -409,10 +409,10 @@ namespace Barotrauma.Items.Components
                         loopingSoundChannel.Looping = true;
                         loopingSoundChannel.Near = loopingSound.Range * 0.4f;
                         loopingSoundChannel.Far = loopingSound.Range;
-                    }
-                    if (loopingSound.RoundSound.Stream)
-                    {
-                        loopingSoundChannel.StreamSeekPos = loopingSound.RoundSound.LastStreamSeekPos;
+                        if (loopingSound.RoundSound.Stream)
+                        {
+                            loopingSoundChannel.StreamSeekPos = loopingSound.RoundSound.LastStreamSeekPos;
+                        }
                     }
                 }
             }
@@ -487,7 +487,21 @@ namespace Barotrauma.Items.Components
             return 0.0f;
         }
         
-        public virtual bool ShouldDrawHUD(Character character)
+        public bool ShouldDrawHUD(Character character)
+        {
+            if (Character.Controlled?.SelectedItem != null)
+            {
+                Controller controller = item.GetComponent<Controller>();
+                if (controller != null && controller.User == Character.Controlled && controller.HideAllItemComponentHUDs)
+                {
+                    return false;
+                }
+            }
+
+            return ShouldDrawHUDComponentSpecific(character);
+        }
+
+        protected virtual bool ShouldDrawHUDComponentSpecific(Character character)
         {
             return true;
         }

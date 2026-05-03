@@ -434,20 +434,13 @@ namespace Barotrauma.Items.Components
 
             foreach (FabricationRecipe fi in fabricationRecipes.Values)
             {
-                RichString recipeTooltip = RichString.Rich(fi.TargetItem.Description);
-                if (fi.RequiresRecipe)
-                {
-                    recipeTooltip += "\n\n" + $"‖color:{XMLExtensions.ToStringHex(GUIStyle.Red)}‖{TextManager.Get("fabricatorrequiresrecipe")}‖color:end‖";
-                }
-                recipeTooltip = RichString.Rich(recipeTooltip);
-
                 var frame = new GUIFrame(new RectTransform(new Point(itemList.Content.Rect.Width, (int)(40 * GUI.yScale)), itemList.Content.RectTransform), style: null)
                 {
                     UserData = fi,
                     HoverColor = Color.Gold * 0.2f,
                     SelectedColor = Color.Gold * 0.5f,
-                    ToolTip = recipeTooltip
                 };
+                SetRecipeTooltip(frame, fi);
                 
                 var container = new GUILayoutGroup(new RectTransform(Vector2.One, frame.RectTransform),
                     childAnchor: Anchor.CenterLeft, isHorizontal: true) { RelativeSpacing = 0.02f };
@@ -459,7 +452,7 @@ namespace Barotrauma.Items.Components
                         itemIcon, scaleToFit: true)
                     {
                         Color = itemIcon == fi.TargetItem.Sprite ? fi.TargetItem.SpriteColor : fi.TargetItem.InventoryIconColor,
-                        ToolTip = recipeTooltip
+                        CanBeFocused = false
                     };
                 }
 
@@ -468,7 +461,7 @@ namespace Barotrauma.Items.Components
                 {
                     Padding = Vector4.Zero,
                     AutoScaleVertical = true,
-                    ToolTip = recipeTooltip
+                    CanBeFocused = false
                 };
 
                 new GUITextBlock(new RectTransform(new Vector2(0.85f, 1f), frame.RectTransform, Anchor.BottomRight), 
@@ -477,6 +470,20 @@ namespace Barotrauma.Items.Components
                     UserData = nameof(FabricationLimitReachedText),
                     Visible = false
                 };
+            }
+        }
+
+        private void SetRecipeTooltip(GUIComponent component, FabricationRecipe recipe)
+        {
+            if (!recipe.RequiresRecipe)
+            {
+                component.ToolTip = RichString.Rich(recipe.TargetItem.Description);
+            }
+            else
+            {
+                component.ToolTip = AnyOneHasRecipeForItem(Character.Controlled, recipe.TargetItem) ?
+                    RichString.Rich(recipe.TargetItem.Description + "\n\n" + $"‖color:{XMLExtensions.ToStringHex(GUIStyle.Green)}‖{TextManager.Get("unlockedrecipe.true")}‖color:end‖") :
+                    RichString.Rich(recipe.TargetItem.Description + "\n\n" + $"‖color:{XMLExtensions.ToStringHex(GUIStyle.Red)}‖{TextManager.Get("fabricatorrequiresrecipe")}‖color:end‖");
             }
         }
 
@@ -894,10 +901,11 @@ namespace Barotrauma.Items.Components
                 if (outputContainer.Inventory.IsEmpty())
                 {
                     var itemIcon = targetItem.TargetItem.InventoryIcon ?? targetItem.TargetItem.Sprite;
+                    Color iconColor = itemIcon == targetItem.TargetItem.Sprite ? targetItem.TargetItem.SpriteColor : targetItem.TargetItem.InventoryIconColor;
                     itemIcon.Draw(
                         spriteBatch,
                         slotRect.Center.ToVector2(),
-                        color: Color.Lerp(targetItem.TargetItem.InventoryIconColor, Color.TransparentBlack, 0.5f),
+                        color: Color.Lerp(iconColor, Color.TransparentBlack, 0.5f),
                         scale: Math.Min(slotRect.Width / itemIcon.size.X, slotRect.Height / itemIcon.size.Y) * 0.9f);
                 }
             }
@@ -928,15 +936,23 @@ namespace Barotrauma.Items.Components
                     }
                 }
 
-                if (recipe.RequiresRecipe && recipe.HideIfNoRecipe)
+                if (recipe.RequiresRecipe)
                 {
-                    if (Character.Controlled != null)
+                    if (recipe.HideIfNoRecipe)
                     {
-                        if (!AnyOneHasRecipeForItem(Character.Controlled, recipe.TargetItem))
+                        bool anyOneHasRecipe = AnyOneHasRecipeForItem(Character.Controlled, recipe.TargetItem);
+                        if (Character.Controlled != null)
                         {
-                            child.Visible = false;
-                            continue;
+                            if (!anyOneHasRecipe)
+                            {
+                                child.Visible = false;
+                                continue;
+                            }
                         }
+                    }
+                    else
+                    {
+                        SetRecipeTooltip(child, recipe);
                     }
                 }
 
@@ -1132,24 +1148,36 @@ namespace Barotrauma.Items.Components
 
             if (!selectedRecipe.TargetItem.Description.IsNullOrEmpty())
             {
+                RichString richDescription = RichString.Rich(selectedRecipe.TargetItem.Description);
+
                 var descriptionParent = largeUI ? paddedReqFrame : paddedFrame;
                 var description = new GUITextBlock(new RectTransform(new Vector2(1.0f, 0.0f), descriptionParent.RectTransform),
-                    RichString.Rich(selectedRecipe.TargetItem.Description),
+                    richDescription,
                     font: GUIStyle.SmallFont, wrap: true);
                 if (!largeUI)
                 {
                     description.Padding = new Vector4(0, description.Padding.Y, description.Padding.Z, description.Padding.W);
                 }
 
-                while (description.Rect.Height + nameBlock.Rect.Height > descriptionParent.Rect.Height)
+                while (description.Rect.Height + nameBlock.Rect.Height > descriptionParent.Rect.Height / 2)
                 {
                     var lines = description.WrappedText.Split('\n');
                     if (lines.Count <= 1) { break; }
-                    var newString = string.Join('\n', lines.Take(lines.Count - 1));
-                    description.Text = newString.Substring(0, newString.Length - 4) + "...";
+                    string newString = string.Join('\n', lines.Take(lines.Count - 1));
+
+                    if (newString.Length > 4)
+                    {
+                        description.Text = newString.Substring(0, newString.Length - 4) + "...";
+                    }
+                    else
+                    {
+                        description.Text = newString + "...";
+                    }
+
                     description.CalculateHeightFromText();
-                    description.ToolTip = selectedRecipe.TargetItem.Description;
+                    description.ToolTip = richDescription;
                 }
+                description.Text.RetrieveValue();
             }
 
             IEnumerable<Skill> inadequateSkills = Enumerable.Empty<Skill>();
@@ -1328,7 +1356,10 @@ namespace Barotrauma.Items.Components
 
                     var childContainer = child.GetChild<GUILayoutGroup>();
                     childContainer.GetChild<GUITextBlock>().TextColor = baseColor * (canBeFabricated ? 1.0f : 0.5f);
-                    childContainer.GetChild<GUIImage>().Color = recipe.TargetItem.InventoryIconColor * (canBeFabricated ? 1.0f : 0.5f);
+
+                    GUIImage icon = childContainer.GetChild<GUIImage>();
+                    Color iconColor = icon.Sprite == recipe.TargetItem.Sprite ? recipe.TargetItem.SpriteColor : recipe.TargetItem.InventoryIconColor;
+                    childContainer.GetChild<GUIImage>().Color = iconColor * (canBeFabricated ? 1.0f : 0.5f);
 
                     var limitReachedText = child.FindChild(nameof(FabricationLimitReachedText));
                     limitReachedText.Visible = !canBeFabricated && fabricationLimits.TryGetValue(recipe.RecipeHash, out int amount) && amount <= 0;

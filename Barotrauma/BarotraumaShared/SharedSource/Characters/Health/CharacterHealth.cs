@@ -1,17 +1,19 @@
 ﻿using Barotrauma.Abilities;
+using Barotrauma.Abilities;
 using Barotrauma.Extensions;
+using Barotrauma.Extensions;
+using Barotrauma.LuaCs.Events;
+using Barotrauma.Networking;
 using Barotrauma.Networking;
 using Microsoft.Xna.Framework;
+using MoonSharp.Interpreter;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Globalization;
 using System.Linq;
 using System.Xml.Linq;
-using Barotrauma.Networking;
-using Barotrauma.Extensions;
-using System.Globalization;
-using MoonSharp.Interpreter;
-using Barotrauma.Abilities;
+using static OneOf.Types.TrueFalseOrNull;
 
 namespace Barotrauma
 {
@@ -307,6 +309,19 @@ namespace Barotrauma
             }
 
             InitProjSpecific(element, character);
+        }
+
+        public void CheckForErrors()
+        {
+            for (int i = 0; i < limbHealths.Count; i++)
+            {
+                if (Character.AnimController.Limbs.None(l => l.HealthIndex == i))
+                {
+                    DebugConsole.AddWarning(
+                        $"Potential error in character \"{Character.Prefab.Identifier}\": none of the limbs have been set to use the LimbHealth #{i}, and it will do nothing. "
+                        + "Did you forget to set the HealthIndex values of the limbs?", contentPackage: Character.ContentPackage);
+                }
+            }
         }
 
         private void InitIrremovableAfflictions()
@@ -642,7 +657,8 @@ namespace Barotrauma
                 return;
             }
 
-            var should = GameMain.LuaCs.Hook.Call<bool?>("character.applyDamage", this, attackResult, hitLimb, allowStacking);
+            bool? should = null;
+            LuaCsSetup.Instance.EventService.PublishEvent<IEventCharacterApplyDamage>(x => should = x.OnCharacterApplyDamage(this, attackResult, hitLimb, allowStacking) ?? should);
             if (should != null && should.Value) { return; }
             
             foreach (Affliction newAffliction in attackResult.Afflictions)
@@ -813,10 +829,9 @@ namespace Barotrauma
             if (newAffliction.Prefab.TargetSpecies.Any() && newAffliction.Prefab.TargetSpecies.None(s => s == Character.SpeciesName)) { return; }
             if (Character.Params.Health.ImmunityIdentifiers.Contains(newAffliction.Identifier)) { return; }
 
-            var should = GameMain.LuaCs.Hook.Call<bool?>("character.applyAffliction", this, limbHealth, newAffliction, allowStacking);
-
-            if (should != null && should.Value)
-                return;
+            bool? should = null;
+            LuaCsSetup.Instance.EventService.PublishEvent<IEventCharacterApplyAffliction>(x => should = x.OnCharacterApplyAffliction(this, limbHealth, newAffliction, allowStacking) ?? should);
+            if (should != null && should.Value) { return; }
 
             Affliction existingAffliction = null;
             foreach ((Affliction affliction, LimbHealth value) in afflictions)
@@ -828,9 +843,21 @@ namespace Barotrauma
                 }
             }
 
+            float modifiedStrength = newAffliction.Strength * (100.0f / MaxVitality) * (1f - GetResistance(newAffliction.Prefab, limbType));
+            if (newAffliction.Prefab.AfflictionType == AfflictionPrefab.StunType)
+            {
+                //don't allow stunning for less than one frame
+                //fixes monsters/enemies that take some minuscule amount of stun from a weapon still being noticeable affected by the stun, 
+                //because even a one-frame stun briefly disables the animations and makes the character stop
+                if (modifiedStrength < Timing.Step && Stun <= 0.0f)
+                {
+                    return;
+                }
+            }
+
             if (existingAffliction != null)
             {
-                float newStrength = newAffliction.Strength * (100.0f / MaxVitality) * (1f - GetResistance(existingAffliction.Prefab, limbType));
+                float newStrength = modifiedStrength;
                 if (allowStacking)
                 {
                     // Add the existing strength
@@ -852,7 +879,7 @@ namespace Barotrauma
             //create a new instance of the affliction to make sure we don't use the same instance for multiple characters
             //or modify the affliction instance of an Attack or a StatusEffect
             var copyAffliction = newAffliction.Prefab.Instantiate(
-                Math.Min(newAffliction.Prefab.MaxStrength, newAffliction.Strength * (100.0f / MaxVitality) * (1f - GetResistance(newAffliction.Prefab, limbType))),
+                Math.Min(newAffliction.Prefab.MaxStrength, modifiedStrength),
                 newAffliction.Source);
             afflictions.Add(copyAffliction, limbHealth);
             AchievementManager.OnAfflictionReceived(copyAffliction, Character);
@@ -1132,20 +1159,38 @@ namespace Barotrauma
 
         // We need to use another list of the afflictions when we call the status effects triggered by afflictions,
         // because those status effects may add or remove other afflictions while iterating the collection.
-        private readonly List<Affliction> afflictionsCopy = new List<Affliction>();
+        private readonly List<Affliction> afflictionsCopy = [];
+
+        private bool isApplyingAfflictionStatusEffects;
         public void ApplyAfflictionStatusEffects(ActionType type)
         {
-            afflictionsCopy.Clear();
-            afflictionsCopy.AddRange(afflictions.Keys);
-            foreach (Affliction affliction in afflictionsCopy)
+            if (isApplyingAfflictionStatusEffects)
             {
-                affliction.ApplyStatusEffects(type, 1.0f, this, targetLimb: GetAfflictionLimb(affliction));
+                //pretty hacky: if we're already in the process of applying afflictions' status effects
+                //(i.e. calling this method caused some additional afflictions to appear and trigger status effects)
+                //let's instantiate a new list so we don't end up modifying afflictionsCopy while enumerating it
+                foreach (Affliction affliction in afflictions.Keys.ToList())
+                {
+                    affliction.ApplyStatusEffects(type, 1.0f, this, targetLimb: GetAfflictionLimb(affliction));
+                }
+            }
+            else
+            {
+                isApplyingAfflictionStatusEffects = true;
+                afflictionsCopy.Clear();
+                afflictionsCopy.AddRange(afflictions.Keys);
+                isApplyingAfflictionStatusEffects = true;
+                foreach (Affliction affliction in afflictionsCopy)
+                {
+                    affliction.ApplyStatusEffects(type, 1.0f, this, targetLimb: GetAfflictionLimb(affliction));
+                }
+                isApplyingAfflictionStatusEffects = false;
             }
         }
 
         public (CauseOfDeathType type, Affliction affliction) GetCauseOfDeath()
         {
-            List<Affliction> currentAfflictions = GetAllAfflictions(true);
+            IEnumerable<Affliction> currentAfflictions = GetAllAfflictions(true);
 
             Affliction strongestAffliction = null;
             float largestStrength = 0.0f;
@@ -1168,7 +1213,7 @@ namespace Barotrauma
         }
 
         private readonly List<Affliction> allAfflictions = new List<Affliction>();
-        private List<Affliction> GetAllAfflictions(bool mergeSameAfflictions, Func<Affliction, bool> predicate = null)
+        private IEnumerable<Affliction> GetAllAfflictions(bool mergeSameAfflictions, Func<Affliction, bool> predicate = null)
         {
             allAfflictions.Clear();
             if (!mergeSameAfflictions)

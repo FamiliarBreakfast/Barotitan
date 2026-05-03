@@ -98,18 +98,11 @@ namespace Barotrauma
                 vitality -= affliction.GetVitalityDecrease(character.CharacterHealth, strength) / character.MaxVitality * 100;
                 if (affliction.Strength > affliction.Prefab.TreatmentThreshold)
                 {
-                    if (affliction.Prefab.AfflictionType == AfflictionPrefab.ParalysisType)
+                    //vitality loss is not required to treat this affliction -> evaluate the strength of the affliction too
+                    if (!affliction.Prefab.VitalityLossRequiredForTreatment)
                     {
                         vitality -= affliction.Strength;
                     }
-                    else if (affliction.Prefab.AfflictionType == AfflictionPrefab.PoisonType)
-                    {
-                        vitality -= affliction.Strength;
-                    }
-                    else if (affliction.Prefab == AfflictionPrefab.HuskInfection)
-                    {
-                        vitality -= affliction.Strength;
-                    }   
                 }
             }
             return Math.Clamp(vitality, 0, 100);
@@ -143,7 +136,7 @@ namespace Barotrauma
         public static bool IsValidTarget(Character target, Character character, out bool ignoredAsMinorWounds)
         {
             ignoredAsMinorWounds = false;
-            if (target == null || target.IsDead || target.Removed) { return false; }
+            if (target == null || target.IsDead || target.Removed || target.InvisibleTimer > 0.0f) { return false; }
             if (target.IsInstigator) { return false; }
             if (target.IsPet) { return false; }
             if (!HumanAIController.IsFriendly(character, target, onlySameTeam: true)) { return false; }

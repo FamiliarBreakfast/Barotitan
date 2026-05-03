@@ -2866,7 +2866,7 @@ namespace Barotrauma
             }
             contextualOrders.RemoveAll(o => !IsOrderAvailable(o));
             var offsets = MathUtils.GetPointsOnCircumference(Vector2.Zero, nodeDistance, contextualOrders.Count, MathHelper.ToRadians(90f + 180f / contextualOrders.Count));
-            bool canCharacterBeHeard = !CanCharacterBeHeard();
+            bool canCharacterBeHeard = CanCharacterBeHeard();
             for (int i = 0; i < contextualOrders.Count; i++)
             {
                 var order = contextualOrders[i];
@@ -3338,7 +3338,13 @@ namespace Barotrauma
                     if (!CanIssueOrders) { return false; }
                     var character = userData as Character;
                     int priority = GetManualOrderPriority(character, order);
-                    SetCharacterOrder(character, order.WithManualPriority(priority).WithOrderGiver(Character.Controlled));
+                    Item targetEntity = null;
+                    if (order.MustSetTarget && order.TargetEntity == null)
+                    {
+                        var matchingItems = order.GetMatchingItems(GetTargetSubmarine(), true, interactableFor: characterContext ?? Character.Controlled);
+                        targetEntity = matchingItems.FirstOrDefault();
+                    }
+                    SetCharacterOrder(character, order.WithItemComponent(targetEntity).WithManualPriority(priority).WithOrderGiver(Character.Controlled));
                     DisableCommandUI();
                     return true;
                 }

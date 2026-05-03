@@ -843,7 +843,7 @@ namespace Barotrauma
                     }
                 }
                 if (!foundMatchingModifier && random > affliction.Probability) { continue; }
-                float finalDamageModifier = damageMultiplier;
+                float finalDamageModifier = affliction.AffectedByAttackMultipliers ? damageMultiplier : 1.0f;
                 if (character.EmpVulnerability > 0 && affliction.Prefab.AfflictionType == AfflictionPrefab.EMPType)
                 {
                     finalDamageModifier *= character.EmpVulnerability;
@@ -1293,7 +1293,7 @@ namespace Barotrauma
             if (!statusEffects.TryGetValue(actionType, out var statusEffectList)) { return; }
             foreach (StatusEffect statusEffect in statusEffectList)
             {
-                if (statusEffect.ShouldWaitForInterval(character, deltaTime)) { return; }
+                if (statusEffect.ShouldWaitForInterval(character, deltaTime)) { continue; }
 
                 statusEffect.sourceBody = body;
                 if (statusEffect.type == ActionType.OnDamaged)
