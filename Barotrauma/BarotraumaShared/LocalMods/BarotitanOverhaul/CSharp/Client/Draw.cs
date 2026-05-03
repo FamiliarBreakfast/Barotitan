@@ -1,11 +1,13 @@
+#if CLIENT
 using System;
 using System.Collections.Generic;
 using Barotrauma;
+using Barotrauma.LuaCs;
 using HarmonyLib;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using System.Text.RegularExpressions;
- 
+
 // This is required so that the .NET runtime doesn't complain about you trying to access internal Types and Members
 // [assembly: IgnoreAccessChecksTo("Barotrauma")]
 // [assembly: IgnoreAccessChecksTo("BarotraumaCore")]
@@ -223,3 +225,4 @@ namespace BaroTITAN {
         }
     }
 }
+#endif

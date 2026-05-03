@@ -10,7 +10,7 @@ public static class FluidNetworking
     public static string HullData;
     //todo clear on round end/level change
     static List<MemoryComponent> DataComponents = new List<MemoryComponent>();
-    private static ItemPrefab prefab = ItemPrefab.GetItemPrefab("MemoryComponent");
+    private static ItemPrefab prefab = ItemPrefab.Find(null, "memorycomponent".ToIdentifier());
 
     private static Dictionary<int, string> debugDecodeComponents = new();
     

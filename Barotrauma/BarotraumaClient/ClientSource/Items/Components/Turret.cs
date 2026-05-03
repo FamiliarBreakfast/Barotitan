@@ -730,10 +730,10 @@ namespace Barotrauma.Items.Components
             }
 
             float chargeRate = 
-                powerConsumption <= 0.0f ? 
+                PowerConsumption <= 0.0f ? 
                 1.0f : 
                 batteryCapacity > 0.0f ? batteryCharge / batteryCapacity : 0.0f;
-            bool charged = batteryCharge * 3600.0f > powerConsumption;
+            bool charged = batteryCharge * 3600.0f > PowerConsumption;
             bool readyToFire = reload <= 0.0f && charged && availableAmmo.Any(p => p != null);
             if (ShowChargeIndicator && PowerConsumption > 0.0f)
             {
@@ -753,7 +753,7 @@ namespace Barotrauma.Items.Components
                 powerIndicator.DrawManually(spriteBatch, true);
 
                 Rectangle sliderRect = powerIndicator.GetSliderRect(1.0f);
-                int requiredChargeIndicatorPos = (int)(powerConsumption / (batteryCapacity * 3600.0f) * sliderRect.Width);
+                int requiredChargeIndicatorPos = (int)(PowerConsumption / (batteryCapacity * 3600.0f) * sliderRect.Width);
                 GUI.DrawRectangle(spriteBatch,
                     new Rectangle(sliderRect.X + requiredChargeIndicatorPos, sliderRect.Y, 2, sliderRect.Height),
                     Color.White * 0.5f, true);
